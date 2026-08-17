@@ -659,6 +659,7 @@ class HideAndSeekGameResult:
     entry_fee: int = 0
     win_reward: int = 0
     selection_timeout_minutes: int = 0
+    group_chat_id: UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -901,6 +902,7 @@ class MemoryAssessmentGameResult:
     reward: int = 0
     balance: int | None = None
     display_seconds: int = 0
+    group_chat_id: UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -1672,6 +1674,11 @@ class CoreRepository:
                 )
             )
             return None if record is None else _group_chat_config(record)
+
+    def group_chat_destination(self, group_chat_id: UUID) -> str | None:
+        with self._session() as session:
+            record = session.get(GroupChatRecord, group_chat_id)
+            return None if record is None else record.chatroom_id
 
     def record_group_chat_runtime(
         self,
@@ -2917,7 +2924,9 @@ class CoreRepository:
             session.flush()
             return _ai_memory_settings(record)
 
-    def user_has_active_game_context(self, platform_id: str) -> bool:
+    def user_has_active_game_context(
+        self, platform_id: str, group_chat_id: UUID | None = None
+    ) -> bool:
         with self._session() as session:
             user_id = session.scalar(
                 select(UserRecord.id).where(UserRecord.platform_id == platform_id)
@@ -2934,6 +2943,11 @@ class CoreRepository:
                     RandomEventParticipantRecord.user_id == user_id,
                     RandomEventParticipantRecord.left_at.is_(None),
                     RandomEventRecord.state.in_(("signup", "in_progress", "tipping")),
+                    *(
+                        ()
+                        if group_chat_id is None
+                        else (RandomEventRecord.group_chat_id == group_chat_id,)
+                    ),
                 ),
                 select(UndercoverSessionMemberRecord.id)
                 .join(
@@ -2945,6 +2959,11 @@ class CoreRepository:
                     UndercoverSessionMemberRecord.user_id == user_id,
                     UndercoverSessionMemberRecord.state == "joined",
                     UndercoverSessionRecord.active_key.is_not(None),
+                    *(
+                        ()
+                        if group_chat_id is None
+                        else (UndercoverSessionRecord.group_chat_id == group_chat_id,)
+                    ),
                 ),
                 select(MemoryAssessmentParticipantRecord.id)
                 .join(
@@ -2955,10 +2974,20 @@ class CoreRepository:
                 .where(
                     MemoryAssessmentParticipantRecord.user_id == user_id,
                     MemoryAssessmentGameRecord.active_key.is_not(None),
+                    *(
+                        ()
+                        if group_chat_id is None
+                        else (MemoryAssessmentGameRecord.group_chat_id == group_chat_id,)
+                    ),
                 ),
                 select(HideAndSeekGameRecord.id).where(
                     HideAndSeekGameRecord.user_id == user_id,
                     HideAndSeekGameRecord.state == "selecting",
+                    *(
+                        ()
+                        if group_chat_id is None
+                        else (HideAndSeekGameRecord.group_chat_id == group_chat_id,)
+                    ),
                 ),
                 select(BlameGamePlayerRecord.id)
                 .join(BlameGameRecord, BlameGameRecord.id == BlameGamePlayerRecord.game_id)
@@ -2966,6 +2995,11 @@ class CoreRepository:
                     BlameGamePlayerRecord.user_id == user_id,
                     BlameGamePlayerRecord.state == "joined",
                     BlameGameRecord.active_key.is_not(None),
+                    *(
+                        ()
+                        if group_chat_id is None
+                        else (BlameGameRecord.group_chat_id == group_chat_id,)
+                    ),
                 ),
             )
             return any(session.scalar(select(exists(check))) for check in checks)
@@ -4862,11 +4896,16 @@ class CoreRepository:
         player_count: int,
         total_amount: int,
         now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
     ) -> RedPacketCreateResult:
         now = now.astimezone(BEIJING)
         with self.transaction():
-            for message in self.expire_red_packets(now):
-                self.enqueue_system_outbound(message)
+            for message in self.expire_red_packets(now, group_chat_id):
+                self.enqueue_system_outbound(
+                    message,
+                    group_chat_id=group_chat_id,
+                    destination_chatroom_id=self.group_chat_destination(group_chat_id),
+                )
             self.expire_random_event_submission_drafts(now)
             with self._session() as session:
                 user = session.scalar(
@@ -4904,7 +4943,10 @@ class CoreRepository:
                     )
                 active = session.scalar(
                     select(RedPacketRecord)
-                    .where(RedPacketRecord.active_key == "global")
+                    .where(
+                        RedPacketRecord.active_key == "global",
+                        RedPacketRecord.group_chat_id == group_chat_id,
+                    )
                     .with_for_update()
                 )
                 if active is not None:
@@ -4941,6 +4983,7 @@ class CoreRepository:
 
                 expires_at = now + timedelta(minutes=settings.expiry_minutes)
                 packet = RedPacketRecord(
+                    group_chat_id=group_chat_id,
                     active_key="global",
                     issuer_user_id=user.id,
                     target_count=player_count,
@@ -4976,12 +5019,19 @@ class CoreRepository:
                 )
 
     def claim_red_packet(
-        self, platform_id: str, now: datetime
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
     ) -> RedPacketClaimResult:
         now = now.astimezone(BEIJING)
         with self.transaction():
-            for message in self.expire_red_packets(now):
-                self.enqueue_system_outbound(message)
+            for message in self.expire_red_packets(now, group_chat_id):
+                self.enqueue_system_outbound(
+                    message,
+                    group_chat_id=group_chat_id,
+                    destination_chatroom_id=self.group_chat_destination(group_chat_id),
+                )
             with self._session() as session:
                 user = session.scalar(
                     select(UserRecord)
@@ -4992,7 +5042,10 @@ class CoreRepository:
                     return RedPacketClaimResult("not_joined")
                 packet = session.scalar(
                     select(RedPacketRecord)
-                    .where(RedPacketRecord.active_key == "global")
+                    .where(
+                        RedPacketRecord.active_key == "global",
+                        RedPacketRecord.group_chat_id == group_chat_id,
+                    )
                     .with_for_update()
                 )
                 if packet is None:
@@ -5074,7 +5127,11 @@ class CoreRepository:
                     claims=claims,
                 )
 
-    def expire_red_packets(self, now: datetime) -> tuple[str, ...]:
+    def expire_red_packets(
+        self,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> tuple[str, ...]:
         now = now.astimezone(BEIJING)
         with self.transaction():
             with self._session() as session:
@@ -5082,6 +5139,7 @@ class CoreRepository:
                     select(RedPacketRecord)
                     .where(
                         RedPacketRecord.active_key == "global",
+                        RedPacketRecord.group_chat_id == group_chat_id,
                         RedPacketRecord.expires_at <= now,
                     )
                     .with_for_update()
@@ -6382,11 +6440,18 @@ class CoreRepository:
                 )
 
     def _active_number_bomb_game(
-        self, session: Session
+        self, session: Session, group_chat_id: UUID | None = None
     ) -> NumberBombGameRecord | None:
         return session.scalar(
             select(NumberBombGameRecord)
-            .where(NumberBombGameRecord.active_key == "global")
+            .where(
+                NumberBombGameRecord.active_key == "global",
+                *(
+                    ()
+                    if group_chat_id is None
+                    else (NumberBombGameRecord.group_chat_id == group_chat_id,)
+                ),
+            )
             .with_for_update()
         )
 
@@ -7324,10 +7389,19 @@ class CoreRepository:
             select(exists().where(DirectChatRecord.platform_user_id == platform_id))
         )
 
-    def _active_undercover_session(self, session: Session) -> UndercoverSessionRecord | None:
+    def _active_undercover_session(
+        self, session: Session, group_chat_id: UUID | None = None
+    ) -> UndercoverSessionRecord | None:
         return session.scalar(
             select(UndercoverSessionRecord)
-            .where(UndercoverSessionRecord.active_key == _UNDERCOVER_ACTIVE_KEY)
+            .where(
+                UndercoverSessionRecord.active_key == _UNDERCOVER_ACTIVE_KEY,
+                *(
+                    ()
+                    if group_chat_id is None
+                    else (UndercoverSessionRecord.group_chat_id == group_chat_id,)
+                ),
+            )
             .with_for_update()
         )
 
@@ -7960,7 +8034,10 @@ class CoreRepository:
         return None
 
     def start_memory_assessment_single(
-        self, platform_id: str, now: datetime
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
     ) -> MemoryAssessmentGameResult:
         now = now.astimezone(BEIJING)
         with self.transaction():
@@ -7978,18 +8055,23 @@ class CoreRepository:
                     return MemoryAssessmentGameResult(
                         "disabled", display_name=user.display_name
                     )
-                if self._active_random_event(session) is not None:
+                if self._active_random_event(session, group_chat_id) is not None:
                     return MemoryAssessmentGameResult(
                         "random_event_active", display_name=user.display_name
                     )
-                if self._active_number_bomb_game(session) is not None:
+                if self._active_number_bomb_game(session, group_chat_id) is not None:
                     return MemoryAssessmentGameResult(
                         "already_active", display_name=user.display_name
                     )
-                self._expire_previous_day_memory_assessment_single(session, now)
+                self._expire_previous_day_memory_assessment_single(
+                    session, now, group_chat_id
+                )
                 active = session.scalar(
                     select(MemoryAssessmentGameRecord)
-                    .where(MemoryAssessmentGameRecord.active_key == "global")
+                    .where(
+                        MemoryAssessmentGameRecord.active_key == "global",
+                        MemoryAssessmentGameRecord.group_chat_id == group_chat_id,
+                    )
                     .with_for_update()
                 )
                 if active is not None:
@@ -8017,6 +8099,7 @@ class CoreRepository:
                 if rule is None:
                     raise RuntimeError("记忆考核等级规则消失")
                 game = MemoryAssessmentGameRecord(
+                    group_chat_id=group_chat_id,
                     mode="single",
                     state="showing_answer",
                     active_key="global",
@@ -8086,7 +8169,10 @@ class CoreRepository:
                 return _memory_assessment_round(round_record)
 
     def start_memory_assessment_duel(
-        self, platform_id: str, now: datetime
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
     ) -> MemoryAssessmentGameResult:
         now = now.astimezone(BEIJING)
         with self.transaction():
@@ -8104,26 +8190,31 @@ class CoreRepository:
                     return MemoryAssessmentGameResult(
                         "disabled", display_name=user.display_name
                     )
-                if self._active_random_event(session) is not None:
+                if self._active_random_event(session, group_chat_id) is not None:
                     return MemoryAssessmentGameResult(
                         "random_event_active", display_name=user.display_name
                     )
-                if self._active_undercover_session(session) is not None:
+                if self._active_undercover_session(session, group_chat_id) is not None:
                     return MemoryAssessmentGameResult(
                         "multiplayer_active", display_name=user.display_name
                     )
-                if self._active_blame_game(session) is not None:
+                if self._active_blame_game(session, group_chat_id) is not None:
                     return MemoryAssessmentGameResult(
                         "multiplayer_active", display_name=user.display_name
                     )
-                if self._active_number_bomb_game(session) is not None:
+                if self._active_number_bomb_game(session, group_chat_id) is not None:
                     return MemoryAssessmentGameResult(
                         "multiplayer_active", display_name=user.display_name
                     )
-                self._expire_previous_day_memory_assessment_single(session, now)
+                self._expire_previous_day_memory_assessment_single(
+                    session, now, group_chat_id
+                )
                 if session.scalar(
                     select(MemoryAssessmentGameRecord)
-                    .where(MemoryAssessmentGameRecord.active_key == "global")
+                    .where(
+                        MemoryAssessmentGameRecord.active_key == "global",
+                        MemoryAssessmentGameRecord.group_chat_id == group_chat_id,
+                    )
                     .with_for_update()
                 ) is not None:
                     return MemoryAssessmentGameResult(
@@ -8135,6 +8226,7 @@ class CoreRepository:
                 if rule is None:
                     raise RuntimeError("记忆考核多人难度规则消失")
                 game = MemoryAssessmentGameRecord(
+                    group_chat_id=group_chat_id,
                     mode="duel",
                     state="waiting_opponent",
                     active_key="global",
@@ -8165,7 +8257,10 @@ class CoreRepository:
                 )
 
     def join_memory_assessment_duel(
-        self, platform_id: str, now: datetime
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
     ) -> MemoryAssessmentGameResult:
         now = now.astimezone(BEIJING)
         with self.transaction():
@@ -8178,13 +8273,16 @@ class CoreRepository:
                 )
                 if user is None:
                     return MemoryAssessmentGameResult("not_joined")
-                if self._active_random_event(session) is not None:
+                if self._active_random_event(session, group_chat_id) is not None:
                     return MemoryAssessmentGameResult(
                         "random_event_active", display_name=user.display_name
                     )
                 game = session.scalar(
                     select(MemoryAssessmentGameRecord)
-                    .where(MemoryAssessmentGameRecord.active_key == "global")
+                    .where(
+                        MemoryAssessmentGameRecord.active_key == "global",
+                        MemoryAssessmentGameRecord.group_chat_id == group_chat_id,
+                    )
                     .with_for_update()
                 )
                 if game is None or game.mode != "duel" or game.state != "waiting_opponent":
@@ -8266,7 +8364,10 @@ class CoreRepository:
                 )
 
     def surrender_memory_assessment_duel(
-        self, platform_id: str, now: datetime
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID | None = None,
     ) -> MemoryAssessmentGameResult:
         now = now.astimezone(BEIJING)
         with self.transaction():
@@ -8278,7 +8379,9 @@ class CoreRepository:
                 )
                 if user is None:
                     return MemoryAssessmentGameResult("not_joined")
-                game = self._active_memory_assessment(session, user.id)
+                game = self._active_memory_assessment(
+                    session, user.id, group_chat_id
+                )
                 if game is None or game.mode != "duel" or game.state == "waiting_opponent":
                     return MemoryAssessmentGameResult(
                         "cannot_surrender", display_name=user.display_name
@@ -8297,7 +8400,10 @@ class CoreRepository:
                 )
 
     def cancel_waiting_memory_assessment_duel(
-        self, platform_id: str, now: datetime
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID | None = None,
     ) -> MemoryAssessmentGameResult:
         now = now.astimezone(BEIJING)
         with self.transaction():
@@ -8316,6 +8422,14 @@ class CoreRepository:
                     .join(UserRecord, UserRecord.id == MemoryAssessmentParticipantRecord.user_id)
                     .where(
                         MemoryAssessmentGameRecord.active_key == "global",
+                        *(
+                            ()
+                            if group_chat_id is None
+                            else (
+                                MemoryAssessmentGameRecord.group_chat_id
+                                == group_chat_id,
+                            )
+                        ),
                         MemoryAssessmentGameRecord.mode == "duel",
                         MemoryAssessmentGameRecord.state == "waiting_opponent",
                         UserRecord.platform_id == platform_id,
@@ -8369,7 +8483,9 @@ class CoreRepository:
                     game.finished_at = now
                     expired.append(
                         MemoryAssessmentGameResult(
-                            "waiting_expired", game_id=game.id
+                            "waiting_expired",
+                            game_id=game.id,
+                            group_chat_id=game.group_chat_id,
                         )
                     )
                 games = list(
@@ -8386,12 +8502,21 @@ class CoreRepository:
                 )
                 for game in games:
                     expired.append(
-                        self._collect_memory_assessment_duel_pool(session, game, now)
+                        replace(
+                            self._collect_memory_assessment_duel_pool(
+                                session, game, now
+                            ),
+                            group_chat_id=game.group_chat_id,
+                        )
                     )
         return expired
 
     def answer_memory_assessment(
-        self, platform_id: str, answer: str, now: datetime
+        self,
+        platform_id: str,
+        answer: str,
+        now: datetime,
+        group_chat_id: UUID | None = None,
     ) -> MemoryAssessmentGameResult:
         now = now.astimezone(BEIJING)
         with self.transaction():
@@ -8403,7 +8528,9 @@ class CoreRepository:
                 )
                 if user is None:
                     return MemoryAssessmentGameResult("not_joined")
-                game = self._active_memory_assessment(session, user.id)
+                game = self._active_memory_assessment(
+                    session, user.id, group_chat_id
+                )
                 if game is None:
                     return MemoryAssessmentGameResult(
                         "no_active_game", display_name=user.display_name
@@ -8499,7 +8626,10 @@ class CoreRepository:
                 )
 
     def continue_memory_assessment(
-        self, platform_id: str, now: datetime
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID | None = None,
     ) -> MemoryAssessmentGameResult:
         now = now.astimezone(BEIJING)
         with self.transaction():
@@ -8512,7 +8642,9 @@ class CoreRepository:
                 )
                 if user is None:
                     return MemoryAssessmentGameResult("not_joined")
-                game = self._active_memory_assessment_single(session, user.id)
+                game = self._active_memory_assessment_single(
+                    session, user.id, group_chat_id
+                )
                 if game is None or game.state != "awaiting_decision":
                     return MemoryAssessmentGameResult(
                         "cannot_continue", display_name=user.display_name
@@ -8550,7 +8682,10 @@ class CoreRepository:
                 )
 
     def cash_out_memory_assessment(
-        self, platform_id: str, now: datetime
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID | None = None,
     ) -> MemoryAssessmentGameResult:
         now = now.astimezone(BEIJING)
         with self.transaction():
@@ -8562,7 +8697,9 @@ class CoreRepository:
                 )
                 if user is None:
                     return MemoryAssessmentGameResult("not_joined")
-                game = self._active_memory_assessment_single(session, user.id)
+                game = self._active_memory_assessment_single(
+                    session, user.id, group_chat_id
+                )
                 if game is None or game.state != "awaiting_decision":
                     return MemoryAssessmentGameResult(
                         "cannot_cash_out", display_name=user.display_name
@@ -8592,7 +8729,10 @@ class CoreRepository:
                 )
 
     def _active_memory_assessment_single(
-        self, session: Session, user_id: UUID
+        self,
+        session: Session,
+        user_id: UUID,
+        group_chat_id: UUID | None = None,
     ) -> MemoryAssessmentGameRecord | None:
         return session.scalar(
             select(MemoryAssessmentGameRecord)
@@ -8604,19 +8744,32 @@ class CoreRepository:
             .where(
                 MemoryAssessmentGameRecord.mode == "single",
                 MemoryAssessmentGameRecord.active_key == "global",
+                *(
+                    ()
+                    if group_chat_id is None
+                    else (MemoryAssessmentGameRecord.group_chat_id == group_chat_id,)
+                ),
                 MemoryAssessmentParticipantRecord.user_id == user_id,
             )
             .with_for_update()
         )
 
     def _expire_previous_day_memory_assessment_single(
-        self, session: Session, now: datetime
+        self,
+        session: Session,
+        now: datetime,
+        group_chat_id: UUID | None = None,
     ) -> None:
         game = session.scalar(
             select(MemoryAssessmentGameRecord)
             .where(
                 MemoryAssessmentGameRecord.mode == "single",
                 MemoryAssessmentGameRecord.active_key == "global",
+                *(
+                    ()
+                    if group_chat_id is None
+                    else (MemoryAssessmentGameRecord.group_chat_id == group_chat_id,)
+                ),
                 MemoryAssessmentGameRecord.play_date < now.date(),
             )
             .with_for_update()
@@ -8634,7 +8787,10 @@ class CoreRepository:
             participant.state = "expired"
 
     def _active_memory_assessment(
-        self, session: Session, user_id: UUID
+        self,
+        session: Session,
+        user_id: UUID,
+        group_chat_id: UUID | None = None,
     ) -> MemoryAssessmentGameRecord | None:
         return session.scalar(
             select(MemoryAssessmentGameRecord)
@@ -8645,6 +8801,11 @@ class CoreRepository:
             )
             .where(
                 MemoryAssessmentGameRecord.active_key == "global",
+                *(
+                    ()
+                    if group_chat_id is None
+                    else (MemoryAssessmentGameRecord.group_chat_id == group_chat_id,)
+                ),
                 MemoryAssessmentParticipantRecord.user_id == user_id,
             )
             .with_for_update()
@@ -9623,10 +9784,19 @@ class CoreRepository:
                 ),
             )
 
-    def _active_blame_game(self, session: Session) -> BlameGameRecord | None:
+    def _active_blame_game(
+        self, session: Session, group_chat_id: UUID | None = None
+    ) -> BlameGameRecord | None:
         return session.scalar(
             select(BlameGameRecord)
-            .where(BlameGameRecord.active_key == "global")
+            .where(
+                BlameGameRecord.active_key == "global",
+                *(
+                    ()
+                    if group_chat_id is None
+                    else (BlameGameRecord.group_chat_id == group_chat_id,)
+                ),
+            )
             .with_for_update()
         )
 
@@ -9827,7 +9997,10 @@ class CoreRepository:
             return True
 
     def start_hide_and_seek(
-        self, platform_id: str, now: datetime
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
     ) -> HideAndSeekGameResult:
         now = now.astimezone(BEIJING)
         with self.transaction():
@@ -9843,11 +10016,11 @@ class CoreRepository:
                     return HideAndSeekGameResult("not_joined")
                 if not settings.enabled:
                     return HideAndSeekGameResult("disabled", display_name=user.display_name)
-                if self._active_random_event(session) is not None:
+                if self._active_random_event(session, group_chat_id) is not None:
                     return HideAndSeekGameResult(
                         "random_event_active", display_name=user.display_name
                     )
-                if self._active_number_bomb_game(session) is not None:
+                if self._active_number_bomb_game(session, group_chat_id) is not None:
                     return HideAndSeekGameResult(
                         "already_active", display_name=user.display_name
                     )
@@ -9855,6 +10028,7 @@ class CoreRepository:
                     select(HideAndSeekGameRecord)
                     .where(
                         HideAndSeekGameRecord.user_id == user.id,
+                        HideAndSeekGameRecord.group_chat_id == group_chat_id,
                         HideAndSeekGameRecord.state == "selecting",
                     )
                     .with_for_update()
@@ -9892,6 +10066,7 @@ class CoreRepository:
                 daily.count += 1
                 session.add(
                     HideAndSeekGameRecord(
+                        group_chat_id=group_chat_id,
                         user_id=user.id,
                         play_date=play_date,
                         state="selecting",
@@ -9911,7 +10086,11 @@ class CoreRepository:
                 )
 
     def choose_hide_and_seek(
-        self, platform_id: str, scene_number: int, now: datetime
+        self,
+        platform_id: str,
+        scene_number: int,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
     ) -> HideAndSeekGameResult:
         now = now.astimezone(BEIJING)
         with self.transaction():
@@ -9927,6 +10106,7 @@ class CoreRepository:
                     select(HideAndSeekGameRecord)
                     .where(
                         HideAndSeekGameRecord.user_id == user.id,
+                        HideAndSeekGameRecord.group_chat_id == group_chat_id,
                         HideAndSeekGameRecord.state == "selecting",
                     )
                     .with_for_update()
@@ -10009,6 +10189,7 @@ class CoreRepository:
                             selection_timeout_minutes=int(
                                 (game.choice_deadline - game.created_at).total_seconds() // 60
                             ),
+                            group_chat_id=game.group_chat_id,
                         )
                     )
         return cancelled
@@ -11138,10 +11319,19 @@ class CoreRepository:
         )
         return active
 
-    def _active_random_event(self, session: Session) -> RandomEventRecord | None:
+    def _active_random_event(
+        self, session: Session, group_chat_id: UUID | None = None
+    ) -> RandomEventRecord | None:
         return session.scalar(
             select(RandomEventRecord)
-            .where(RandomEventRecord.state.in_(("signup", "in_progress", "tipping")))
+            .where(
+                RandomEventRecord.state.in_(("signup", "in_progress", "tipping")),
+                *(
+                    ()
+                    if group_chat_id is None
+                    else (RandomEventRecord.group_chat_id == group_chat_id,)
+                ),
+            )
             .order_by(RandomEventRecord.started_at)
             .with_for_update()
         )
@@ -11555,19 +11745,47 @@ class CoreRepository:
                 self._backfill_current_day_history(now)
             for game in self.expire_hide_and_seek_games(now):
                 self.enqueue_system_outbound(
-                    f"【摸鱼躲猫猫】{game.display_name} 未在 {game.selection_timeout_minutes} 分钟内选择地点，本局已取消，次数已返还。"
+                    f"【摸鱼躲猫猫】{game.display_name} 未在 {game.selection_timeout_minutes} 分钟内选择地点，本局已取消，次数已返还。",
+                    group_chat_id=game.group_chat_id,
+                    destination_chatroom_id=(
+                        None
+                        if game.group_chat_id is None
+                        else self.group_chat_destination(game.group_chat_id)
+                    ),
                 )
             for game in self.expire_memory_assessment_duels(now):
                 if game.status == "waiting_expired":
                     self.enqueue_system_outbound(
-                        "【记忆考核对战】等待加入超时，本场已自动取消。"
+                        "【记忆考核对战】等待加入超时，本场已自动取消。",
+                        group_chat_id=game.group_chat_id,
+                        destination_chatroom_id=(
+                            None
+                            if game.group_chat_id is None
+                            else self.group_chat_destination(game.group_chat_id)
+                        ),
                     )
                 else:
                     self.enqueue_system_outbound(
-                        f"【记忆考核对战】作答超时，{game.reward} 摸鱼币奖池已由系统回收。"
+                        f"【记忆考核对战】作答超时，{game.reward} 摸鱼币奖池已由系统回收。",
+                        group_chat_id=game.group_chat_id,
+                        destination_chatroom_id=(
+                            None
+                            if game.group_chat_id is None
+                            else self.group_chat_destination(game.group_chat_id)
+                        ),
                     )
-            for message in self.expire_red_packets(now):
-                self.enqueue_system_outbound(message)
+            group_ids = tuple(group.id for group in self.list_group_chats()) or (
+                PRIMARY_GROUP_CHAT_ID,
+            )
+            for group_chat_id in group_ids:
+                for message in self.expire_red_packets(now, group_chat_id):
+                    self.enqueue_system_outbound(
+                        message,
+                        group_chat_id=group_chat_id,
+                        destination_chatroom_id=self.group_chat_destination(
+                            group_chat_id
+                        ),
+                    )
             self.expire_random_event_submission_drafts(now)
             self._settle_weekly_attendance_rewards(now)
             self._settle_activity_rewards(now)

@@ -171,8 +171,9 @@ def test_lucky_red_packet_reply_templates_are_managed(repository):
     } == {
         "usage",
         "group_only",
-        "not_joined",
-        "invalid_parameters",
+            "not_joined",
+            "disabled",
+            "invalid_parameters",
         "insufficient_balance",
         "daily_limit",
         "active_packet",
@@ -461,6 +462,80 @@ def test_group_chat_with_active_gameplay_cannot_be_disabled(repository, now):
         repository.update_group_chat(
             second.id, listening_enabled=False, now=now + timedelta(minutes=1)
         )
+
+
+def test_red_packets_are_isolated_by_group_while_daily_starts_are_global(
+    repository, now
+):
+    primary = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=group-main", now
+    )
+    second = repository.create_group_chat(
+        "红包二群", "https://www.aikda.com/chat?c=packet-2",
+        True, True, True, True, now,
+    )
+    repository.create_user("packet-a", "红包甲", now, 20)
+    repository.create_user("packet-b", "红包乙", now, 20)
+    repository.create_user("packet-c", "红包丙", now, 0)
+
+    first = repository.create_red_packet(
+        "packet-a", 2, 2, now, primary.id
+    )
+    second_packet = repository.create_red_packet(
+        "packet-b", 2, 2, now, second.id
+    )
+
+    assert first.status == second_packet.status == "created"
+    assert repository.claim_red_packet(
+        "packet-c", now + timedelta(seconds=1), primary.id
+    ).status == "claimed"
+    assert repository.claim_red_packet(
+        "packet-c", now + timedelta(seconds=1), second.id
+    ).status == "claimed"
+
+
+def test_memory_games_are_per_group_but_single_daily_limit_is_global(
+    repository, now
+):
+    primary = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=group-main", now
+    )
+    second = repository.create_group_chat(
+        "记忆二群", "https://www.aikda.com/chat?c=memory-2",
+        True, True, True, True, now,
+    )
+    repository.create_user("memory-a", "记忆甲", now, 0)
+    repository.create_user("memory-b", "记忆乙", now, 0)
+    repository.create_user("memory-limit", "记忆限次", now, 0)
+
+    first = repository.start_memory_assessment_duel(
+        "memory-a", now, primary.id
+    )
+    second_game = repository.start_memory_assessment_duel(
+        "memory-b", now, second.id
+    )
+    assert first.status == second_game.status == "waiting_opponent"
+    assert first.game_id != second_game.game_id
+
+    assert repository.start_memory_assessment_single(
+        "memory-limit", now, primary.id
+    ).status == "already_active"
+    repository.force_end_gameplay("memory_duel", first.game_id, now, primary.id)
+    assert repository.start_memory_assessment_single(
+        "memory-limit", now, primary.id
+    ).status == "started"
+    repository.force_end_gameplay(
+        "memory_single",
+        repository.active_gameplay_summary("memory-limit", now, primary.id).game_id,
+        now,
+        primary.id,
+    )
+    repository.force_end_gameplay(
+        "memory_duel", second_game.game_id, now, second.id
+    )
+    assert repository.start_memory_assessment_single(
+        "memory-limit", now, second.id
+    ).status == "daily_limit"
 
 
 def test_active_gameplay_and_admin_summaries_are_scoped_by_group(repository, now):

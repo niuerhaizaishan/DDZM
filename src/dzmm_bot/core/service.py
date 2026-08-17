@@ -182,7 +182,8 @@ class CoreService:
                     )
                     return ReceiveResult(stored.id, True)
             had_active_game_context = self._repository.user_has_active_game_context(
-                message.sender_platform_id
+                message.sender_platform_id,
+                None if group_context is None else group_context.group_chat_id,
             )
             reply = self._command_handler.handle(message)
             if isinstance(reply, list):
@@ -217,7 +218,8 @@ class CoreService:
                 and event_message_status == "none"
                 and not had_active_game_context
                 and not self._repository.user_has_active_game_context(
-                    message.sender_platform_id
+                    message.sender_platform_id,
+                    None if group_context is None else group_context.group_chat_id,
                 )
             )
             self._repository.record_ai_memory_message(

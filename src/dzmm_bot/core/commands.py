@@ -73,9 +73,11 @@ class GroupCommandHandler:
         ):
             return self._reply(command, "disabled", received_at)
         if command == "/发红包":
-            return self._red_packet_create(message, content, received_at)
+            return self._red_packet_create(
+                message, content, received_at, group_chat_id
+            )
         if command == "/抢红包":
-            return self._red_packet_claim(message, received_at)
+            return self._red_packet_claim(message, received_at, group_chat_id)
         if command == "/打赏":
             return self._random_event_tip(message, content, received_at)
         if command == "/当前游戏":
@@ -164,7 +166,10 @@ class GroupCommandHandler:
                 return self._undercover_end(message.sender_platform_id, received_at)
             if summary.game_type == "memory_duel" and summary.state == "waiting_opponent":
                 return self._memory_assessment_cancel_waiting(
-                    "/结束游戏", message.sender_platform_id, received_at
+                    "/结束游戏",
+                    message.sender_platform_id,
+                    received_at,
+                    group_chat_id,
                 )
             if summary.game_type in {"memory_duel", "memory_single"}:
                 return self._reply("/结束游戏", "memory_use_exit", received_at)
@@ -239,7 +244,9 @@ class GroupCommandHandler:
                 return self._undercover_join(message.sender_platform_id, received_at)
             if summary.game_type == "conflict":
                 return self._reply("/当前游戏", "conflict", received_at)
-            return self._event_join(message.sender_platform_id, content, received_at)
+            return self._event_join(
+                message.sender_platform_id, content, received_at, group_chat_id
+            )
         if command == "/退出":
             summary = self._repository.active_gameplay_summary(
                 message.sender_platform_id,
@@ -255,19 +262,24 @@ class GroupCommandHandler:
             if summary.game_type == "memory_duel":
                 if summary.state == "waiting_opponent":
                     return self._memory_assessment_cancel_waiting(
-                        "/退出", message.sender_platform_id, received_at
+                        "/退出",
+                        message.sender_platform_id,
+                        received_at,
+                        group_chat_id,
                     )
                 return self._memory_assessment_surrender(
-                    message.sender_platform_id, received_at
+                    message.sender_platform_id, received_at, group_chat_id
                 )
             if summary.game_type == "conflict":
                 return self._reply("/当前游戏", "conflict", received_at)
             return self._event_leave(message.sender_platform_id, received_at)
         if command == "/摸鱼躲猫猫":
-            return self._hide_and_seek(message.sender_platform_id, content, received_at)
+            return self._hide_and_seek(
+                message.sender_platform_id, content, received_at, group_chat_id
+            )
         if command == "/记忆考核":
             return self._memory_assessment_start(
-                message.sender_platform_id, content, received_at
+                message.sender_platform_id, content, received_at, group_chat_id
             )
         if command == "/继续":
             summary = self._repository.active_gameplay_summary(
@@ -283,14 +295,22 @@ class GroupCommandHandler:
                 return self._undercover_continue(message.sender_platform_id, received_at)
             if summary.game_type == "conflict":
                 return self._reply("/当前游戏", "conflict", received_at)
-            return self._memory_assessment_continue(message.sender_platform_id, received_at)
+            return self._memory_assessment_continue(
+                message.sender_platform_id, received_at, group_chat_id
+            )
         if command == "/收手":
-            return self._memory_assessment_cash_out(message.sender_platform_id, received_at)
+            return self._memory_assessment_cash_out(
+                message.sender_platform_id, received_at, group_chat_id
+            )
         if command == "/投降":
-            return self._memory_assessment_surrender(message.sender_platform_id, received_at)
+            return self._memory_assessment_surrender(
+                message.sender_platform_id, received_at, group_chat_id
+            )
         return self._help(content, received_at)
 
-    def _red_packet_create(self, message, content: str, received_at):
+    def _red_packet_create(
+        self, message, content: str, received_at, group_chat_id=None
+    ):
         if message.source_type != "group":
             return CommandReply(
                 self._reply("/发红包", "group_only", received_at),
@@ -302,11 +322,18 @@ class GroupCommandHandler:
             return self._reply("/发红包", "usage", received_at)
         if any(not part.isascii() or not part.isdigit() for part in parts[1:]):
             return self._reply("/发红包", "invalid_parameters", received_at)
-        result = self._repository.create_red_packet(
+        arguments = (
             message.sender_platform_id,
             int(parts[1]),
             int(parts[2]),
             received_at,
+        )
+        result = (
+            self._repository.create_red_packet(*arguments)
+            if group_chat_id is None
+            else self._repository.create_red_packet(
+                *arguments, group_chat_id=group_chat_id
+            )
         )
         if result.status != "created":
             return self._reply("/发红包", result.status, received_at)
@@ -323,15 +350,23 @@ class GroupCommandHandler:
             },
         )
 
-    def _red_packet_claim(self, message, received_at):
+    def _red_packet_claim(self, message, received_at, group_chat_id=None):
         if message.source_type != "group":
             return CommandReply(
                 self._reply("/抢红包", "group_only", received_at),
                 destination_chatroom_id=message.chatroom_id,
                 delivery_kind="direct",
             )
-        result = self._repository.claim_red_packet(
-            message.sender_platform_id, received_at
+        result = (
+            self._repository.claim_red_packet(
+                message.sender_platform_id, received_at
+            )
+            if group_chat_id is None
+            else self._repository.claim_red_packet(
+                message.sender_platform_id,
+                received_at,
+                group_chat_id=group_chat_id,
+            )
         )
         if result.status not in {"claimed", "completed"}:
             return self._reply("/抢红包", result.status, received_at)
@@ -1553,14 +1588,20 @@ class GroupCommandHandler:
             "whiteboard": "白板",
         }.get(role, "未知")
 
-    def _event_join(self, platform_id: str, content: str, received_at) -> str:
+    def _event_join(
+        self, platform_id: str, content: str, received_at, group_chat_id=None
+    ) -> str:
         parts = content.split(maxsplit=1)
         if len(parts) != 2 or not parts[1].strip():
             if self._repository.blame_game_summary(received_at).state is not None:
                 return self._blame_join(platform_id, received_at)
             if self._repository.undercover_session_summary().state is not None:
                 return self._undercover_join(platform_id, received_at)
-            duel = self._repository.join_memory_assessment_duel(platform_id, received_at)
+            duel = self._repository.join_memory_assessment_duel(
+                platform_id,
+                received_at,
+                **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
+            )
             if duel.status == "duel_started":
                 return self._memory_assessment_round_reply(
                     "/记忆考核", "duel_started", duel, received_at
@@ -1688,10 +1729,16 @@ class GroupCommandHandler:
         )
         return self._reply("/打赏", scenario, received_at)
 
-    def _hide_and_seek(self, platform_id: str, content: str, received_at) -> str | list[str]:
+    def _hide_and_seek(
+        self, platform_id: str, content: str, received_at, group_chat_id=None
+    ) -> str | list[str]:
         parts = content.split()
         if content == "/开始摸鱼躲藏":
-            result = self._repository.start_hide_and_seek(platform_id, received_at)
+            result = self._repository.start_hide_and_seek(
+                platform_id,
+                received_at,
+                **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
+            )
             if result.status == "started":
                 return self._reply(
                     "/摸鱼躲猫猫",
@@ -1710,7 +1757,10 @@ class GroupCommandHandler:
             return self._hide_and_seek_status_reply(result.status, received_at)
         if len(parts) == 2 and parts[0] == "/躲" and parts[1].isdigit():
             result = self._repository.choose_hide_and_seek(
-                platform_id, int(parts[1]), received_at
+                platform_id,
+                int(parts[1]),
+                received_at,
+                **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
             )
             if result.status in {"won", "found"}:
                 first_patrols = "、".join(
@@ -1766,10 +1816,14 @@ class GroupCommandHandler:
         return self._reply("/摸鱼躲猫猫", scenarios[status], received_at)
 
     def _memory_assessment_start(
-        self, platform_id: str, content: str, received_at
+        self, platform_id: str, content: str, received_at, group_chat_id=None
     ) -> str:
         if content == "/记忆考核 对战":
-            result = self._repository.start_memory_assessment_duel(platform_id, received_at)
+            result = self._repository.start_memory_assessment_duel(
+                platform_id,
+                received_at,
+                **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
+            )
             if result.status == "waiting_opponent":
                 return self._reply(
                     "/记忆考核",
@@ -1786,7 +1840,11 @@ class GroupCommandHandler:
             return self._reply("/记忆考核", scenarios[result.status], received_at)
         if content != "/记忆考核":
             return self._reply("/记忆考核", "usage", received_at)
-        result = self._repository.start_memory_assessment_single(platform_id, received_at)
+        result = self._repository.start_memory_assessment_single(
+            platform_id,
+            received_at,
+            **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
+        )
         if result.status == "started":
             return self._memory_assessment_round_reply("/记忆考核", "started", result, received_at)
         scenarios = {
@@ -1853,14 +1911,22 @@ class GroupCommandHandler:
             return self._reply("/记忆考核", "duel_collected", received_at)
         return None
 
-    def _memory_assessment_continue(self, platform_id: str, received_at) -> str:
-        result = self._repository.continue_memory_assessment(platform_id, received_at)
+    def _memory_assessment_continue(
+        self, platform_id: str, received_at, group_chat_id=None
+    ) -> str:
+        result = self._repository.continue_memory_assessment(
+            platform_id, received_at, group_chat_id
+        )
         if result.status == "continued":
             return self._memory_assessment_round_reply("/继续", "continued", result, received_at)
         return self._reply("/继续", "cannot_continue", received_at)
 
-    def _memory_assessment_cash_out(self, platform_id: str, received_at) -> str:
-        result = self._repository.cash_out_memory_assessment(platform_id, received_at)
+    def _memory_assessment_cash_out(
+        self, platform_id: str, received_at, group_chat_id=None
+    ) -> str:
+        result = self._repository.cash_out_memory_assessment(
+            platform_id, received_at, group_chat_id
+        )
         if result.status == "cashed_out":
             return self._reply(
                 "/收手",
@@ -1874,8 +1940,12 @@ class GroupCommandHandler:
             )
         return self._reply("/收手", "cannot_cash_out", received_at)
 
-    def _memory_assessment_surrender(self, platform_id: str, received_at) -> str:
-        result = self._repository.surrender_memory_assessment_duel(platform_id, received_at)
+    def _memory_assessment_surrender(
+        self, platform_id: str, received_at, group_chat_id=None
+    ) -> str:
+        result = self._repository.surrender_memory_assessment_duel(
+            platform_id, received_at, group_chat_id
+        )
         if result.status == "duel_won":
             return self._reply(
                 "/投降",
@@ -1890,10 +1960,10 @@ class GroupCommandHandler:
         return self._reply("/投降", "cannot_surrender", received_at)
 
     def _memory_assessment_cancel_waiting(
-        self, command: str, platform_id: str, received_at
+        self, command: str, platform_id: str, received_at, group_chat_id=None
     ) -> str:
         result = self._repository.cancel_waiting_memory_assessment_duel(
-            platform_id, received_at
+            platform_id, received_at, group_chat_id
         )
         return self._reply(
             command,
