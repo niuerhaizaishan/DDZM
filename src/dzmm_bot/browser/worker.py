@@ -1,6 +1,6 @@
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 import logging
@@ -12,6 +12,8 @@ from socketio.exceptions import TimeoutError as SocketTimeoutError
 
 from dzmm_bot.runtime.contracts import (
     DirectChatRoom,
+    GroupChatRuntimeUpdate,
+    GroupChatTarget,
     InboundMessage,
     LoginState,
     MessageReference,
@@ -26,6 +28,7 @@ from .session import BrowserSession, ChatGateway
 _LOGGER = logging.getLogger(__name__)
 _OUTBOUND_BATCH_SIZE = 20
 _OUTBOUND_BATCH_BUDGET_SECONDS = 2.0
+_GROUP_TARGET_SYNC_INTERVAL_SECONDS = 5.0
 
 
 class ManualDesktop(Protocol):
@@ -85,6 +88,12 @@ class BrowserWorker:
         self._paused_messages_lock = Lock()
         self._outbound_failed = False
         self._outbound_failed_lock = Lock()
+        self._group_targets: tuple[GroupChatTarget, ...] = ()
+        self._next_group_target_sync_at: datetime | None = None
+        self._disabled_group_updates: list[GroupChatRuntimeUpdate] = []
+        self._group_connected_at: dict[str, datetime] = {}
+        self._group_last_inbound_at: dict[str, datetime] = {}
+        self._group_last_outbound_at: dict[str, datetime] = {}
 
     @property
     def login_state(self) -> LoginState:
@@ -96,6 +105,7 @@ class BrowserWorker:
 
     def run_once(self) -> None:
         now = self._clock()
+        self._sync_group_targets(now)
         if self._consume_outbound_failure():
             self._recover_browser_session()
         command = self._core.claim_command(
@@ -118,6 +128,8 @@ class BrowserWorker:
                     self._auth_backoff = 1
                 else:
                     self._recover_browser_session()
+
+        self._report_group_runtime(now)
 
         self._sync_listener_state()
         self._flush_paused_messages()
@@ -235,6 +247,8 @@ class BrowserWorker:
             self._inbound_executor.submit(self._dispatch_inbound, message)
 
     def _dispatch_inbound(self, message: InboundMessage) -> None:
+        if message.source_type == "group" and message.chatroom_id is not None:
+            self._group_last_inbound_at[message.chatroom_id] = self._clock()
         if message.source_type == "direct" and message.chatroom_id is not None:
             self._core.sync_direct_chats(
                 [DirectChatRoom(message.sender_platform_id, message.chatroom_id)],
@@ -336,7 +350,83 @@ class BrowserWorker:
             platform_sent_id,
             self._clock(),
         )
+        if outbound.destination_chatroom_id is not None:
+            self._group_last_outbound_at[
+                outbound.destination_chatroom_id
+            ] = self._clock()
         return True
+
+    def _sync_group_targets(self, now: datetime) -> None:
+        if (
+            self._next_group_target_sync_at is not None
+            and now < self._next_group_target_sync_at
+        ):
+            return
+        self._next_group_target_sync_at = now + timedelta(
+            seconds=_GROUP_TARGET_SYNC_INTERVAL_SECONDS
+        )
+        try:
+            targets = self._core.group_chat_targets()
+            previous = {
+                target.group_chat_id: target for target in self._group_targets
+            }
+            current_targets = {target.group_chat_id: target for target in targets}
+            self._session.configure_group_chats(targets)
+        except Exception:
+            _LOGGER.exception("group chat target synchronization failed")
+            return
+        self._disabled_group_updates.extend(
+            GroupChatRuntimeUpdate(group_id, "disabled")
+            for group_id in previous.keys() - current_targets.keys()
+        )
+        self._group_targets = targets
+        if self._gateway is not None:
+            self._gateway.configure_group_rooms(targets)
+        self._report_group_runtime(now)
+
+    def _report_group_runtime(self, now: datetime) -> None:
+        states: dict[str, tuple[str, str | None]] = {}
+        if self._gateway is not None:
+            try:
+                states = self._gateway.group_room_states()
+            except Exception:
+                _LOGGER.exception("group chat runtime state read failed")
+        updates = list(self._disabled_group_updates)
+        for target in self._group_targets:
+            state, error = states.get(target.chatroom_id, ("pending", None))
+            if self._login_state is not LoginState.READY and state == "connected":
+                state = "pending"
+            if state == "connected":
+                connected_at = self._group_connected_at.setdefault(
+                    target.chatroom_id, now
+                )
+            else:
+                connected_at = self._group_connected_at.get(target.chatroom_id)
+            updates.append(
+                GroupChatRuntimeUpdate(
+                    target.group_chat_id,
+                    state,
+                    last_connected_at=connected_at,
+                    last_inbound_at=self._group_last_inbound_at.get(
+                        target.chatroom_id
+                    ),
+                    last_outbound_at=self._group_last_outbound_at.get(
+                        target.chatroom_id
+                    ),
+                    last_error_summary=error,
+                )
+            )
+        if not updates:
+            return
+        try:
+            accepted = self._core.sync_group_chat_runtime(
+                self._worker_id, tuple(updates), now
+            )
+        except Exception:
+            _LOGGER.exception("group chat runtime synchronization failed")
+            return
+        if accepted:
+            self._disabled_group_updates.clear()
 
     def _send_outbound(self, gateway: ChatGateway, outbound) -> str:
         platform_message_id = str(outbound.id)

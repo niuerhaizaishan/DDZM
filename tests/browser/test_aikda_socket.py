@@ -2,13 +2,19 @@ from collections import deque
 from datetime import UTC, datetime, timedelta
 from threading import Event, Lock, Thread
 from time import monotonic, sleep
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 import pytest
 from socketio.exceptions import TimeoutError as SocketTimeoutError
 
 from dzmm_bot.browser.aikda_socket import AikdaSocketGateway, _socket_client
-from dzmm_bot.runtime.contracts import DirectChatRoom, InboundMessage, MessageReference
+from dzmm_bot.runtime.contracts import (
+    DirectChatRoom,
+    GroupChatTarget,
+    InboundMessage,
+    MessageReference,
+)
 
 
 NOW = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
@@ -234,6 +240,47 @@ def test_live_target_room_text_event_is_read_once(gateway):
     assert adapter.read_new() == []
 
 
+def test_gateway_accepts_only_configured_groups_and_known_direct_rooms(gateway):
+    adapter, socket, _ = gateway
+    adapter.configure_group_rooms(
+        (
+            GroupChatTarget(
+                UUID("00000000-0000-0000-0000-000000000101"),
+                "group-a",
+                "https://www.aikda.com/chat?c=group-a",
+            ),
+            GroupChatTarget(
+                UUID("00000000-0000-0000-0000-000000000102"),
+                "group-b",
+                "https://www.aikda.com/chat?c=group-b",
+            ),
+        )
+    )
+    assert adapter.read_new(("direct-1",)) == []
+
+    for room_id, message_id in (
+        ("group-a", "same-id"),
+        ("group-b", "same-id"),
+        ("direct-1", "direct-id"),
+        ("unknown-room", "unknown-id"),
+    ):
+        socket.trigger(
+            "message:new",
+            {
+                "chatroomId": room_id,
+                "message": message(message_id, "u-1", room_id),
+            },
+        )
+
+    assert [
+        (item.source_type, item.chatroom_id) for item in adapter.read_new(("direct-1",))
+    ] == [
+        ("group", "group-a"),
+        ("group", "group-b"),
+        ("direct", "direct-1"),
+    ]
+
+
 def test_live_replied_image_metadata_is_preserved(gateway):
     """Fails if the Socket adapter keeps reply text but drops its image target."""
     adapter, socket, _ = gateway
@@ -330,7 +377,7 @@ def test_private_socket_events_are_read_once_after_active_room_join(gateway):
     )
 
     assert [item.platform_message_id for item in adapter.read_new(("direct-1",))] == [
-        "dm-1", "dm-text", "dm-other"
+        "dm-1", "dm-text"
     ]
     assert adapter.read_new(("direct-1",)) == []
     assert socket.calls == [
@@ -354,7 +401,7 @@ def test_direct_room_join_timeout_does_not_block_the_next_room(gateway):
     )
 
 
-def test_unknown_private_socket_event_is_available_for_mapping(gateway):
+def test_unknown_socket_event_is_discarded_until_core_configures_the_room(gateway):
     adapter, socket, _ = gateway
     adapter.read_new()
 
@@ -363,19 +410,10 @@ def test_unknown_private_socket_event_is_available_for_mapping(gateway):
         {"chatroomId": "new-direct", "message": message("new-dm", "new-user", "你好")},
     )
 
-    assert adapter.read_new() == [
-        InboundMessage(
-            "new-dm",
-            "new-user",
-            "你好",
-            datetime(2026, 8, 5, 12, 0, tzinfo=ZoneInfo("Asia/Shanghai")),
-            source_type="direct",
-            chatroom_id="new-direct",
-        )
-    ]
+    assert adapter.read_new() == []
 
 
-def test_socket_handler_receives_unknown_private_event_without_waiting_for_read(gateway):
+def test_socket_handler_does_not_receive_unknown_room_events(gateway):
     adapter, socket, _ = gateway
     received = []
     adapter.set_message_handler(received.append)
@@ -386,7 +424,7 @@ def test_socket_handler_receives_unknown_private_event_without_waiting_for_read(
         {"chatroomId": "new-direct", "message": message("new-dm", "new-user", "你好")},
     )
 
-    assert [item.platform_message_id for item in received] == ["new-dm"]
+    assert received == []
     assert adapter.read_new() == []
 
 
@@ -525,7 +563,7 @@ def test_targeted_private_history_recovers_unseen_report_once(gateway):
     assert adapter.read_new(("direct-1",)) == []
 
 
-def test_self_events_are_ignored_while_unknown_direct_events_are_retained(gateway):
+def test_self_and_unknown_room_events_are_ignored(gateway):
     adapter, socket, _ = gateway
     adapter.read_new()
 
@@ -538,7 +576,7 @@ def test_self_events_are_ignored_while_unknown_direct_events_are_retained(gatewa
         {"chatroomId": "room-2", "message": message("m-other", "u-1", "/余额")},
     )
 
-    assert [item.platform_message_id for item in adapter.read_new()] == ["m-other"]
+    assert adapter.read_new() == []
 
 
 def test_self_message_arriving_during_connection_is_ignored(gateway):
@@ -620,9 +658,9 @@ def test_send_requires_successful_ack(gateway):
 
     platform_message_id = adapter.send("余额：5 摸鱼币")
 
-    assert platform_message_id == socket.calls[1][1]["message"]["message_id"]
+    send_call = next(call for call in socket.calls if call[0] == "message:send")
+    assert platform_message_id == send_call[1]["message"]["message_id"]
     assert socket.calls == [
-        ("message:join-room", {"chatroomId": "room-1"}, 10),
         (
             "message:send",
             {
@@ -646,8 +684,9 @@ def test_send_preserves_caller_message_id_and_uses_short_ack_timeout(gateway):
     platform_message_id = adapter.send("余额：5 摸鱼币", message_id="outbound-1")
 
     assert platform_message_id == "outbound-1"
-    assert socket.calls[1][1]["message"]["message_id"] == "outbound-1"
-    assert socket.calls[1][2] == 3
+    send_call = next(call for call in socket.calls if call[0] == "message:send")
+    assert send_call[1]["message"]["message_id"] == "outbound-1"
+    assert send_call[2] == 3
 
 
 def test_send_serializes_reply_reference_into_text_content(gateway):
@@ -661,7 +700,8 @@ def test_send_serializes_reply_reference_into_text_content(gateway):
 
     adapter.send("余额：5 摸鱼币", reference=reference)
 
-    assert socket.calls[1][1]["message"]["content"] == {
+    send_call = next(call for call in socket.calls if call[0] == "message:send")
+    assert send_call[1]["message"]["content"] == {
         "type": "text",
         "text": "余额：5 摸鱼币",
         "reference": {
@@ -677,7 +717,8 @@ def test_send_without_reply_reference_omits_reference_field(gateway):
 
     adapter.send("系统广播")
 
-    assert "reference" not in socket.calls[1][1]["message"]["content"]
+    send_call = next(call for call in socket.calls if call[0] == "message:send")
+    assert "reference" not in send_call[1]["message"]["content"]
 
 
 def test_send_image_uses_platform_image_content(gateway):
@@ -690,7 +731,8 @@ def test_send_image_uses_platform_image_content(gateway):
     )
 
     assert platform_message_id == "image-outbound-1"
-    assert socket.calls[1][1]["message"]["content"] == {
+    send_call = next(call for call in socket.calls if call[0] == "message:send")
+    assert send_call[1]["message"]["content"] == {
         "type": "image",
         "url": "https://cdn.example.com/profile.webp",
         "alt": "档案形象",
@@ -862,7 +904,6 @@ def test_send_rejection_logs_shape_without_logging_message_text(gateway, caplog)
     """Fails until a rejected outbound ACK carries safe diagnostic context."""
     adapter, socket, _ = gateway
     socket.call_results = [
-        {"success": True},
         {
             "success": False,
             "error": "请勿发送重复内容",

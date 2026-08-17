@@ -252,9 +252,8 @@ def test_configured_session_uses_socket_gateway_instead_of_dom_chat_controls(tmp
 
     assert page.url == "https://chat.example/chat?c=group-1"
     assert socket.connect_calls[0][1]["auth"] == {"token": "short-lived-token"}
-    assert socket.calls[0][0] == "message:join-room"
-    assert socket.calls[1][0] == "message:send"
-    assert platform_id == socket.calls[1][1]["message"]["message_id"]
+    assert socket.calls[0][0] == "message:send"
+    assert platform_id == socket.calls[0][1]["message"]["message_id"]
     assert page.filled == []
 
 

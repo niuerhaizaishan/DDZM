@@ -5,10 +5,65 @@ import httpx
 
 from dzmm_bot.runtime.contracts import (
     DirectChatRoom,
+    GroupChatRuntimeUpdate,
     InboundMessage,
     LoginState,
     MessageReference,
 )
+
+
+def test_core_client_syncs_group_targets_and_runtime():
+    from dzmm_bot.browser.core_client import CoreClient
+    from uuid import UUID
+
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append((request.method, request.url.path, request.content))
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "group_chat_id": "00000000-0000-0000-0000-000000000101",
+                        "chatroom_id": "group-a",
+                        "chat_url": "https://www.aikda.com/chat?c=group-a",
+                    }
+                ],
+            )
+        return httpx.Response(200, json={"accepted": True})
+
+    client = CoreClient(
+        "http://core.test",
+        "token",
+        client=httpx.Client(
+            base_url="http://core.test", transport=httpx.MockTransport(handler)
+        ),
+    )
+    now = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
+
+    [target] = client.group_chat_targets()
+    accepted = client.sync_group_chat_runtime(
+        "worker-a",
+        (
+            GroupChatRuntimeUpdate(
+                target.group_chat_id, "connected", last_connected_at=now
+            ),
+        ),
+        now,
+    )
+
+    assert target.chatroom_id == "group-a"
+    assert accepted is True
+    runtime_payload = json.loads(requests[1][2])
+    assert runtime_payload["statuses"][0] == {
+        "group_chat_id": str(UUID("00000000-0000-0000-0000-000000000101")),
+        "connection_state": "connected",
+        "last_connected_at": now.isoformat(),
+        "last_inbound_at": None,
+        "last_outbound_at": None,
+        "last_error_summary": None,
+    }
 
 
 def test_core_client_heartbeat_reports_actual_and_returns_desired_listener_state():

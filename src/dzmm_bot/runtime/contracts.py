@@ -41,6 +41,23 @@ class DirectChatRoom:
 
 
 @dataclass(frozen=True)
+class GroupChatTarget:
+    group_chat_id: UUID
+    chatroom_id: str
+    chat_url: str
+
+
+@dataclass(frozen=True)
+class GroupChatRuntimeUpdate:
+    group_chat_id: UUID
+    connection_state: str
+    last_connected_at: datetime | None = None
+    last_inbound_at: datetime | None = None
+    last_outbound_at: datetime | None = None
+    last_error_summary: str | None = None
+
+
+@dataclass(frozen=True)
 class OutboundMessage:
     inbound_message_id: str
     text: str

@@ -16,7 +16,12 @@ from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session, aliased, sessionmaker
 
-from dzmm_bot.runtime.contracts import InboundMessage, WorkerHeartbeat
+from dzmm_bot.runtime.contracts import (
+    GroupChatRuntimeUpdate,
+    GroupChatTarget,
+    InboundMessage,
+    WorkerHeartbeat,
+)
 from dzmm_bot.runtime.outbound import (
     BOT_GROUP_MAX_CHARS,
     BOT_GROUP_MAX_NEWLINES,
@@ -183,23 +188,6 @@ class GroupChatRuntimeState:
     last_error_summary: str | None
     worker_id: str | None
     updated_at: datetime
-
-
-@dataclass(frozen=True)
-class GroupChatTarget:
-    group_chat_id: UUID
-    chatroom_id: str
-    chat_url: str
-
-
-@dataclass(frozen=True)
-class GroupChatRuntimeUpdate:
-    group_chat_id: UUID
-    connection_state: str
-    last_connected_at: datetime | None = None
-    last_inbound_at: datetime | None = None
-    last_outbound_at: datetime | None = None
-    last_error_summary: str | None = None
 
 
 class GroupChatConflict(RuntimeError):

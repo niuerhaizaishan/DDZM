@@ -6,7 +6,13 @@ from uuid import UUID
 
 import httpx
 
-from dzmm_bot.runtime.contracts import DirectChatRoom, InboundMessage, LoginState
+from dzmm_bot.runtime.contracts import (
+    DirectChatRoom,
+    GroupChatRuntimeUpdate,
+    GroupChatTarget,
+    InboundMessage,
+    LoginState,
+)
 
 
 @dataclass(frozen=True)
@@ -68,6 +74,15 @@ class CorePort(Protocol):
     def sync_direct_chats(self, rooms: list[DirectChatRoom], now: datetime) -> None: ...
 
     def direct_inbound_chatroom_ids(self) -> tuple[str, ...]: ...
+
+    def group_chat_targets(self) -> tuple[GroupChatTarget, ...]: ...
+
+    def sync_group_chat_runtime(
+        self,
+        worker_id: str,
+        updates: tuple[GroupChatRuntimeUpdate, ...],
+        now: datetime,
+    ) -> bool: ...
 
     def claim_profile_image_upload(
         self, worker_id: str, now: datetime, lease_seconds: int
@@ -228,6 +243,42 @@ class CoreClient:
     def direct_inbound_chatroom_ids(self) -> tuple[str, ...]:
         data = self._get("/internal/direct-inbound/rooms")
         return tuple(data["chatroom_ids"])
+
+    def group_chat_targets(self) -> tuple[GroupChatTarget, ...]:
+        return tuple(
+            GroupChatTarget(
+                group_chat_id=UUID(item["group_chat_id"]),
+                chatroom_id=item["chatroom_id"],
+                chat_url=item["chat_url"],
+            )
+            for item in self._get("/internal/group-chats/targets")
+        )
+
+    def sync_group_chat_runtime(
+        self,
+        worker_id: str,
+        updates: tuple[GroupChatRuntimeUpdate, ...],
+        now: datetime,
+    ) -> bool:
+        data = self._post(
+            "/internal/group-chats/runtime",
+            {
+                "worker_id": worker_id,
+                "statuses": [
+                    {
+                        "group_chat_id": str(item.group_chat_id),
+                        "connection_state": item.connection_state,
+                        "last_connected_at": _iso_or_none(item.last_connected_at),
+                        "last_inbound_at": _iso_or_none(item.last_inbound_at),
+                        "last_outbound_at": _iso_or_none(item.last_outbound_at),
+                        "last_error_summary": item.last_error_summary,
+                    }
+                    for item in updates
+                ],
+                "now": now.isoformat(),
+            },
+        )
+        return bool(data["accepted"])
 
     def claim_profile_image_upload(
         self, worker_id: str, now: datetime, lease_seconds: int
@@ -495,3 +546,7 @@ def _claim_payload(worker_id: str, now: datetime, lease_seconds: int) -> dict:
         "now": now.isoformat(),
         "lease_seconds": lease_seconds,
     }
+
+
+def _iso_or_none(value: datetime | None) -> str | None:
+    return None if value is None else value.isoformat()

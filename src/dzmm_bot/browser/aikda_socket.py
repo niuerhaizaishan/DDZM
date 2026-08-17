@@ -6,12 +6,13 @@ from threading import Event, Lock, RLock, get_ident
 from typing import Any
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
-from uuid import uuid4
+from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 from socketio.exceptions import TimeoutError as SocketTimeoutError
 
 from dzmm_bot.runtime.contracts import (
     DirectChatRoom,
+    GroupChatTarget,
     InboundMessage,
     MessageReference,
 )
@@ -45,6 +46,7 @@ class AikdaSocketGateway:
         if not parsed.scheme or not parsed.netloc or not chatroom_id:
             raise ValueError("chat_url must contain an absolute URL with c query parameter")
         self.chatroom_id = chatroom_id
+        self._implicit_group_chatroom_id = chatroom_id
         self._origin = f"{parsed.scheme}://{parsed.netloc}"
         self._token_provider = token_provider
         self._request = request
@@ -59,13 +61,19 @@ class AikdaSocketGateway:
         self._joined = Event()
         self._reconcile_needed = True
         self._pending: deque[InboundMessage] = deque()
-        self._seen_ids: set[str] = set()
+        self._seen_ids: set[tuple[str, str]] = set()
         self._pending_lock = Lock()
         self._state_lock = RLock()
         self._emit_lock = Lock()
         self._send_locks_guard = Lock()
         self._send_locks = {}
         self._message_handler: Callable[[InboundMessage], None] | None = None
+        self._group_targets: dict[str, GroupChatTarget] = {
+            chatroom_id: GroupChatTarget(UUID(int=0), chatroom_id, chat_url)
+        }
+        self._group_chatroom_ids: set[str] = {chatroom_id}
+        self._joined_group_chatroom_ids: set[str] = {chatroom_id}
+        self._group_join_errors: dict[str, str] = {}
         self._direct_chatroom_ids: set[str] = set()
         self._joined_direct_chatroom_ids: set[str] = set()
         self._next_direct_room_join_index = 0
@@ -76,6 +84,38 @@ class AikdaSocketGateway:
         self._next_reconcile_at: datetime | None = None
         self._reconcile_cycle_is_initial = True
         self._reconcile_cycle_recovered = False
+
+    def configure_group_rooms(
+        self, targets: tuple[GroupChatTarget, ...]
+    ) -> None:
+        configured: dict[str, GroupChatTarget] = {}
+        for target in targets:
+            parsed = urlsplit(target.chat_url)
+            origin = f"{parsed.scheme}://{parsed.netloc}"
+            if origin != self._origin:
+                raise ValueError("all group chats must use the gateway origin")
+            if target.chatroom_id in configured:
+                raise ValueError("duplicate group chatroom ID")
+            configured[target.chatroom_id] = target
+        next_ids = set(configured)
+        if next_ids == self._group_chatroom_ids:
+            self._group_targets = configured
+            return
+        self._group_targets = configured
+        self._group_chatroom_ids = next_ids
+        self._joined_group_chatroom_ids.intersection_update(next_ids)
+        self._group_join_errors = {
+            room_id: error
+            for room_id, error in self._group_join_errors.items()
+            if room_id in next_ids
+        }
+        if next_ids:
+            self.chatroom_id = sorted(next_ids)[0]
+        self._reconcile_needed = True
+        self._history_reconcile_queue.clear()
+        self._next_reconcile_at = None
+        if self._socket is not None and self._socket.connected:
+            self._join_configured_group_rooms()
 
     def set_message_handler(
         self, handler: Callable[[InboundMessage], None]
@@ -132,7 +172,7 @@ class AikdaSocketGateway:
         if self._next_discovery_at is None or now >= self._next_discovery_at:
             rooms = self._request("chat.listAll")
             entries = rooms if isinstance(rooms, list) else rooms.get("items", [])
-            known_rooms = {self.chatroom_id, *direct_chatroom_ids}
+            known_rooms = {*self._group_chatroom_ids, *direct_chatroom_ids}
             queued_rooms: set[str] = set()
             self._direct_discovery_seen_users.clear()
             for entry in entries:
@@ -165,7 +205,10 @@ class AikdaSocketGateway:
             or now >= self._next_reconcile_at
         ):
             self._history_reconcile_queue.extend(
-                (self.chatroom_id, *sorted(self._direct_chatroom_ids))
+                (
+                    *sorted(self._group_chatroom_ids),
+                    *sorted(self._direct_chatroom_ids),
+                )
             )
             self._reconcile_cycle_is_initial = self._reconcile_needed
             self._reconcile_cycle_recovered = False
@@ -219,6 +262,52 @@ class AikdaSocketGateway:
                 error = joined.get("error", "message room join failed") if joined else "message room join failed"
                 raise RuntimeError(error)
             self._joined_direct_chatroom_ids.add(chatroom_id)
+
+    def _join_group_room(self, chatroom_id: str, *, timeout: float = 10) -> None:
+        with self._state_lock:
+            if chatroom_id in self._joined_group_chatroom_ids:
+                return
+            joined = self._call(
+                "message:join-room", {"chatroomId": chatroom_id}, timeout=timeout
+            )
+            if not joined or joined.get("success") is not True:
+                error = (
+                    joined.get("error", "group room join failed")
+                    if joined
+                    else "group room join failed"
+                )
+                raise RuntimeError(error)
+            self._joined_group_chatroom_ids.add(chatroom_id)
+            self._group_join_errors.pop(chatroom_id, None)
+
+    def _join_configured_group_rooms(self) -> None:
+        for chatroom_id in sorted(self._group_chatroom_ids):
+            if chatroom_id in self._joined_group_chatroom_ids:
+                continue
+            try:
+                self._join_group_room(chatroom_id)
+            except (SocketTimeoutError, RuntimeError) as error:
+                self._group_join_errors[chatroom_id] = str(error)[:512]
+                _LOGGER.warning(
+                    "group message room join failed chatroom=%s error=%s",
+                    chatroom_id,
+                    error or type(error).__name__,
+                )
+
+    def group_room_states(self) -> dict[str, tuple[str, str | None]]:
+        return {
+            chatroom_id: (
+                ("connected", None)
+                if chatroom_id in self._joined_group_chatroom_ids
+                else (
+                    "failed",
+                    self._group_join_errors[chatroom_id],
+                )
+                if chatroom_id in self._group_join_errors
+                else ("pending", None)
+            )
+            for chatroom_id in self._group_chatroom_ids
+        }
 
     def send(
         self, text: str, *, message_id: str | None = None,
@@ -280,7 +369,10 @@ class AikdaSocketGateway:
                 "sent_at": _utc_iso(self._clock()),
                 "content": content,
             }
-            self._join_direct_room(chatroom_id)
+            if chatroom_id in self._group_chatroom_ids:
+                self._join_group_room(chatroom_id)
+            else:
+                self._join_direct_room(chatroom_id)
             acknowledgement = self._call(
                 "message:send",
                 {"chatroomId": chatroom_id, "message": message},
@@ -388,6 +480,7 @@ class AikdaSocketGateway:
 
     def _ensure_connected_locked(self) -> None:
         if self._socket is not None and self._socket.connected and self._joined.is_set():
+            self._join_configured_group_rooms()
             self._authenticated = True
             return
         if get_ident() != self._owner_thread_id:
@@ -421,15 +514,28 @@ class AikdaSocketGateway:
         if not self._joined.wait(timeout=10):
             self._socket.disconnect()
             raise RuntimeError("socket join timed out")
+        if self._implicit_group_chatroom_id in self._group_chatroom_ids:
+            self._joined_group_chatroom_ids.add(self._implicit_group_chatroom_id)
+        self._join_configured_group_rooms()
         self._authenticated = True
         self._reconcile_needed = True
 
     def _reconcile_history(self, now: datetime) -> bool:
         seen_before = len(self._seen_ids)
-        for chatroom_id in (self.chatroom_id, *sorted(self._direct_chatroom_ids)):
-            payload = self._request(
-                "chatroom.getMessages", {"chatroomId": chatroom_id}
-            )
+        for chatroom_id in (
+            *sorted(self._group_chatroom_ids),
+            *sorted(self._direct_chatroom_ids),
+        ):
+            try:
+                payload = self._request(
+                    "chatroom.getMessages", {"chatroomId": chatroom_id}
+                )
+            except Exception:
+                _LOGGER.exception(
+                    "message history reconciliation failed chatroom=%s",
+                    chatroom_id,
+                )
+                continue
             for message in payload.get("messages", []):
                 self._accept_message(chatroom_id, message)
         self._reconcile_needed = False
@@ -454,7 +560,13 @@ class AikdaSocketGateway:
             if not self._history_reconcile_queue:
                 return
             chatroom_id = self._history_reconcile_queue.popleft()
-        recovered, _ = self._accept_history(chatroom_id)
+        try:
+            recovered, _ = self._accept_history(chatroom_id)
+        except Exception:
+            _LOGGER.exception(
+                "message history maintenance failed chatroom=%s", chatroom_id
+            )
+            recovered = False
         self._reconcile_cycle_recovered |= recovered
         if self._history_reconcile_queue:
             return
@@ -467,6 +579,7 @@ class AikdaSocketGateway:
             self._socket.disconnect()
             self._authenticated = False
             self._joined.clear()
+            self._joined_group_chatroom_ids.clear()
             self._joined_direct_chatroom_ids.clear()
             self._reconcile_needed = True
             self._history_reconcile_queue.clear()
@@ -484,6 +597,7 @@ class AikdaSocketGateway:
         with self._state_lock:
             self._authenticated = False
             self._joined.clear()
+            self._joined_group_chatroom_ids.clear()
             self._joined_direct_chatroom_ids.clear()
             self._reconcile_needed = True
             self._history_reconcile_queue.clear()
@@ -507,7 +621,12 @@ class AikdaSocketGateway:
             return
         if chatroom_id is None:
             return
-        source_type = "group" if chatroom_id == self.chatroom_id else "direct"
+        if chatroom_id in self._group_chatroom_ids:
+            source_type = "group"
+        elif chatroom_id in self._direct_chatroom_ids:
+            source_type = "direct"
+        else:
+            return
         inbound = InboundMessage(
             message_id,
             sent_by,
@@ -518,9 +637,10 @@ class AikdaSocketGateway:
             reference=_message_reference(content.get("reference")),
         )
         with self._pending_lock:
-            if message_id in self._seen_ids:
+            seen_key = (chatroom_id, message_id)
+            if seen_key in self._seen_ids:
                 return
-            self._seen_ids.add(message_id)
+            self._seen_ids.add(seen_key)
             handler = self._message_handler
             if handler is None:
                 self._pending.append(inbound)

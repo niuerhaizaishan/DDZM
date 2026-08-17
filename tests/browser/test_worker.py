@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from threading import Event, Lock, Thread
 from time import monotonic, sleep
 from uuid import UUID
@@ -11,6 +11,7 @@ from dzmm_bot.browser.core_client import OutboundClaim, OutboundRecallClaim, Wor
 from dzmm_bot.browser.worker import BrowserWorker
 from dzmm_bot.runtime.contracts import (
     DirectChatRoom,
+    GroupChatTarget,
     InboundMessage,
     LoginState,
     MessageReference,
@@ -48,6 +49,16 @@ class FakeGateway:
     direct_send_lock: Lock = field(default_factory=Lock)
     maintenance_started: Event = field(default_factory=Event)
     maintenance_release: Event | None = None
+    configured_groups: tuple[GroupChatTarget, ...] = ()
+
+    def configure_group_rooms(self, targets):
+        self.configured_groups = targets
+
+    def group_room_states(self):
+        return {
+            target.chatroom_id: ("connected", None)
+            for target in self.configured_groups
+        }
 
     def read_new(self, direct_chatroom_ids=()):
         self.read_targets.append(direct_chatroom_ids)
@@ -135,6 +146,9 @@ class FakeSession:
     starts: int = 0
     stops: int = 0
 
+    def configure_group_chats(self, targets):
+        self.gateway.configure_group_rooms(targets)
+
     def start_headless(self):
         self.starts += 1
         return self.gateway
@@ -198,6 +212,15 @@ class FakeCore:
     upload_cleanup_tasks: list = field(default_factory=list)
     upload_cleanups: list[tuple] = field(default_factory=list)
     upload_completion_accepted: bool = True
+    group_targets: tuple[GroupChatTarget, ...] = ()
+    group_runtime_updates: list[tuple] = field(default_factory=list)
+
+    def group_chat_targets(self):
+        return self.group_targets
+
+    def sync_group_chat_runtime(self, worker_id, updates, now):
+        self.group_runtime_updates.append((worker_id, updates, now))
+        return True
 
     def submit_inbound(self, message):
         self.submitted_ids.append(message.platform_message_id)
@@ -321,6 +344,60 @@ def test_worker_submits_each_platform_message_once(context):
     worker.run_once()
 
     assert core.submitted_ids == ["p-1"]
+
+
+def test_worker_adds_and_removes_groups_without_restart():
+    gateway = FakeGateway()
+    session = FakeSession(gateway)
+    core = FakeCore()
+    clock_time = [NOW]
+    group_a = GroupChatTarget(
+        UUID("00000000-0000-0000-0000-000000000101"),
+        "group-a",
+        "https://www.aikda.com/chat?c=group-a",
+    )
+    group_b = GroupChatTarget(
+        UUID("00000000-0000-0000-0000-000000000102"),
+        "group-b",
+        "https://www.aikda.com/chat?c=group-b",
+    )
+    core.group_targets = (group_a,)
+    worker = BrowserWorker(
+        worker_id="worker-a",
+        core=core,
+        session=session,
+        desktop=FakeDesktop(),
+        clock=lambda: clock_time[0],
+        sleep=lambda _: None,
+    )
+
+    worker.run_once()
+    assert {item.chatroom_id for item in gateway.configured_groups} == {"group-a"}
+
+    clock_time[0] = NOW + timedelta(seconds=6)
+    core.group_targets = (group_a, group_b)
+    worker.run_once()
+    assert {item.chatroom_id for item in gateway.configured_groups} == {
+        "group-a",
+        "group-b",
+    }
+
+    clock_time[0] = NOW + timedelta(seconds=12)
+    core.group_targets = (group_b,)
+    worker.run_once()
+
+    assert session.starts == 1
+    assert {item.chatroom_id for item in gateway.configured_groups} == {"group-b"}
+    all_updates = [
+        update
+        for _, updates, _ in core.group_runtime_updates
+        for update in updates
+    ]
+    assert any(
+        update.group_chat_id == group_a.group_chat_id
+        and update.connection_state == "disabled"
+        for update in all_updates
+    )
 
 
 def test_worker_reads_only_core_selected_direct_rooms(context):

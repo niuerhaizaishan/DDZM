@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 from dzmm_bot.runtime.contracts import (
     DirectChatRoom,
+    GroupChatTarget,
     InboundMessage,
     LoginState,
     MessageReference,
@@ -17,6 +18,12 @@ from .aikda_socket import AikdaSocketGateway
 
 
 class ChatGateway(Protocol):
+    def configure_group_rooms(
+        self, targets: tuple[GroupChatTarget, ...]
+    ) -> None: ...
+
+    def group_room_states(self) -> dict[str, tuple[str, str | None]]: ...
+
     def read_new(
         self, direct_chatroom_ids: tuple[str, ...] = ()
     ) -> list[InboundMessage]: ...
@@ -83,6 +90,18 @@ class BrowserSession:
         self._context = None
         self._gateway = None
         self._attached = False
+        self._group_targets: tuple[GroupChatTarget, ...] = ()
+        self._group_targets_configured = False
+
+    def configure_group_chats(
+        self, targets: tuple[GroupChatTarget, ...]
+    ) -> None:
+        self._group_targets = targets
+        self._group_targets_configured = True
+        if targets and self.chat_url is None:
+            self.chat_url = targets[0].chat_url
+        if self._gateway is not None:
+            self._gateway.configure_group_rooms(targets)
 
     def attach_existing(self) -> ChatGateway:
         if self._gateway is not None:
@@ -94,6 +113,8 @@ class BrowserSession:
         self._context = browser.contexts[0]
         self._attached = True
         self._gateway = self._new_gateway()
+        if self._group_targets_configured:
+            self._gateway.configure_group_rooms(self._group_targets)
         self._open_group_chat()
         return self._gateway
 
@@ -122,6 +143,8 @@ class BrowserSession:
         if self.login_url and page.url == "about:blank":
             page.goto(self.login_url)
         self._gateway = self._new_gateway()
+        if self._group_targets_configured:
+            self._gateway.configure_group_rooms(self._group_targets)
         self._open_group_chat()
         return self._gateway
 
@@ -220,6 +243,15 @@ class _PlaywrightGateway:
     def __init__(self, context, login_url: str | None) -> None:
         self._context = context
         self._login_url = login_url
+
+    def configure_group_rooms(
+        self, targets: tuple[GroupChatTarget, ...]
+    ) -> None:
+        if len(targets) > 1:
+            raise NotImplementedError("multiple groups require the Aikda socket gateway")
+
+    def group_room_states(self) -> dict[str, tuple[str, str | None]]:
+        return {}
 
     def read_new(
         self, direct_chatroom_ids: tuple[str, ...] = ()
