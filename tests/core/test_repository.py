@@ -6183,6 +6183,43 @@ def test_random_events_run_and_accept_participants_independently_per_group(repos
     assert repository.active_random_event_state(second.id) == "in_progress"
 
 
+def test_disabling_random_events_skips_pending_schedule_without_stopping_active_groups(
+    repository,
+):
+    now = datetime(2026, 8, 6, 10, 0, tzinfo=BEIJING)
+    primary = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=event-disable-main", now
+    )
+    disabled = repository.create_group_chat(
+        "待关闭事件群",
+        "https://www.aikda.com/chat?c=event-disable-second",
+        True,
+        True,
+        True,
+        True,
+        now,
+    )
+    repository.create_random_event_scene(
+        "消防演练", "报名", ["开场"], 1, 1, [("员工", 1)]
+    )
+    repository.set_random_event_settings(["10:00"], "可选身份：{可选身份}", 15, 5)
+    repository.schedule_random_events(now)
+    repository.update_group_chat(
+        disabled.id,
+        random_events_enabled=False,
+        now=now + timedelta(seconds=1),
+    )
+
+    repository.run_random_event_jobs(now + timedelta(seconds=2))
+
+    schedules = {
+        item.group_chat_id: item
+        for item in repository.list_today_random_event_schedules(now)
+    }
+    assert schedules[primary.id].status == "signup"
+    assert schedules[disabled.id].status == "skipped"
+
+
 def test_due_random_event_is_skipped_while_memory_assessment_duel_is_active(repository):
     now = datetime(2026, 8, 6, 10, 0, tzinfo=BEIJING)
     repository.create_user("u1", "小明", now, 0)

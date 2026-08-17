@@ -34,7 +34,31 @@ NAMING_CONVENTION = {
 }
 
 
+def _table_exists(table_name: str) -> bool:
+    return table_name in sa.inspect(op.get_bind()).get_table_names()
+
+
+def _column_names(table_name: str) -> set[str]:
+    if not _table_exists(table_name):
+        return set()
+    return {
+        column["name"]
+        for column in sa.inspect(op.get_bind()).get_columns(table_name)
+    }
+
+
+def _index_names(table_name: str) -> set[str]:
+    if not _table_exists(table_name):
+        return set()
+    return {
+        index["name"]
+        for index in sa.inspect(op.get_bind()).get_indexes(table_name)
+    }
+
+
 def _add_group_chat_column(table_name: str) -> None:
+    if not _table_exists(table_name):
+        return
     with op.batch_alter_table(
         table_name, naming_convention=NAMING_CONVENTION
     ) as batch_op:
@@ -62,6 +86,8 @@ def _add_group_chat_column(table_name: str) -> None:
 
 
 def _drop_group_chat_column(table_name: str) -> None:
+    if "group_chat_id" not in _column_names(table_name):
+        return
     with op.batch_alter_table(
         table_name, naming_convention=NAMING_CONVENTION
     ) as batch_op:
@@ -154,25 +180,31 @@ def upgrade() -> None:
     for table_name in GROUP_SCOPED_TABLES:
         _add_group_chat_column(table_name)
 
-    op.drop_index(
-        "ux_inbound_messages_platform_message_id", table_name="inbound_messages"
-    )
-    op.create_index(
-        "ux_inbound_messages_group_platform_message_id",
-        "inbound_messages",
-        ["group_chat_id", "platform_message_id"],
-        unique=True,
-        postgresql_where=sa.text("source_type = 'group'"),
-        sqlite_where=sa.text("source_type = 'group'"),
-    )
-    op.create_index(
-        "ux_inbound_messages_direct_platform_message_id",
-        "inbound_messages",
-        ["chatroom_id", "platform_message_id"],
-        unique=True,
-        postgresql_where=sa.text("source_type = 'direct'"),
-        sqlite_where=sa.text("source_type = 'direct'"),
-    )
+    inbound_columns = _column_names("inbound_messages")
+    if {"group_chat_id", "platform_message_id", "source_type", "chatroom_id"} <= inbound_columns:
+        if "ux_inbound_messages_platform_message_id" in _index_names(
+            "inbound_messages"
+        ):
+            op.drop_index(
+                "ux_inbound_messages_platform_message_id",
+                table_name="inbound_messages",
+            )
+        op.create_index(
+            "ux_inbound_messages_group_platform_message_id",
+            "inbound_messages",
+            ["group_chat_id", "platform_message_id"],
+            unique=True,
+            postgresql_where=sa.text("source_type = 'group'"),
+            sqlite_where=sa.text("source_type = 'group'"),
+        )
+        op.create_index(
+            "ux_inbound_messages_direct_platform_message_id",
+            "inbound_messages",
+            ["chatroom_id", "platform_message_id"],
+            unique=True,
+            postgresql_where=sa.text("source_type = 'direct'"),
+            sqlite_where=sa.text("source_type = 'direct'"),
+        )
 
     for index_name, table_name in (
         ("ux_undercover_one_active_session", "undercover_sessions"),
@@ -181,7 +213,10 @@ def upgrade() -> None:
         ("ux_number_bomb_one_active", "number_bomb_games"),
         ("ux_memory_assessment_one_active_game", "memory_assessment_games"),
     ):
-        op.drop_index(index_name, table_name=table_name)
+        if {"group_chat_id", "active_key"} - _column_names(table_name):
+            continue
+        if index_name in _index_names(table_name):
+            op.drop_index(index_name, table_name=table_name)
         op.create_index(
             index_name,
             table_name,
@@ -191,93 +226,117 @@ def upgrade() -> None:
             sqlite_where=sa.text("active_key IS NOT NULL"),
         )
 
-    op.drop_index(
-        "ux_hide_and_seek_one_selecting_user", table_name="hide_and_seek_games"
-    )
-    op.create_index(
-        "ux_hide_and_seek_one_selecting_user",
-        "hide_and_seek_games",
-        ["group_chat_id", "user_id"],
-        unique=True,
-        postgresql_where=sa.text("state = 'selecting'"),
-        sqlite_where=sa.text("state = 'selecting'"),
-    )
-    op.drop_index("ux_random_events_one_active_group", table_name="random_events")
-    op.create_index(
-        "ux_random_events_one_active_group",
-        "random_events",
-        ["group_chat_id"],
-        unique=True,
-        postgresql_where=sa.text("state IN ('signup', 'in_progress', 'tipping')"),
-        sqlite_where=sa.text("state IN ('signup', 'in_progress', 'tipping')"),
-    )
+    if {"group_chat_id", "user_id", "state"} <= _column_names(
+        "hide_and_seek_games"
+    ):
+        if "ux_hide_and_seek_one_selecting_user" in _index_names(
+            "hide_and_seek_games"
+        ):
+            op.drop_index(
+                "ux_hide_and_seek_one_selecting_user",
+                table_name="hide_and_seek_games",
+            )
+        op.create_index(
+            "ux_hide_and_seek_one_selecting_user",
+            "hide_and_seek_games",
+            ["group_chat_id", "user_id"],
+            unique=True,
+            postgresql_where=sa.text("state = 'selecting'"),
+            sqlite_where=sa.text("state = 'selecting'"),
+        )
+    if {"group_chat_id", "state"} <= _column_names("random_events"):
+        if "ux_random_events_one_active_group" in _index_names("random_events"):
+            op.drop_index(
+                "ux_random_events_one_active_group", table_name="random_events"
+            )
+        op.create_index(
+            "ux_random_events_one_active_group",
+            "random_events",
+            ["group_chat_id"],
+            unique=True,
+            postgresql_where=sa.text("state IN ('signup', 'in_progress', 'tipping')"),
+            sqlite_where=sa.text("state IN ('signup', 'in_progress', 'tipping')"),
+        )
 
-    with op.batch_alter_table(
-        "random_event_schedules", naming_convention=NAMING_CONVENTION
-    ) as batch_op:
-        batch_op.drop_constraint(
-            "uq_random_event_schedules_event_date_scheduled_at", type_="unique"
-        )
-        batch_op.create_unique_constraint(
-            "uq_random_event_schedules_group_chat_id_event_date_scheduled_at",
-            ["group_chat_id", "event_date", "scheduled_at"],
-        )
-    with op.batch_alter_table(
-        "income_report_deliveries", naming_convention=NAMING_CONVENTION
-    ) as batch_op:
-        batch_op.drop_constraint(
-            "uq_income_report_deliveries_report_date_report_time", type_="unique"
-        )
-        batch_op.create_unique_constraint(
-            "uq_income_report_deliveries_group_chat_id_report_date_report_time",
-            ["group_chat_id", "report_date", "report_time"],
-        )
+    if _table_exists("random_event_schedules"):
+        with op.batch_alter_table(
+            "random_event_schedules", naming_convention=NAMING_CONVENTION
+        ) as batch_op:
+            batch_op.drop_constraint(
+                "uq_random_event_schedules_event_date_scheduled_at", type_="unique"
+            )
+            batch_op.create_unique_constraint(
+                "uq_random_event_schedules_group_chat_id_event_date_scheduled_at",
+                ["group_chat_id", "event_date", "scheduled_at"],
+            )
+    if _table_exists("income_report_deliveries"):
+        with op.batch_alter_table(
+            "income_report_deliveries", naming_convention=NAMING_CONVENTION
+        ) as batch_op:
+            batch_op.drop_constraint(
+                "uq_income_report_deliveries_report_date_report_time", type_="unique"
+            )
+            batch_op.create_unique_constraint(
+                "uq_income_report_deliveries_group_chat_id_report_date_report_time",
+                ["group_chat_id", "report_date", "report_time"],
+            )
 
 
 def downgrade() -> None:
-    with op.batch_alter_table(
-        "income_report_deliveries", naming_convention=NAMING_CONVENTION
-    ) as batch_op:
-        batch_op.drop_constraint(
-            "uq_income_report_deliveries_group_chat_id_report_date_report_time",
-            type_="unique",
-        )
-        batch_op.create_unique_constraint(
-            "uq_income_report_deliveries_report_date_report_time",
-            ["report_date", "report_time"],
-        )
-    with op.batch_alter_table(
-        "random_event_schedules", naming_convention=NAMING_CONVENTION
-    ) as batch_op:
-        batch_op.drop_constraint(
-            "uq_random_event_schedules_group_chat_id_event_date_scheduled_at",
-            type_="unique",
-        )
-        batch_op.create_unique_constraint(
-            "uq_random_event_schedules_event_date_scheduled_at",
-            ["event_date", "scheduled_at"],
-        )
+    if _table_exists("income_report_deliveries"):
+        with op.batch_alter_table(
+            "income_report_deliveries", naming_convention=NAMING_CONVENTION
+        ) as batch_op:
+            batch_op.drop_constraint(
+                "uq_income_report_deliveries_group_chat_id_report_date_report_time",
+                type_="unique",
+            )
+            batch_op.create_unique_constraint(
+                "uq_income_report_deliveries_report_date_report_time",
+                ["report_date", "report_time"],
+            )
+    if _table_exists("random_event_schedules"):
+        with op.batch_alter_table(
+            "random_event_schedules", naming_convention=NAMING_CONVENTION
+        ) as batch_op:
+            batch_op.drop_constraint(
+                "uq_random_event_schedules_group_chat_id_event_date_scheduled_at",
+                type_="unique",
+            )
+            batch_op.create_unique_constraint(
+                "uq_random_event_schedules_event_date_scheduled_at",
+                ["event_date", "scheduled_at"],
+            )
 
-    op.drop_index("ux_random_events_one_active_group", table_name="random_events")
-    op.create_index(
-        "ux_random_events_one_active_group",
-        "random_events",
-        ["group_key"],
-        unique=True,
-        postgresql_where=sa.text("state IN ('signup', 'in_progress', 'tipping')"),
-        sqlite_where=sa.text("state IN ('signup', 'in_progress', 'tipping')"),
-    )
-    op.drop_index(
-        "ux_hide_and_seek_one_selecting_user", table_name="hide_and_seek_games"
-    )
-    op.create_index(
-        "ux_hide_and_seek_one_selecting_user",
-        "hide_and_seek_games",
-        ["user_id"],
-        unique=True,
-        postgresql_where=sa.text("state = 'selecting'"),
-        sqlite_where=sa.text("state = 'selecting'"),
-    )
+    if {"group_key", "state"} <= _column_names("random_events"):
+        if "ux_random_events_one_active_group" in _index_names("random_events"):
+            op.drop_index(
+                "ux_random_events_one_active_group", table_name="random_events"
+            )
+        op.create_index(
+            "ux_random_events_one_active_group",
+            "random_events",
+            ["group_key"],
+            unique=True,
+            postgresql_where=sa.text("state IN ('signup', 'in_progress', 'tipping')"),
+            sqlite_where=sa.text("state IN ('signup', 'in_progress', 'tipping')"),
+        )
+    if {"user_id", "state"} <= _column_names("hide_and_seek_games"):
+        if "ux_hide_and_seek_one_selecting_user" in _index_names(
+            "hide_and_seek_games"
+        ):
+            op.drop_index(
+                "ux_hide_and_seek_one_selecting_user",
+                table_name="hide_and_seek_games",
+            )
+        op.create_index(
+            "ux_hide_and_seek_one_selecting_user",
+            "hide_and_seek_games",
+            ["user_id"],
+            unique=True,
+            postgresql_where=sa.text("state = 'selecting'"),
+            sqlite_where=sa.text("state = 'selecting'"),
+        )
     for index_name, table_name in (
         ("ux_undercover_one_active_session", "undercover_sessions"),
         ("ux_blame_game_one_active", "blame_games"),
@@ -285,7 +344,10 @@ def downgrade() -> None:
         ("ux_number_bomb_one_active", "number_bomb_games"),
         ("ux_memory_assessment_one_active_game", "memory_assessment_games"),
     ):
-        op.drop_index(index_name, table_name=table_name)
+        if "active_key" not in _column_names(table_name):
+            continue
+        if index_name in _index_names(table_name):
+            op.drop_index(index_name, table_name=table_name)
         op.create_index(
             index_name,
             table_name,
@@ -294,20 +356,19 @@ def downgrade() -> None:
             postgresql_where=sa.text("active_key IS NOT NULL"),
             sqlite_where=sa.text("active_key IS NOT NULL"),
         )
-    op.drop_index(
-        "ux_inbound_messages_direct_platform_message_id",
-        table_name="inbound_messages",
-    )
-    op.drop_index(
-        "ux_inbound_messages_group_platform_message_id",
-        table_name="inbound_messages",
-    )
-    op.create_index(
-        "ux_inbound_messages_platform_message_id",
-        "inbound_messages",
-        ["platform_message_id"],
-        unique=True,
-    )
+    if "platform_message_id" in _column_names("inbound_messages"):
+        for index_name in (
+            "ux_inbound_messages_direct_platform_message_id",
+            "ux_inbound_messages_group_platform_message_id",
+        ):
+            if index_name in _index_names("inbound_messages"):
+                op.drop_index(index_name, table_name="inbound_messages")
+        op.create_index(
+            "ux_inbound_messages_platform_message_id",
+            "inbound_messages",
+            ["platform_message_id"],
+            unique=True,
+        )
 
     for table_name in reversed(GROUP_SCOPED_TABLES):
         _drop_group_chat_column(table_name)

@@ -11032,6 +11032,14 @@ class CoreRepository:
                         if active is not None:
                             schedule.status = "skipped"
                             continue
+                        group = session.get(GroupChatRecord, group_chat_id)
+                        if group is not None and (
+                            group.deleted_at is not None
+                            or not group.listening_enabled
+                            or not group.random_events_enabled
+                        ):
+                            schedule.status = "skipped"
+                            continue
                         if self._has_active_game(session, group_chat_id):
                             schedule.status = "skipped"
                             continue

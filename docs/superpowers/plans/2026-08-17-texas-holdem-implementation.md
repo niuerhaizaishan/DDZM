@@ -23,7 +23,7 @@
 
 - Create `src/dzmm_bot/core/texas_holdem.py`: 牌、洗牌布局、牌型比较、纯下注轮和边池算法。
 - Modify `src/dzmm_bot/core/schema.py`: 德州扑克设置、牌局、玩家、动作、底池和每日发起 ORM。
-- Create `migrations/versions/20260817_45_texas_holdem.py`: 新表、约束、默认配置和索引。
+- Create `migrations/versions/20260818_46_texas_holdem.py`: 新表、约束、默认配置和索引；接在多群迁移 `20260818_45` 之后。
 - Modify `src/dzmm_bot/core/repository.py`: 事务化生命周期、私聊投递确认、超时、结算、摘要和互斥。
 - Modify `src/dzmm_bot/core/commands.py`: 新命令和通用游戏路由。
 - Modify `src/dzmm_bot/core/reply_templates.py`: 默认可编辑回复模板。
@@ -117,7 +117,7 @@ git commit -m "feat: add texas holdem domain engine"
 
 **Files:**
 - Modify: `src/dzmm_bot/core/schema.py`
-- Create: `migrations/versions/20260817_45_texas_holdem.py`
+- Create: `migrations/versions/20260818_46_texas_holdem.py`
 - Create: `tests/deploy/test_texas_holdem_migration.py`
 - Modify: `tests/core/test_repository.py`
 
@@ -140,11 +140,11 @@ def test_texas_holdem_tables_and_active_index_exist(upgraded_connection):
 - [ ] **Step 2: Run migration test and verify it fails**
 
 Run: `pytest -q tests/deploy/test_texas_holdem_migration.py`
-Expected: FAIL because revision `20260817_45` and tables do not exist.
+Expected: FAIL because revision `20260818_46` and tables do not exist.
 
 - [ ] **Step 3: Add ORM classes and Alembic revision**
 
-Set `revision = "20260817_45"`, `down_revision = "20260817_44"`. Add defaults: enabled true, min/max players 2/9, min/max buy-in 20/200, daily start limit 1, signup/action timeout 120, small/big blind percent 5/10. Add unique constraints on `(game_id, seat_number)`, `(game_id, user_id)`, action `inbound_message_id`, and `(user_id, play_date)`.
+Set `revision = "20260818_46"`, `down_revision = "20260818_45"`. Add defaults: enabled true, min/max players 2/9, min/max buy-in 20/200, daily start limit 1, signup/action timeout 120, small/big blind percent 5/10. `texas_holdem_games.group_chat_id` is a non-null foreign key to `group_chats.id`; the partial active-game unique index is keyed by `group_chat_id`. Add unique constraints on `(game_id, seat_number)`, `(game_id, user_id)`, action `inbound_message_id`, and `(user_id, play_date)`.
 
 - [ ] **Step 4: Run migration and schema tests, then commit**
 
@@ -152,7 +152,7 @@ Run: `pytest -q tests/deploy/test_texas_holdem_migration.py tests/core/test_repo
 Expected: PASS.
 
 ```bash
-git add src/dzmm_bot/core/schema.py migrations/versions/20260817_45_texas_holdem.py tests/deploy/test_texas_holdem_migration.py tests/core/test_repository.py
+git add src/dzmm_bot/core/schema.py migrations/versions/20260818_46_texas_holdem.py tests/deploy/test_texas_holdem_migration.py tests/core/test_repository.py
 git commit -m "feat: persist texas holdem games"
 ```
 
@@ -166,7 +166,7 @@ git commit -m "feat: persist texas holdem games"
 
 **Interfaces:**
 - Produces dataclasses: `TexasHoldemSettings`, `TexasHoldemPlayerView`, `TexasHoldemResult`, `TexasHoldemSummary`.
-- Produces repository methods: `get_texas_holdem_settings() -> TexasHoldemSettings`, `set_texas_holdem_settings(enabled: bool, minimum_players: int, maximum_players: int, minimum_buy_in: int, maximum_buy_in: int, daily_start_limit: int, signup_timeout_seconds: int, action_timeout_seconds: int, small_blind_percent: int, big_blind_percent: int) -> TexasHoldemSettings`, `start_texas_holdem_signup(platform_id: str, buy_in: int, now: datetime) -> TexasHoldemResult`, `join_texas_holdem(platform_id: str, now: datetime) -> TexasHoldemResult`, `leave_texas_holdem(platform_id: str, now: datetime) -> TexasHoldemResult`, `start_texas_holdem_hand(platform_id: str, now: datetime) -> TexasHoldemResult`, `texas_holdem_summary(now: datetime) -> TexasHoldemSummary`.
+- Produces repository methods: `get_texas_holdem_settings() -> TexasHoldemSettings`, `set_texas_holdem_settings(enabled: bool, minimum_players: int, maximum_players: int, minimum_buy_in: int, maximum_buy_in: int, daily_start_limit: int, signup_timeout_seconds: int, action_timeout_seconds: int, small_blind_percent: int, big_blind_percent: int) -> TexasHoldemSettings`, `start_texas_holdem_signup(platform_id: str, buy_in: int, now: datetime, group_chat_id: UUID) -> TexasHoldemResult`, `join_texas_holdem(platform_id: str, now: datetime, group_chat_id: UUID) -> TexasHoldemResult`, `leave_texas_holdem(platform_id: str, now: datetime, group_chat_id: UUID) -> TexasHoldemResult`, `start_texas_holdem_hand(platform_id: str, now: datetime, group_chat_id: UUID) -> TexasHoldemResult`, `texas_holdem_summary(now: datetime, group_chat_id: UUID) -> TexasHoldemSummary`.
 - Extends outbound completion for `delivery_kind == "texas_holdem_card"`.
 
 - [ ] **Step 1: Write failing signup and refund tests**
@@ -241,7 +241,7 @@ git commit -m "feat: add texas holdem signup and dealing"
 
 **Interfaces:**
 - Produces: `act_texas_holdem(platform_id: str, action: Literal["check", "call", "raise", "all_in", "fold"], amount: int | None, inbound_message_id: UUID, now: datetime) -> TexasHoldemResult`.
-- Produces: `run_texas_holdem_jobs(now: datetime) -> list[str]`, `abort_texas_holdem(game_id: UUID, now: datetime) -> bool`, `get_texas_holdem_private_cards(platform_id: str, now: datetime) -> TexasHoldemResult`.
+- Produces: `run_texas_holdem_jobs(now: datetime, group_chat_id: UUID) -> list[str]`, `abort_texas_holdem(game_id: UUID, now: datetime, group_chat_id: UUID) -> bool`, `get_texas_holdem_private_cards(platform_id: str, now: datetime, group_chat_id: UUID | None = None) -> TexasHoldemResult`. 群指令必须显式传来源群；私聊查询若命中多个群，必须返回稳定候选要求玩家选择，不能猜测。
 - Consumes Task 1 `apply_betting_action`, `evaluate_best`, `build_side_pots`.
 
 - [ ] **Step 1: Write failing four-street and early-fold settlement tests**
@@ -481,7 +481,7 @@ git commit -m "feat: manage texas holdem in admin"
 - [ ] **Step 1: Run migration chain and deploy artifact tests**
 
 Run: `pytest -q tests/deploy tests/runtime/test_contracts.py tests/runtime/test_production_entrypoints.py`
-Expected: PASS, Alembic head is `20260817_45`.
+Expected: PASS, Alembic head is `20260818_46` after德州扑克 is implemented；在该功能落地前，当前 head 仍为 `20260818_45`。
 
 - [ ] **Step 2: Run focused end-to-end gameplay suites**
 
