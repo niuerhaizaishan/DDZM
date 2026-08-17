@@ -79,7 +79,9 @@ class GroupCommandHandler:
         if command == "/抢红包":
             return self._red_packet_claim(message, received_at, group_chat_id)
         if command == "/打赏":
-            return self._random_event_tip(message, content, received_at)
+            return self._random_event_tip(
+                message, content, received_at, group_chat_id
+            )
         if command == "/当前游戏":
             return self._current_game(
                 message.sender_platform_id, received_at, group_chat_id
@@ -304,7 +306,9 @@ class GroupCommandHandler:
                 )
             if summary.game_type == "conflict":
                 return self._reply("/当前游戏", "conflict", received_at)
-            return self._event_leave(message.sender_platform_id, received_at)
+            return self._event_leave(
+                message.sender_platform_id, received_at, group_chat_id
+            )
         if command == "/摸鱼躲猫猫":
             return self._hide_and_seek(
                 message.sender_platform_id, content, received_at, group_chat_id
@@ -1833,7 +1837,10 @@ class GroupCommandHandler:
                 return self._reply("/记忆考核", "random_event_active", received_at)
             return self._reply("/加入", "invalid", received_at)
         status = self._repository.join_random_event(
-            platform_id, parts[1].strip(), received_at
+            platform_id,
+            parts[1].strip(),
+            received_at,
+            **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
         )
         employee = self._repository.find_user(platform_id)
         if status == "not_joined":
@@ -1846,7 +1853,13 @@ class GroupCommandHandler:
                 {
                     "{昵称}": employee.display_name,
                     "{角色}": parts[1].strip(),
-                    "{剩余席位}": self._repository.random_event_open_seats(),
+                    "{剩余席位}": self._repository.random_event_open_seats(
+                        **(
+                            {}
+                            if group_chat_id is None
+                            else {"group_chat_id": group_chat_id}
+                        )
+                    ),
                 },
             )
         if status == "started":
@@ -1861,8 +1874,14 @@ class GroupCommandHandler:
         }
         return self._reply("/加入", "failed", received_at, {"{原因}": reasons[status]})
 
-    def _event_leave(self, platform_id: str, received_at) -> str:
-        status = self._repository.leave_random_event(platform_id, received_at)
+    def _event_leave(
+        self, platform_id: str, received_at, group_chat_id=None
+    ) -> str:
+        status = self._repository.leave_random_event(
+            platform_id,
+            received_at,
+            **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
+        )
         if status == "not_joined":
             return self._reply("/退出", status, received_at)
         if status == "no_event":
@@ -1873,7 +1892,9 @@ class GroupCommandHandler:
                 "/退出", status, received_at,
                 {
                     "{昵称}": employee.display_name,
-                    "{事件奖励}": self._event_reward(platform_id),
+                    "{事件奖励}": self._event_reward(
+                        platform_id, group_chat_id
+                    ),
                 },
             )
         if status == "left_signup":
@@ -1889,11 +1910,18 @@ class GroupCommandHandler:
             {"{原因}": "你没有加入当前随机事件。"},
         )
 
-    def _event_reward(self, platform_id: str) -> int:
-        return self._repository.last_random_event_reward(platform_id)
+    def _event_reward(self, platform_id: str, group_chat_id=None) -> int:
+        return self._repository.last_random_event_reward(
+            platform_id,
+            **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
+        )
 
     def _random_event_tip(
-        self, message: InboundMessage, content: str, received_at
+        self,
+        message: InboundMessage,
+        content: str,
+        received_at,
+        group_chat_id=None,
     ) -> str:
         payload = content[len("/打赏") :].strip()
         if not payload:
@@ -1913,6 +1941,7 @@ class GroupCommandHandler:
             int(parts[1]),
             message.platform_message_id,
             received_at,
+            **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
         )
         currency = self._repository.get_game_settings().currency_name
         if result.status in {"tipped", "duplicate"}:

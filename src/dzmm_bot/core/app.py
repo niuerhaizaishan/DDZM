@@ -2127,7 +2127,11 @@ def create_app(
         try:
             return _random_event_schedule_response(
                 repository.create_today_random_event(
-                    request.scene_id, request.event_name, request.scheduled_at, clock()
+                    request.scene_id,
+                    request.event_name,
+                    request.scheduled_at,
+                    clock(),
+                    request.group_chat_id,
                 )
             )
         except ValueError as error:
@@ -2781,6 +2785,7 @@ def _random_event_submission_response(submission, user) -> dict:
 def _random_event_schedule_response(schedule) -> RandomEventScheduleResponse:
     return RandomEventScheduleResponse(
         id=schedule.id,
+        group_chat_id=schedule.group_chat_id,
         event_date=schedule.event_date,
         scheduled_at=schedule.scheduled_at,
         status=schedule.status,

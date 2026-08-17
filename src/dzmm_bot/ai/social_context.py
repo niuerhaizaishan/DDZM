@@ -30,6 +30,7 @@ class SocialRecentMessage:
     content: str
     received_at: datetime
     ai_reply: str | None = None
+    group_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -170,8 +171,12 @@ def render_social_context(context: AISocialContext) -> str:
         if not person.recent_messages:
             lines.append("- 暂无")
         for message in person.recent_messages:
+            group_label = (
+                f" [群聊：{message.group_name}]" if message.group_name else ""
+            )
             lines.append(
-                f"- {_beijing_text(message.received_at)} [员工发言] {message.content}"
+                f"- {_beijing_text(message.received_at)}{group_label} "
+                f"[员工发言] {message.content}"
             )
             if message.ai_reply and message.ai_reply.strip():
                 lines.append(

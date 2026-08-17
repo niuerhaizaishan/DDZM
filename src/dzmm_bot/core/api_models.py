@@ -5,6 +5,7 @@ from uuid import UUID
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from dzmm_bot.runtime.contracts import LoginState
+from .schema import PRIMARY_GROUP_CHAT_ID
 
 
 class ApiModel(BaseModel):
@@ -1018,6 +1019,7 @@ class UpdateRandomEventSceneRequest(CreateRandomEventSceneRequest):
 
 class RandomEventScheduleResponse(ApiModel):
     id: UUID
+    group_chat_id: UUID
     event_date: date
     scheduled_at: datetime
     status: str
@@ -1027,6 +1029,7 @@ class RandomEventScheduleResponse(ApiModel):
 
 
 class CreateTodayRandomEventRequest(ApiModel):
+    group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID
     scene_id: UUID
     event_name: str = Field(min_length=1, max_length=64)
     scheduled_at: datetime

@@ -6,6 +6,7 @@ from dzmm_bot.runtime.contracts import InboundMessage
 
 from .ai_mentions import BOT_MENTION_PREFIX, normalize_ai_mention
 from .repository import CoreRepository
+from .schema import PRIMARY_GROUP_CHAT_ID
 from .random_event_submissions import (
     RandomEventSubmissionHandler,
     SUBMISSION_COMMANDS,
@@ -121,14 +122,25 @@ class CoreService:
                 message.sender_platform_id, message.received_at, message.content
             )
             event_message_status = self._repository.record_random_event_round(
-                message.sender_platform_id, message.received_at, message.content
+                message.sender_platform_id,
+                message.received_at,
+                message.content,
+                (
+                    PRIMARY_GROUP_CHAT_ID
+                    if group_context is None
+                    else group_context.group_chat_id
+                ),
             )
             independent_command = bool(
                 command_parts
                 and command_parts[0] in _RANDOM_EVENT_INDEPENDENT_COMMANDS
             )
             replies: list[CommandReply] = []
-            event_state = self._repository.active_random_event_state()
+            event_state = self._repository.active_random_event_state(
+                PRIMARY_GROUP_CHAT_ID
+                if group_context is None
+                else group_context.group_chat_id
+            )
             profile = (
                 self._repository.get_user_profile(message.sender_platform_id)
                 if message.content.strip() == "/结束游戏"

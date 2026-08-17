@@ -6021,6 +6021,75 @@ def test_due_random_event_is_skipped_while_memory_assessment_single_is_active(
     assert repository.answer_memory_assessment("u1", started.answer, now).status == "answer_not_ready"
 
 
+def test_random_event_schedules_are_created_only_for_enabled_groups(repository):
+    now = datetime(2026, 8, 6, 10, 0, tzinfo=BEIJING)
+    primary = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=event-main", now
+    )
+    enabled = repository.create_group_chat(
+        "随机事件群",
+        "https://www.aikda.com/chat?c=event-enabled",
+        True,
+        True,
+        True,
+        True,
+        now,
+    )
+    repository.create_group_chat(
+        "关闭随机事件群",
+        "https://www.aikda.com/chat?c=event-disabled",
+        True,
+        True,
+        False,
+        True,
+        now,
+    )
+    repository.create_random_event_scene(
+        "茶水间", "报名", ["开场"], 1, 1, [("员工", 1)]
+    )
+    repository.set_random_event_settings(["10:00"], "可选身份：{可选身份}", 15, 5)
+
+    schedules = repository.schedule_random_events(now)
+
+    assert {schedule.group_chat_id for schedule in schedules} == {
+        primary.id,
+        enabled.id,
+    }
+
+
+def test_random_events_run_and_accept_participants_independently_per_group(repository):
+    now = datetime(2026, 8, 6, 10, 0, tzinfo=BEIJING)
+    primary = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=event-run-main", now
+    )
+    second = repository.create_group_chat(
+        "第二事件群",
+        "https://www.aikda.com/chat?c=event-run-second",
+        True,
+        True,
+        True,
+        True,
+        now,
+    )
+    repository.create_user("event-a", "甲", now, 0)
+    repository.create_user("event-b", "乙", now, 0)
+    repository.create_random_event_scene(
+        "会议室", "报名", ["开场"], 1, 1, [("员工", 1)]
+    )
+    repository.set_random_event_settings(["10:00"], "可选身份：{可选身份}", 15, 5)
+
+    repository.run_random_event_jobs(now)
+
+    assert repository.join_random_event(
+        "event-a", "员工", now, primary.id
+    ) == "started"
+    assert repository.join_random_event(
+        "event-b", "员工", now, second.id
+    ) == "started"
+    assert repository.active_random_event_state(primary.id) == "in_progress"
+    assert repository.active_random_event_state(second.id) == "in_progress"
+
+
 def test_due_random_event_is_skipped_while_memory_assessment_duel_is_active(repository):
     now = datetime(2026, 8, 6, 10, 0, tzinfo=BEIJING)
     repository.create_user("u1", "小明", now, 0)
@@ -7636,6 +7705,40 @@ def test_due_income_report_is_queued_once_and_empty_slot_is_skipped(repository, 
     assert repository.claim_outbound("worker-a", now, 30).text.startswith("今日收益榜")
     repository.run_daily_jobs(datetime(2026, 8, 5, 16, 1, tzinfo=BEIJING))
     assert repository.claim_outbound("worker-b", now, 30) is None
+
+
+def test_due_income_report_fans_out_only_to_announcement_groups(repository):
+    report_at = datetime(2026, 8, 5, 16, 0, tzinfo=BEIJING)
+    primary = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=income-main", report_at
+    )
+    enabled = repository.create_group_chat(
+        "公告群",
+        "https://www.aikda.com/chat?c=income-enabled",
+        True,
+        True,
+        True,
+        True,
+        report_at,
+    )
+    repository.create_group_chat(
+        "不接收公告群",
+        "https://www.aikda.com/chat?c=income-disabled",
+        True,
+        True,
+        True,
+        False,
+        report_at,
+    )
+    repository.create_user("income-user", "小明", report_at, 3)
+
+    repository.run_daily_jobs(report_at)
+    repository.run_daily_jobs(report_at + timedelta(minutes=1))
+
+    first = repository.claim_outbound("worker-a", report_at, 30)
+    second = repository.claim_outbound("worker-b", report_at, 30)
+    assert {first.group_chat_id, second.group_chat_id} == {primary.id, enabled.id}
+    assert repository.claim_outbound("worker-c", report_at, 30) is None
 
 
 @pytest.mark.parametrize(

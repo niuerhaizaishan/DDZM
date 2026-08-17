@@ -1118,6 +1118,7 @@ class RandomEventSchedule:
     scene_name: str | None = None
     event_name: str | None = None
     is_cross_day: bool = False
+    group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID
 
 
 @dataclass(frozen=True)
@@ -4307,6 +4308,14 @@ class CoreRepository:
     ) -> tuple[AIConversationMessage, ...]:
         if current_inbound.source_type != "group":
             return ()
+        configured_group = session.get(
+            GroupChatRecord, current_inbound.group_chat_id
+        )
+        group_filter = (
+            InboundRecord.chatroom_id == current_inbound.chatroom_id
+            if configured_group is None
+            else InboundRecord.group_chat_id == current_inbound.group_chat_id
+        )
         rows = list(
             session.execute(
                 select(AIRequestRecord, InboundRecord)
@@ -4321,7 +4330,7 @@ class CoreRepository:
                     AIRequestRecord.result_text.is_not(None),
                     func.length(func.trim(AIRequestRecord.result_text)) > 0,
                     InboundRecord.source_type == "group",
-                    InboundRecord.chatroom_id == current_inbound.chatroom_id,
+                    group_filter,
                     or_(
                         InboundRecord.received_at < current_inbound.received_at,
                         and_(
@@ -4363,9 +4372,20 @@ class CoreRepository:
     ) -> tuple[SocialRecentMessage, ...]:
         if current_inbound.source_type != "group" or current_inbound.chatroom_id is None:
             return ()
+        configured_group = session.get(
+            GroupChatRecord, current_inbound.group_chat_id
+        )
+        group_scope = (
+            (InboundRecord.chatroom_id == current_inbound.chatroom_id,)
+            if configured_group is None
+            else (
+                GroupChatRecord.deleted_at.is_(None),
+                GroupChatRecord.listening_enabled.is_(True),
+            )
+        )
         rows = list(
             session.execute(
-                select(InboundRecord, AIRequestRecord)
+                select(InboundRecord, AIRequestRecord, GroupChatRecord.name)
                 .outerjoin(
                     AIRequestRecord,
                     and_(
@@ -4375,10 +4395,14 @@ class CoreRepository:
                         func.length(func.trim(AIRequestRecord.result_text)) > 0,
                     ),
                 )
+                .outerjoin(
+                    GroupChatRecord,
+                    GroupChatRecord.id == InboundRecord.group_chat_id,
+                )
                 .where(
                     InboundRecord.sender_platform_id == employee.platform_id,
                     InboundRecord.source_type == "group",
-                    InboundRecord.chatroom_id == current_inbound.chatroom_id,
+                    *group_scope,
                     InboundRecord.ai_memory_eligible.is_(True),
                     InboundRecord.received_at <= current_inbound.received_at,
                 )
@@ -4395,8 +4419,9 @@ class CoreRepository:
                     if request is not None and request.result_text is not None
                     else None
                 ),
+                group_name=group_name,
             )
-            for inbound, request in reversed(rows)
+            for inbound, request, group_name in reversed(rows)
             if inbound.content.strip()
         )
 
@@ -10484,63 +10509,99 @@ class CoreRepository:
         now = now.astimezone(BEIJING)
         settings = self.get_random_event_settings()
         with self._session() as session:
-            existing = list(
+            group_ids = tuple(
                 session.scalars(
-                    select(RandomEventScheduleRecord)
-                    .where(RandomEventScheduleRecord.event_date == now.date())
-                    .order_by(RandomEventScheduleRecord.scheduled_at)
+                    select(GroupChatRecord.id).where(
+                        GroupChatRecord.deleted_at.is_(None),
+                        GroupChatRecord.listening_enabled.is_(True),
+                        GroupChatRecord.random_events_enabled.is_(True),
+                    ).order_by(GroupChatRecord.created_at, GroupChatRecord.id)
                 )
             )
-            if existing:
-                for record in existing:
-                    if record.status == "pending" and record.scene_name is None:
-                        self._fill_random_event_schedule_snapshot(session, record)
-                return [_random_event_schedule(record) for record in existing]
-            records = []
-            for scheduled_time in settings.schedule_times:
-                minute = _event_time_minutes(scheduled_time)
-                if minute is None:
-                    raise RuntimeError("random event schedule disappeared")
-                scheduled_at = now.replace(
-                    hour=minute // 60,
-                    minute=minute % 60,
-                    second=0,
-                    microsecond=0,
+            if not group_ids and not session.scalar(
+                select(func.count()).select_from(GroupChatRecord)
+            ):
+                group_ids = (PRIMARY_GROUP_CHAT_ID,)
+            records: list[RandomEventScheduleRecord] = []
+            for group_chat_id in group_ids:
+                existing = list(
+                    session.scalars(
+                        select(RandomEventScheduleRecord)
+                        .where(
+                            RandomEventScheduleRecord.group_chat_id == group_chat_id,
+                            RandomEventScheduleRecord.event_date == now.date(),
+                        )
+                        .order_by(RandomEventScheduleRecord.scheduled_at)
+                    )
                 )
-                record = RandomEventScheduleRecord(
-                    event_date=now.date(),
-                    scheduled_at=scheduled_at,
-                    status="skipped" if scheduled_at < now.replace(second=0, microsecond=0) else "pending",
-                )
-                session.add(record)
-                self._fill_random_event_schedule_snapshot(session, record)
-                records.append(record)
+                if existing:
+                    for record in existing:
+                        if record.status == "pending" and record.scene_name is None:
+                            self._fill_random_event_schedule_snapshot(session, record)
+                    records.extend(existing)
+                    continue
+                for scheduled_time in settings.schedule_times:
+                    minute = _event_time_minutes(scheduled_time)
+                    if minute is None:
+                        raise RuntimeError("random event schedule disappeared")
+                    scheduled_at = now.replace(
+                        hour=minute // 60,
+                        minute=minute % 60,
+                        second=0,
+                        microsecond=0,
+                    )
+                    record = RandomEventScheduleRecord(
+                        group_chat_id=group_chat_id,
+                        event_date=now.date(),
+                        scheduled_at=scheduled_at,
+                        status=(
+                            "skipped"
+                            if scheduled_at < now.replace(second=0, microsecond=0)
+                            else "pending"
+                        ),
+                    )
+                    session.add(record)
+                    self._fill_random_event_schedule_snapshot(session, record)
+                    records.append(record)
             session.flush()
             return [_random_event_schedule(record) for record in records]
 
     def list_today_random_event_schedules(
-        self, now: datetime
+        self, now: datetime, group_chat_id: UUID | None = None
     ) -> list[RandomEventSchedule]:
         now = now.astimezone(BEIJING)
         with self._session() as session:
             records = list(
                 session.scalars(
                     select(RandomEventScheduleRecord)
-                    .where(RandomEventScheduleRecord.event_date == now.date())
-                    .order_by(RandomEventScheduleRecord.scheduled_at)
+                    .where(
+                        RandomEventScheduleRecord.event_date == now.date(),
+                        *(() if group_chat_id is None else (
+                            RandomEventScheduleRecord.group_chat_id == group_chat_id,
+                        )),
+                    )
+                    .order_by(
+                        RandomEventScheduleRecord.scheduled_at,
+                        RandomEventScheduleRecord.group_chat_id,
+                    )
                 )
             )
-            carryover = session.scalar(
+            carryovers = list(session.scalars(
                 select(RandomEventScheduleRecord)
                 .join(RandomEventRecord, RandomEventRecord.schedule_id == RandomEventScheduleRecord.id)
                 .where(
                     RandomEventRecord.state.in_(("signup", "in_progress", "tipping")),
                     RandomEventScheduleRecord.event_date < now.date(),
+                    *(() if group_chat_id is None else (
+                        RandomEventScheduleRecord.group_chat_id == group_chat_id,
+                    )),
                 )
-                .order_by(RandomEventScheduleRecord.scheduled_at)
-            )
-            if carryover is not None:
-                records.insert(0, carryover)
+                .order_by(
+                    RandomEventScheduleRecord.scheduled_at,
+                    RandomEventScheduleRecord.group_chat_id,
+                )
+            ))
+            records = [*carryovers, *records]
             names = {
                 schedule_id: (scene_name, event_name)
                 for schedule_id, scene_name, event_name in session.execute(
@@ -10557,7 +10618,7 @@ class CoreRepository:
                 _random_event_schedule(
                     record,
                     *(names.get(record.id, (None, None))),
-                    is_cross_day=record.id == getattr(carryover, "id", None),
+                    is_cross_day=record in carryovers,
                 )
                 for record in records
             ]
@@ -10577,6 +10638,7 @@ class CoreRepository:
                 raise ValueError("仅待开始事件可以调整")
             conflict = session.scalar(
                 select(RandomEventScheduleRecord.id).where(
+                    RandomEventScheduleRecord.group_chat_id == record.group_chat_id,
                     RandomEventScheduleRecord.event_date == now.date(),
                     RandomEventScheduleRecord.id != record.id,
                     RandomEventScheduleRecord.scheduled_at == scheduled_at,
@@ -10589,7 +10651,12 @@ class CoreRepository:
             return _random_event_schedule(record)
 
     def create_today_random_event(
-        self, scene_id: UUID, event_name: str, scheduled_at: datetime, now: datetime
+        self,
+        scene_id: UUID,
+        event_name: str,
+        scheduled_at: datetime,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
     ) -> RandomEventSchedule:
         now = now.astimezone(BEIJING)
         scheduled_at = scheduled_at.astimezone(BEIJING).replace(second=0, microsecond=0)
@@ -10598,6 +10665,7 @@ class CoreRepository:
         with self._session() as session:
             if session.scalar(
                 select(RandomEventScheduleRecord.id).where(
+                    RandomEventScheduleRecord.group_chat_id == group_chat_id,
                     RandomEventScheduleRecord.event_date == now.date(),
                     RandomEventScheduleRecord.scheduled_at == scheduled_at,
                 )
@@ -10622,7 +10690,10 @@ class CoreRepository:
                 )
             )
             record = RandomEventScheduleRecord(
-                event_date=now.date(), scheduled_at=scheduled_at, status="pending"
+                group_chat_id=group_chat_id,
+                event_date=now.date(),
+                scheduled_at=scheduled_at,
+                status="pending",
             )
             session.add(record)
             self._set_random_event_schedule_snapshot(session, record, scene, template, seats)
@@ -10652,9 +10723,11 @@ class CoreRepository:
                 schedule = session.get(RandomEventScheduleRecord, schedule_id, with_for_update=True)
                 if schedule is None or schedule.event_date != now.date() or schedule.status != "pending":
                     raise ValueError("仅待开始事件可以立即触发")
-                if self._active_random_event(session) is not None:
+                if self._active_random_event(
+                    session, schedule.group_chat_id
+                ) is not None:
                     raise ValueError("当前已有进行中的随机事件")
-                if self._has_active_game(session):
+                if self._has_active_game(session, schedule.group_chat_id):
                     raise ValueError("当前有游戏进行中")
                 if not self._fill_random_event_schedule_snapshot(session, schedule):
                     schedule.status = "skipped"
@@ -10863,65 +10936,104 @@ class CoreRepository:
             with self._session() as session:
                 self._lock_gameplay_gate(session)
                 self.schedule_random_events(now)
-                active = session.scalar(
-                    select(RandomEventRecord)
-                    .where(RandomEventRecord.state.in_(("signup", "in_progress", "tipping")))
-                    .order_by(RandomEventRecord.started_at)
-                    .with_for_update()
-                )
-                if (
-                    active is not None
-                    and active.state == "tipping"
-                    and active.tipping_deadline is not None
-                    and active.tipping_deadline <= now
-                ):
-                    self._settle_random_event_tipping(session, active, now)
-                    active = None
-                elif active is not None and active.state == "signup":
-                    if active.signup_deadline <= now:
-                        self._finish_random_event(session, active, "dissolved", now)
-                        self.enqueue_system_outbound(
-                            f"【随机事件：{active.scene_name}】报名超时，事件已解散。"
-                        )
-                        active = None
-                    elif (
-                        active.next_reminder_at is not None
-                        and active.next_reminder_at <= now
-                    ):
-                        open_seats = self._random_event_open_seats(session, active.id)
-                        self.enqueue_system_outbound(
-                            f"【随机事件：{active.scene_name}】仍在报名。\n"
-                            f"剩余可选身份：{open_seats}"
-                        )
-                        settings = self.get_random_event_settings()
-                        active.next_reminder_at = now + timedelta(
-                            minutes=settings.reminder_interval_minutes
-                        )
-                due_schedules = list(
+                group_ids = tuple(
                     session.scalars(
-                        select(RandomEventScheduleRecord)
+                        select(RandomEventScheduleRecord.group_chat_id)
                         .where(
-                            RandomEventScheduleRecord.status == "pending",
                             RandomEventScheduleRecord.event_date == now.date(),
-                            RandomEventScheduleRecord.scheduled_at <= now,
+                            RandomEventScheduleRecord.status == "pending",
                         )
-                        .order_by(RandomEventScheduleRecord.scheduled_at)
-                        .with_for_update()
+                        .distinct()
                     )
                 )
-                for schedule in due_schedules:
-                    if active is not None:
-                        schedule.status = "skipped"
-                        continue
-                    if self._has_active_game(session):
-                        schedule.status = "skipped"
-                        continue
-                    if not self._fill_random_event_schedule_snapshot(session, schedule):
-                        schedule.status = "skipped"
-                        continue
-                    active = self._start_random_event_from_schedule(session, schedule, now)
+                active_group_ids = tuple(
+                    session.scalars(
+                        select(RandomEventRecord.group_chat_id)
+                        .where(
+                            RandomEventRecord.state.in_(
+                                ("signup", "in_progress", "tipping")
+                            )
+                        )
+                        .distinct()
+                    )
+                )
+                for group_chat_id in dict.fromkeys((*group_ids, *active_group_ids)):
+                    active = self._active_random_event(session, group_chat_id)
+                    if (
+                        active is not None
+                        and active.state == "tipping"
+                        and active.tipping_deadline is not None
+                        and active.tipping_deadline <= now
+                    ):
+                        self._settle_random_event_tipping(session, active, now)
+                        active = None
+                    elif active is not None and active.state == "signup":
+                        if active.signup_deadline <= now:
+                            self._finish_random_event(session, active, "dissolved", now)
+                            self.enqueue_system_outbound(
+                                f"【随机事件：{active.scene_name}】报名超时，事件已解散。",
+                                group_chat_id=group_chat_id,
+                                destination_chatroom_id=self.group_chat_destination(
+                                    group_chat_id
+                                ),
+                            )
+                            active = None
+                        elif (
+                            active.next_reminder_at is not None
+                            and active.next_reminder_at <= now
+                        ):
+                            open_seats = self._random_event_open_seats(
+                                session, active.id
+                            )
+                            self.enqueue_system_outbound(
+                                f"【随机事件：{active.scene_name}】仍在报名。\n"
+                                f"剩余可选身份：{open_seats}",
+                                group_chat_id=group_chat_id,
+                                destination_chatroom_id=self.group_chat_destination(
+                                    group_chat_id
+                                ),
+                            )
+                            settings = self.get_random_event_settings()
+                            active.next_reminder_at = now + timedelta(
+                                minutes=settings.reminder_interval_minutes
+                            )
+                    due_schedules = list(
+                        session.scalars(
+                            select(RandomEventScheduleRecord)
+                            .where(
+                                RandomEventScheduleRecord.group_chat_id
+                                == group_chat_id,
+                                RandomEventScheduleRecord.status == "pending",
+                                RandomEventScheduleRecord.event_date == now.date(),
+                                RandomEventScheduleRecord.scheduled_at <= now,
+                            )
+                            .order_by(RandomEventScheduleRecord.scheduled_at)
+                            .with_for_update()
+                        )
+                    )
+                    for schedule in due_schedules:
+                        if active is not None:
+                            schedule.status = "skipped"
+                            continue
+                        if self._has_active_game(session, group_chat_id):
+                            schedule.status = "skipped"
+                            continue
+                        if not self._fill_random_event_schedule_snapshot(
+                            session, schedule
+                        ):
+                            schedule.status = "skipped"
+                            continue
+                        active = self._start_random_event_from_schedule(
+                            session, schedule, now
+                        )
 
-    def join_random_event(self, platform_id: str, role: str, now: datetime) -> str:
+    def join_random_event(
+        self,
+        platform_id: str,
+        role: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> str:
         role = role.strip()
         now = now.astimezone(BEIJING)
         with self.transaction():
@@ -10931,7 +11043,7 @@ class CoreRepository:
                 )
                 if user is None:
                     return "not_joined"
-                event = self._active_random_event(session)
+                event = self._active_random_event(session, group_chat_id)
                 if event is None:
                     return "no_event"
                 if event.state != "signup":
@@ -10982,19 +11094,29 @@ class CoreRepository:
                         schedule.status = "in_progress"
                     self.enqueue_system_outbound(
                         f"【随机事件：{event.scene_name}－{event.event_name or '未命名事件'}】人员已齐，事件开始。\n"
-                        f"{event.formal_opening_text}"
+                        f"{event.formal_opening_text}",
+                        group_chat_id=group_chat_id,
+                        destination_chatroom_id=self.group_chat_destination(
+                            group_chat_id
+                        ),
                     )
                     return "started"
                 return "joined"
 
     def record_random_event_round(
-        self, platform_id: str, now: datetime, content: str
+        self,
+        platform_id: str,
+        now: datetime,
+        content: str,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
     ) -> str:
-        classification = self.classify_random_event_message(platform_id, content)
+        classification = self.classify_random_event_message(
+            platform_id, content, group_chat_id
+        )
         if classification != "participant":
             return classification
         with self._session() as session:
-            event = self._active_random_event(session)
+            event = self._active_random_event(session, group_chat_id)
             if event is None or event.state != "in_progress":
                 return "none"
             user = session.scalar(
@@ -11032,16 +11154,23 @@ class CoreRepository:
                 return "participant"
         return "observer_invalid"
 
-    def active_random_event_state(self) -> str | None:
+    def active_random_event_state(
+        self, group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID
+    ) -> str | None:
         with self._session() as session:
-            event = self._active_random_event(session)
+            event = self._active_random_event(session, group_chat_id)
             return None if event is None else event.state
 
-    def classify_random_event_message(self, platform_id: str, content: str) -> str:
+    def classify_random_event_message(
+        self,
+        platform_id: str,
+        content: str,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> str:
         if content.lstrip().startswith("/") or not content.strip():
             return "none"
         with self._session() as session:
-            event = self._active_random_event(session)
+            event = self._active_random_event(session, group_chat_id)
             if event is None:
                 return "none"
             if event.state == "tipping":
@@ -11069,11 +11198,16 @@ class CoreRepository:
             return "observer_valid"
         return "observer_invalid"
 
-    def leave_random_event(self, platform_id: str, now: datetime) -> str:
+    def leave_random_event(
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> str:
         now = now.astimezone(BEIJING)
         with self.transaction():
             with self._session() as session:
-                event = self._active_random_event(session)
+                event = self._active_random_event(session, group_chat_id)
                 if event is None:
                     return "no_event"
                 user = session.scalar(
@@ -11151,15 +11285,24 @@ class CoreRepository:
                                     ),
                                     "{参与者与基础奖励列表}": participant_lines,
                                 },
-                            )
+                            ),
+                            group_chat_id=group_chat_id,
+                            destination_chatroom_id=self.group_chat_destination(
+                                group_chat_id
+                            ),
                         )
                 return result
 
-    def random_event_tipping_summary(self) -> RandomEventTippingSummary:
+    def random_event_tipping_summary(
+        self, group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID
+    ) -> RandomEventTippingSummary:
         with self._session() as session:
             event = session.scalar(
                 select(RandomEventRecord)
-                .where(RandomEventRecord.tipping_started_at.is_not(None))
+                .where(
+                    RandomEventRecord.group_chat_id == group_chat_id,
+                    RandomEventRecord.tipping_started_at.is_not(None),
+                )
                 .order_by(RandomEventRecord.started_at.desc())
                 .limit(1)
             )
@@ -11181,6 +11324,7 @@ class CoreRepository:
         amount: int,
         platform_message_id: str,
         now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
     ) -> RandomEventTipResult:
         now = now.astimezone(BEIJING)
         recipient_name = recipient_name.strip()
@@ -11188,7 +11332,8 @@ class CoreRepository:
             with self._session() as session:
                 inbound = session.scalar(
                     select(InboundRecord).where(
-                        InboundRecord.platform_message_id == platform_message_id
+                        InboundRecord.platform_message_id == platform_message_id,
+                        InboundRecord.group_chat_id == group_chat_id,
                     )
                 )
                 if inbound is None:
@@ -11213,7 +11358,10 @@ class CoreRepository:
                     return RandomEventTipResult("invalid_amount")
                 event = session.scalar(
                     select(RandomEventRecord)
-                    .where(RandomEventRecord.state == "tipping")
+                    .where(
+                        RandomEventRecord.group_chat_id == group_chat_id,
+                        RandomEventRecord.state == "tipping",
+                    )
                     .order_by(RandomEventRecord.started_at)
                     .with_for_update()
                 )
@@ -11397,10 +11545,18 @@ class CoreRepository:
                     "{参与者打赏汇总}": "\n".join(participant_lines),
                     "{无人打赏提示}": "" if tip_rows else "本场无人打赏。",
                 },
-            ).rstrip()
+            ).rstrip(),
+            group_chat_id=event.group_chat_id,
+            destination_chatroom_id=self.group_chat_destination(
+                event.group_chat_id
+            ),
         )
 
-    def last_random_event_reward(self, platform_id: str) -> int:
+    def last_random_event_reward(
+        self,
+        platform_id: str,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> int:
         with self._session() as session:
             return int(
                 session.scalar(
@@ -11411,6 +11567,7 @@ class CoreRepository:
                     )
                     .join(UserRecord, UserRecord.id == RandomEventParticipantRecord.user_id)
                     .where(
+                        RandomEventRecord.group_chat_id == group_chat_id,
                         UserRecord.platform_id == platform_id,
                         RandomEventParticipantRecord.rewarded_at.is_not(None),
                     )
@@ -11540,6 +11697,8 @@ class CoreRepository:
             raise ValueError("随机事件计划缺少快照")
         settings = self.get_random_event_settings()
         active = RandomEventRecord(
+            group_chat_id=schedule.group_chat_id,
+            group_key=str(schedule.group_chat_id),
             schedule_id=schedule.id,
             state="signup",
             scene_name=schedule.scene_name,
@@ -11571,7 +11730,11 @@ class CoreRepository:
                     [(seat["role"], seat["capacity"]) for seat in schedule.seats]
                 ),
                 settings.signup_timeout_minutes,
-            )
+            ),
+            group_chat_id=schedule.group_chat_id,
+            destination_chatroom_id=self.group_chat_destination(
+                schedule.group_chat_id
+            ),
         )
         return active
 
@@ -11635,11 +11798,16 @@ class CoreRepository:
                 remaining.append((seat.role, seat.capacity - occupied))
         return _random_event_seat_summary(remaining)
 
-    def random_event_open_seats(self) -> str:
+    def random_event_open_seats(
+        self, group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID
+    ) -> str:
         with self._session() as session:
             event = session.scalar(
                 select(RandomEventRecord)
-                .where(RandomEventRecord.state == "signup")
+                .where(
+                    RandomEventRecord.group_chat_id == group_chat_id,
+                    RandomEventRecord.state == "signup",
+                )
                 .order_by(RandomEventRecord.started_at)
             )
             if event is None:
@@ -12247,41 +12415,61 @@ class CoreRepository:
         settings = self.get_activity_settings()
         current_time = now.strftime("%H:%M")
         with self._session() as session:
+            group_ids = tuple(
+                session.scalars(
+                    select(GroupChatRecord.id)
+                    .where(
+                        GroupChatRecord.deleted_at.is_(None),
+                        GroupChatRecord.listening_enabled.is_(True),
+                        GroupChatRecord.announcements_enabled.is_(True),
+                    )
+                    .order_by(GroupChatRecord.created_at, GroupChatRecord.id)
+                )
+            )
+            if not group_ids and not session.scalar(
+                select(func.count()).select_from(GroupChatRecord)
+            ):
+                group_ids = (PRIMARY_GROUP_CHAT_ID,)
             for report_time in settings.report_times:
                 if report_time > current_time:
                     continue
-                existing = session.scalar(
-                    select(IncomeReportDeliveryRecord).where(
-                        IncomeReportDeliveryRecord.report_date == now.date(),
-                        IncomeReportDeliveryRecord.report_time == report_time,
-                    )
-                )
-                if existing is not None:
-                    continue
                 rankings = self._income_rankings(session, now)
-                if not rankings:
-                    session.add(
-                        IncomeReportDeliveryRecord(
-                            report_date=now.date(),
-                            report_time=report_time,
-                            status="skipped",
+                for group_chat_id in group_ids:
+                    existing = session.scalar(
+                        select(IncomeReportDeliveryRecord).where(
+                            IncomeReportDeliveryRecord.group_chat_id
+                            == group_chat_id,
+                            IncomeReportDeliveryRecord.report_date == now.date(),
+                            IncomeReportDeliveryRecord.report_time == report_time,
                         )
                     )
-                    continue
-                outbound = OutboundRecord(
-                    inbound_message_id=None,
-                    text=self._income_report_text(rankings, report_time),
-                )
-                session.add(outbound)
-                session.flush()
-                session.add(
-                    IncomeReportDeliveryRecord(
-                        report_date=now.date(),
-                        report_time=report_time,
-                        status="queued",
-                        outbound_message_id=outbound.id,
+                    if existing is not None:
+                        continue
+                    if not rankings:
+                        session.add(
+                            IncomeReportDeliveryRecord(
+                                group_chat_id=group_chat_id,
+                                report_date=now.date(),
+                                report_time=report_time,
+                                status="skipped",
+                            )
+                        )
+                        continue
+                    destination = self.group_chat_destination(group_chat_id)
+                    outbound = self.enqueue_system_outbound(
+                        self._income_report_text(rankings, report_time),
+                        group_chat_id=group_chat_id,
+                        destination_chatroom_id=destination,
                     )
-                )
+                    session.add(
+                        IncomeReportDeliveryRecord(
+                            group_chat_id=group_chat_id,
+                            report_date=now.date(),
+                            report_time=report_time,
+                            status="queued",
+                            outbound_message_id=outbound.id,
+                        )
+                    )
 
     def _income_rankings(self, session: Session, now: datetime) -> list[tuple[str, int]]:
         start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -15325,6 +15513,7 @@ def _random_event_schedule(
         scene_name=record.scene_name or scene_name,
         event_name=record.event_name or event_name,
         is_cross_day=is_cross_day,
+        group_chat_id=record.group_chat_id,
     )
 
 
