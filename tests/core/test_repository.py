@@ -308,6 +308,44 @@ def repository(session_factory):
     return CoreRepository(session_factory, number_bomb_random=Random(1))
 
 
+def test_bootstrap_primary_group_normalizes_env_url_once(repository, now):
+    group = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=group-main&utm_source=test#ignored", now
+    )
+
+    assert group.name == "主群聊"
+    assert group.chat_url == "https://www.aikda.com/chat?c=group-main"
+    assert group.chatroom_id == "group-main"
+    assert group.listening_enabled is True
+    assert group.games_enabled is True
+    assert group.random_events_enabled is True
+    assert group.announcements_enabled is True
+    assert repository.group_chat_bootstrap_ready() is True
+
+    same = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=another-group", now + timedelta(minutes=1)
+    )
+    assert same.id == group.id
+    assert same.chatroom_id == "group-main"
+
+
+@pytest.mark.parametrize(
+    "chat_url",
+    (
+        "http://www.aikda.com/chat?c=group-main",
+        "https://user:pass@www.aikda.com/chat?c=group-main",
+        "https://www.aikda.com/not-chat?c=group-main",
+        "https://www.aikda.com/chat",
+        "https://www.aikda.com/chat?c=one&c=two",
+    ),
+)
+def test_bootstrap_primary_group_rejects_invalid_urls(repository, now, chat_url):
+    with pytest.raises(ValueError):
+        repository.bootstrap_primary_group(chat_url, now)
+
+    assert repository.group_chat_bootstrap_ready() is False
+
+
 def test_employee_balance_ledger_pages_and_reconstructs_balance(repository, now):
     user, _ = repository.create_user("ledger-player", "流水员工", now, 0)
     repository.record_balance_change(user.id, 20, "onboarding", now + timedelta(minutes=1))

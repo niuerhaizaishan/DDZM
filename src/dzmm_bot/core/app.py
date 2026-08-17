@@ -155,8 +155,13 @@ from .service import CoreService
 
 
 def create_server(repository: CoreRepository, settings: Settings) -> Server:
+    _ensure_primary_group(repository, settings.chat_url)
     config = Config(
-        create_app(repository, settings.core_token),
+        create_app(
+            repository,
+            settings.core_token,
+            require_group_chat_bootstrap=True,
+        ),
         host="127.0.0.1",
         port=settings.core_api_port,
     )
@@ -165,12 +170,15 @@ def create_server(repository: CoreRepository, settings: Settings) -> Server:
 
 def create_app_from_environment() -> FastAPI:
     settings = Settings.from_environment()
+    repository = CoreRepository(
+        create_session_factory(settings.database_url),
+        preserve_long_group_messages=settings.bot_api_token is not None,
+    )
+    _ensure_primary_group(repository, settings.chat_url)
     return create_app(
-        CoreRepository(
-            create_session_factory(settings.database_url),
-            preserve_long_group_messages=settings.bot_api_token is not None,
-        ),
+        repository,
         settings.core_token,
+        require_group_chat_bootstrap=True,
     )
 
 
@@ -179,6 +187,7 @@ def create_app(
     core_token: str,
     *,
     clock: Callable[[], datetime] = beijing_now,
+    require_group_chat_bootstrap: bool = False,
 ) -> FastAPI:
     app = FastAPI()
     service = CoreService(repository, GroupCommandHandler(repository))
@@ -2121,12 +2130,18 @@ def create_app(
     def health(response: Response) -> HealthResponse:
         try:
             record = _latest_heartbeat(repository)
+            bootstrap_ready = (
+                not require_group_chat_bootstrap
+                or repository.group_chat_bootstrap_ready()
+            )
         except SQLAlchemyError:
             response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
             return HealthResponse(
                 database_available=False,
                 latest_worker_heartbeat_age_seconds=None,
             )
+        if not bootstrap_ready:
+            response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         age = None
         if record is not None:
             age = max(0.0, (clock() - record.recorded_at).total_seconds())
@@ -2136,6 +2151,20 @@ def create_app(
         )
 
     return app
+
+
+def _ensure_primary_group(
+    repository: CoreRepository, chat_url: str | None
+) -> bool:
+    try:
+        if repository.group_chat_bootstrap_ready():
+            return True
+        if chat_url is None:
+            return False
+        repository.bootstrap_primary_group(chat_url, beijing_now())
+        return repository.group_chat_bootstrap_ready()
+    except (SQLAlchemyError, ValueError):
+        return False
 
 
 def _latest_heartbeat(repository: CoreRepository) -> WorkerInstanceRecord | None:

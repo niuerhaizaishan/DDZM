@@ -1305,12 +1305,38 @@ def test_core_server_factory_enforces_local_settings_port(app_context):
         browser_cdp_port=19222,
         admin_web_port=18090,
         novnc_port=16080,
+        chat_url="https://www.aikda.com/chat?c=primary-room&utm_source=env",
     )
 
     server = create_server(app_context.repository, settings)
 
     assert server.config.host == "127.0.0.1"
     assert server.config.port == settings.core_api_port
+    assert app_context.repository.group_chat_bootstrap_ready() is True
+
+
+def test_core_server_health_is_degraded_without_primary_group(app_context):
+    from dzmm_bot.core.app import create_server
+    from dzmm_bot.runtime.settings import Settings
+
+    settings = Settings(
+        database_url="postgresql+psycopg://dzmm@localhost/dzmm",
+        core_token="test-core-token",
+        admin_token=None,
+        browser_profile=Path("/var/lib/dzmm/browser"),
+        login_url=None,
+        core_api_port=18120,
+        browser_cdp_port=19222,
+        admin_web_port=18090,
+        novnc_port=16080,
+        chat_url=None,
+    )
+
+    server = create_server(app_context.repository, settings)
+    response = TestClient(server.config.app).get("/healthz")
+
+    assert response.status_code == 503
+    assert response.json()["database_available"] is True
 
 
 def test_database_backed_identifiers_reject_more_than_255_characters(

@@ -25,6 +25,7 @@ from sqlalchemy.types import TypeDecorator
 
 
 BEIJING = ZoneInfo("Asia/Shanghai")
+PRIMARY_GROUP_CHAT_ID = UUID("00000000-0000-0000-0000-000000000001")
 
 
 def beijing_now() -> datetime:
@@ -56,13 +57,55 @@ class Base(DeclarativeBase):
     pass
 
 
+class GroupChatRecord(Base):
+    __tablename__ = "group_chats"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    name: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    chat_url: Mapped[str | None] = mapped_column(Text, unique=True)
+    chatroom_id: Mapped[str | None] = mapped_column(String(255), unique=True)
+    listening_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    games_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    random_events_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    announcements_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+
+
+class GroupChatRuntimeStateRecord(Base):
+    __tablename__ = "group_chat_runtime_states"
+
+    group_chat_id: Mapped[UUID] = mapped_column(
+        ForeignKey("group_chats.id"), primary_key=True
+    )
+    connection_state: Mapped[str] = mapped_column(String(16), nullable=False)
+    last_connected_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    last_inbound_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    last_outbound_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    last_error_summary: Mapped[str | None] = mapped_column(String(512))
+    worker_id: Mapped[str | None] = mapped_column(String(255))
+    updated_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+
+
 class InboundRecord(Base):
     __tablename__ = "inbound_messages"
     __table_args__ = (
         Index(
-            "ux_inbound_messages_platform_message_id",
+            "ux_inbound_messages_group_platform_message_id",
+            "group_chat_id",
             "platform_message_id",
             unique=True,
+            sqlite_where=text("source_type = 'group'"),
+            postgresql_where=text("source_type = 'group'"),
+        ),
+        Index(
+            "ux_inbound_messages_direct_platform_message_id",
+            "chatroom_id",
+            "platform_message_id",
+            unique=True,
+            sqlite_where=text("source_type = 'direct'"),
+            postgresql_where=text("source_type = 'direct'"),
         ),
     )
 
@@ -79,6 +122,9 @@ class InboundRecord(Base):
         String(16), default="group", nullable=False
     )
     chatroom_id: Mapped[str | None] = mapped_column(String(255))
+    group_chat_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("group_chats.id"), default=PRIMARY_GROUP_CHAT_ID
+    )
     created_at: Mapped[datetime] = mapped_column(
         BeijingDateTime, default=beijing_now, nullable=False
     )
@@ -256,7 +302,7 @@ class UndercoverSessionRecord(Base):
     __table_args__ = (
         Index(
             "ux_undercover_one_active_session",
-            "active_key",
+            "group_chat_id",
             unique=True,
             sqlite_where=text("active_key IS NOT NULL"),
             postgresql_where=text("active_key IS NOT NULL"),
@@ -264,6 +310,9 @@ class UndercoverSessionRecord(Base):
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    group_chat_id: Mapped[UUID] = mapped_column(
+        ForeignKey("group_chats.id"), default=PRIMARY_GROUP_CHAT_ID, nullable=False
+    )
     state: Mapped[str] = mapped_column(String(32), nullable=False)
     active_key: Mapped[str | None] = mapped_column(String(32))
     target_player_count: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -408,7 +457,7 @@ class BlameGameRecord(Base):
     __table_args__ = (
         Index(
             "ux_blame_game_one_active",
-            "active_key",
+            "group_chat_id",
             unique=True,
             sqlite_where=text("active_key IS NOT NULL"),
             postgresql_where=text("active_key IS NOT NULL"),
@@ -416,6 +465,9 @@ class BlameGameRecord(Base):
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    group_chat_id: Mapped[UUID] = mapped_column(
+        ForeignKey("group_chats.id"), default=PRIMARY_GROUP_CHAT_ID, nullable=False
+    )
     state: Mapped[str] = mapped_column(String(32), nullable=False)
     active_key: Mapped[str | None] = mapped_column(String(32))
     creator_user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
@@ -502,7 +554,7 @@ class RedPacketRecord(Base):
     __table_args__ = (
         Index(
             "ux_red_packet_one_active",
-            "active_key",
+            "group_chat_id",
             unique=True,
             sqlite_where=text("active_key IS NOT NULL"),
             postgresql_where=text("active_key IS NOT NULL"),
@@ -510,6 +562,9 @@ class RedPacketRecord(Base):
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    group_chat_id: Mapped[UUID] = mapped_column(
+        ForeignKey("group_chats.id"), default=PRIMARY_GROUP_CHAT_ID, nullable=False
+    )
     active_key: Mapped[str | None] = mapped_column(String(32))
     issuer_user_id: Mapped[UUID] = mapped_column(
         ForeignKey("users.id"), nullable=False
@@ -570,7 +625,7 @@ class NumberBombGameRecord(Base):
     __table_args__ = (
         Index(
             "ux_number_bomb_one_active",
-            "active_key",
+            "group_chat_id",
             unique=True,
             sqlite_where=text("active_key IS NOT NULL"),
             postgresql_where=text("active_key IS NOT NULL"),
@@ -578,6 +633,9 @@ class NumberBombGameRecord(Base):
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    group_chat_id: Mapped[UUID] = mapped_column(
+        ForeignKey("group_chats.id"), default=PRIMARY_GROUP_CHAT_ID, nullable=False
+    )
     active_key: Mapped[str | None] = mapped_column(String(32))
     state: Mapped[str] = mapped_column(String(32), nullable=False)
     target_player_count: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -669,6 +727,7 @@ class HideAndSeekGameRecord(Base):
     __table_args__ = (
         Index(
             "ux_hide_and_seek_one_selecting_user",
+            "group_chat_id",
             "user_id",
             unique=True,
             sqlite_where=text("state = 'selecting'"),
@@ -677,6 +736,9 @@ class HideAndSeekGameRecord(Base):
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    group_chat_id: Mapped[UUID] = mapped_column(
+        ForeignKey("group_chats.id"), default=PRIMARY_GROUP_CHAT_ID, nullable=False
+    )
     user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
     play_date: Mapped[date] = mapped_column(Date, nullable=False)
     state: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -734,7 +796,7 @@ class MemoryAssessmentGameRecord(Base):
     __table_args__ = (
         Index(
             "ux_memory_assessment_one_active_game",
-            "active_key",
+            "group_chat_id",
             unique=True,
             sqlite_where=text("active_key IS NOT NULL"),
             postgresql_where=text("active_key IS NOT NULL"),
@@ -742,6 +804,9 @@ class MemoryAssessmentGameRecord(Base):
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    group_chat_id: Mapped[UUID] = mapped_column(
+        ForeignKey("group_chats.id"), default=PRIMARY_GROUP_CHAT_ID, nullable=False
+    )
     mode: Mapped[str] = mapped_column(String(16), nullable=False)
     state: Mapped[str] = mapped_column(String(32), nullable=False)
     active_key: Mapped[str | None] = mapped_column(String(32))
@@ -886,9 +951,14 @@ class RandomEventSubmissionRecord(Base):
 
 class RandomEventScheduleRecord(Base):
     __tablename__ = "random_event_schedules"
-    __table_args__ = (UniqueConstraint("event_date", "scheduled_at"),)
+    __table_args__ = (
+        UniqueConstraint("group_chat_id", "event_date", "scheduled_at"),
+    )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    group_chat_id: Mapped[UUID] = mapped_column(
+        ForeignKey("group_chats.id"), default=PRIMARY_GROUP_CHAT_ID, nullable=False
+    )
     event_date: Mapped[date] = mapped_column(Date, nullable=False)
     scheduled_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
     status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
@@ -911,7 +981,7 @@ class RandomEventRecord(Base):
         UniqueConstraint("schedule_id"),
         Index(
             "ux_random_events_one_active_group",
-            "group_key",
+            "group_chat_id",
             unique=True,
             sqlite_where=text("state IN ('signup', 'in_progress', 'tipping')"),
             postgresql_where=text("state IN ('signup', 'in_progress', 'tipping')"),
@@ -919,6 +989,9 @@ class RandomEventRecord(Base):
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    group_chat_id: Mapped[UUID] = mapped_column(
+        ForeignKey("group_chats.id"), default=PRIMARY_GROUP_CHAT_ID, nullable=False
+    )
     schedule_id: Mapped[UUID] = mapped_column(
         ForeignKey("random_event_schedules.id"), nullable=False
     )
@@ -1476,6 +1549,9 @@ class OutboundRecord(Base):
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    group_chat_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("group_chats.id"), default=PRIMARY_GROUP_CHAT_ID
+    )
     inbound_message_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("inbound_messages.id")
     )
@@ -1521,9 +1597,14 @@ class OutboundRecord(Base):
 
 class IncomeReportDeliveryRecord(Base):
     __tablename__ = "income_report_deliveries"
-    __table_args__ = (UniqueConstraint("report_date", "report_time"),)
+    __table_args__ = (
+        UniqueConstraint("group_chat_id", "report_date", "report_time"),
+    )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    group_chat_id: Mapped[UUID] = mapped_column(
+        ForeignKey("group_chats.id"), default=PRIMARY_GROUP_CHAT_ID, nullable=False
+    )
     report_date: Mapped[date] = mapped_column(Date, nullable=False)
     report_time: Mapped[str] = mapped_column(String(5), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)

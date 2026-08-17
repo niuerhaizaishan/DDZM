@@ -8,6 +8,7 @@ from random import SystemRandom
 import re
 from secrets import choice, randbelow
 import unicodedata
+from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 from uuid import UUID, uuid4
 
 from sqlalchemy import and_, delete, exists, func, or_, select, update
@@ -88,6 +89,8 @@ from .schema import (
     DirectChatRecord,
     EmployeeNumberCounterRecord,
     GameSettingsRecord,
+    GroupChatRecord,
+    GroupChatRuntimeStateRecord,
     HideAndSeekDailyPlayRecord,
     HideAndSeekGameRecord,
     HideAndSeekSceneRecord,
@@ -138,6 +141,7 @@ from .schema import (
     PromotionApprovalRecord,
     PromotionRequestRecord,
     ProfileSettingsRecord,
+    PRIMARY_GROUP_CHAT_ID,
     RedPacketDailyStartRecord,
     RedPacketRecord,
     RedPacketSettingsRecord,
@@ -152,6 +156,69 @@ from .schema import (
 
 def format_employee_number(number: int) -> str:
     return f"#{number:04d}"
+
+
+@dataclass(frozen=True)
+class GroupChatConfig:
+    id: UUID
+    name: str
+    chat_url: str | None
+    chatroom_id: str | None
+    listening_enabled: bool
+    games_enabled: bool
+    random_events_enabled: bool
+    announcements_enabled: bool
+    created_at: datetime
+    updated_at: datetime
+    deleted_at: datetime | None
+
+
+def normalize_group_chat_url(
+    url: str, allowed_origin: str | None = None
+) -> tuple[str, str]:
+    parsed = urlsplit(url.strip())
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ValueError("group chat URL must use https")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("group chat URL must not contain credentials")
+    if parsed.path != "/chat":
+        raise ValueError("group chat URL path must be /chat")
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise ValueError("group chat URL has an invalid port") from error
+    hostname = parsed.hostname.lower()
+    netloc = hostname if port is None else f"{hostname}:{port}"
+    origin = urlunsplit(("https", netloc, "", "", ""))
+    if allowed_origin is not None and origin != allowed_origin:
+        raise ValueError("group chat URL origin does not match the primary group")
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    chatroom_values = query.get("c", [])
+    if len(chatroom_values) != 1:
+        raise ValueError("group chat URL must contain exactly one c parameter")
+    chatroom_id = chatroom_values[0].strip()
+    if not chatroom_id or len(chatroom_id) > 255:
+        raise ValueError("group chat room ID must contain 1 to 255 characters")
+    normalized = urlunsplit(
+        ("https", netloc, "/chat", urlencode({"c": chatroom_id}), "")
+    )
+    return normalized, chatroom_id
+
+
+def _group_chat_config(record: GroupChatRecord) -> GroupChatConfig:
+    return GroupChatConfig(
+        id=record.id,
+        name=record.name,
+        chat_url=record.chat_url,
+        chatroom_id=record.chatroom_id,
+        listening_enabled=record.listening_enabled,
+        games_enabled=record.games_enabled,
+        random_events_enabled=record.random_events_enabled,
+        announcements_enabled=record.announcements_enabled,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+        deleted_at=record.deleted_at,
+    )
 
 
 _DEFAULT_CURRENCY_NAME = "摸鱼币"
@@ -1308,6 +1375,73 @@ class CoreRepository:
         )
         self._current_day_history_backfilled: date | None = None
 
+    def bootstrap_primary_group(
+        self, chat_url: str, now: datetime
+    ) -> GroupChatConfig:
+        with self._session() as session:
+            record = session.get(GroupChatRecord, PRIMARY_GROUP_CHAT_ID)
+            if (
+                record is not None
+                and record.chat_url is not None
+                and record.chatroom_id is not None
+            ):
+                return _group_chat_config(record)
+
+            normalized_url, chatroom_id = normalize_group_chat_url(chat_url)
+            if record is None:
+                record = GroupChatRecord(
+                    id=PRIMARY_GROUP_CHAT_ID,
+                    name="主群聊",
+                    chat_url=normalized_url,
+                    chatroom_id=chatroom_id,
+                    listening_enabled=True,
+                    games_enabled=True,
+                    random_events_enabled=True,
+                    announcements_enabled=True,
+                    created_at=now,
+                    updated_at=now,
+                )
+                session.add(record)
+            else:
+                record.name = "主群聊"
+                record.chat_url = normalized_url
+                record.chatroom_id = chatroom_id
+                record.listening_enabled = True
+                record.games_enabled = True
+                record.random_events_enabled = True
+                record.announcements_enabled = True
+                record.updated_at = now
+                record.deleted_at = None
+
+            runtime = session.get(
+                GroupChatRuntimeStateRecord, PRIMARY_GROUP_CHAT_ID
+            )
+            if runtime is None:
+                session.add(
+                    GroupChatRuntimeStateRecord(
+                        group_chat_id=PRIMARY_GROUP_CHAT_ID,
+                        connection_state="pending",
+                        updated_at=now,
+                    )
+                )
+            else:
+                runtime.connection_state = "pending"
+                runtime.last_error_summary = None
+                runtime.updated_at = now
+            session.flush()
+            return _group_chat_config(record)
+
+    def group_chat_bootstrap_ready(self) -> bool:
+        with self._session() as session:
+            record = session.get(GroupChatRecord, PRIMARY_GROUP_CHAT_ID)
+            return bool(
+                record is not None
+                and record.chat_url
+                and record.chatroom_id
+                and record.listening_enabled
+                and record.deleted_at is None
+            )
+
     @contextmanager
     def transaction(self) -> Iterator[None]:
         if self._active_session.get() is not None:
@@ -1332,6 +1466,9 @@ class CoreRepository:
     def accept_inbound(self, message: InboundMessage) -> tuple[InboundRecord, bool]:
         with self._session() as session:
             record_id = uuid4()
+            group_chat_id = (
+                PRIMARY_GROUP_CHAT_ID if message.source_type == "group" else None
+            )
             values = dict(
                 id=record_id,
                 platform_message_id=message.platform_message_id,
@@ -1340,6 +1477,7 @@ class CoreRepository:
                 received_at=message.received_at,
                 source_type=message.source_type,
                 chatroom_id=message.chatroom_id,
+                group_chat_id=group_chat_id,
             )
             dialect_name = session.get_bind().dialect.name
             if dialect_name == "postgresql":
@@ -1348,15 +1486,32 @@ class CoreRepository:
                 statement = sqlite_insert(InboundRecord).values(**values)
             else:
                 raise ValueError(f"unsupported database dialect: {dialect_name}")
+            if message.source_type == "group":
+                conflict_columns = [
+                    InboundRecord.group_chat_id,
+                    InboundRecord.platform_message_id,
+                ]
+                conflict_filter = InboundRecord.source_type == "group"
+                existing_filter = InboundRecord.group_chat_id == group_chat_id
+            else:
+                conflict_columns = [
+                    InboundRecord.chatroom_id,
+                    InboundRecord.platform_message_id,
+                ]
+                conflict_filter = InboundRecord.source_type == "direct"
+                existing_filter = InboundRecord.chatroom_id == message.chatroom_id
             inserted_id = session.scalar(
                 statement.on_conflict_do_nothing(
-                    index_elements=[InboundRecord.platform_message_id]
+                    index_elements=conflict_columns,
+                    index_where=conflict_filter,
                 ).returning(InboundRecord.id)
             )
             if inserted_id is None:
                 record = session.scalar(
                     select(InboundRecord).where(
-                        InboundRecord.platform_message_id == message.platform_message_id
+                        InboundRecord.platform_message_id == message.platform_message_id,
+                        InboundRecord.source_type == message.source_type,
+                        existing_filter,
                     )
                 )
                 if record is None:
