@@ -353,6 +353,120 @@ def create_app(
         raw = core.status()
         return {key: raw.get(key) for key in _SAFE_STATUS_FIELDS}
 
+    @app.get("/api/group-chats")
+    def group_chats(
+        _: Annotated[None, Depends(authorize)],
+        include_deleted: bool = False,
+    ) -> dict:
+        return {
+            "items": _relay_core(
+                lambda: core.list_group_chats(include_deleted)
+            ),
+            "version": repository.config_version(),
+        }
+
+    @app.post("/api/group-chats")
+    def create_group_chat(
+        request: dict,
+        identity: Annotated[AdminIdentity, Depends(authorize)],
+        idempotency_key: Annotated[
+            str | None, Header(alias="Idempotency-Key")
+        ] = None,
+        if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+    ) -> JSONResponse:
+        required = (
+            "name",
+            "chat_url",
+            "listening_enabled",
+            "games_enabled",
+            "random_events_enabled",
+            "announcements_enabled",
+        )
+        if (
+            not isinstance(request.get("name"), str)
+            or not isinstance(request.get("chat_url"), str)
+            or not all(isinstance(request.get(key), bool) for key in required[2:])
+        ):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid group chat"
+            )
+        payload = {
+            **{key: request[key] for key in required},
+            "now": beijing_now().isoformat(),
+        }
+        return versioned_configuration_response(
+            identity,
+            idempotency_key,
+            if_match,
+            lambda: _relay_core(lambda: core.create_group_chat(payload)),
+            scope="group-chats:create",
+            status_code=status.HTTP_201_CREATED,
+        )
+
+    @app.patch("/api/group-chats/{group_id}")
+    def update_group_chat(
+        group_id: str,
+        request: dict,
+        identity: Annotated[AdminIdentity, Depends(authorize)],
+        idempotency_key: Annotated[
+            str | None, Header(alias="Idempotency-Key")
+        ] = None,
+        if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+    ) -> JSONResponse:
+        allowed = {
+            "name",
+            "chat_url",
+            "listening_enabled",
+            "games_enabled",
+            "random_events_enabled",
+            "announcements_enabled",
+        }
+        if not request or set(request) - allowed:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid group chat"
+            )
+        if any(
+            key in request and not isinstance(request[key], str)
+            for key in ("name", "chat_url")
+        ) or any(
+            key in request and not isinstance(request[key], bool)
+            for key in allowed - {"name", "chat_url"}
+        ):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid group chat"
+            )
+        payload = {**request, "now": beijing_now().isoformat()}
+        return versioned_configuration_response(
+            identity,
+            idempotency_key,
+            if_match,
+            lambda: _relay_core(
+                lambda: core.update_group_chat(group_id, payload)
+            ),
+            scope=f"group-chats:{group_id}:update",
+        )
+
+    @app.delete("/api/group-chats/{group_id}")
+    def delete_group_chat(
+        group_id: str,
+        identity: Annotated[AdminIdentity, Depends(authorize)],
+        idempotency_key: Annotated[
+            str | None, Header(alias="Idempotency-Key")
+        ] = None,
+        if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+    ) -> JSONResponse:
+        return versioned_configuration_response(
+            identity,
+            idempotency_key,
+            if_match,
+            lambda: _relay_core(
+                lambda: core.delete_group_chat(
+                    group_id, beijing_now().isoformat()
+                )
+            ),
+            scope=f"group-chats:{group_id}:delete",
+        )
+
     @app.get("/api/game/commands")
     def game_commands(_: Annotated[None, Depends(authorize)]) -> list[dict]:
         version = repository.config_version()

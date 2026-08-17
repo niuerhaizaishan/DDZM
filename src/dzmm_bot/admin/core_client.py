@@ -7,6 +7,14 @@ import websockets
 class AdminCorePort(Protocol):
     def status(self) -> dict: ...
 
+    def list_group_chats(self, include_deleted: bool = False) -> list[dict]: ...
+
+    def create_group_chat(self, group: dict) -> dict: ...
+
+    def update_group_chat(self, group_id: str, group: dict) -> dict: ...
+
+    def delete_group_chat(self, group_id: str, now: str) -> dict: ...
+
     def login_state(self) -> str | None: ...
 
     def get_manual_login_lease(self) -> dict | None: ...
@@ -226,6 +234,31 @@ class CoreClient:
 
     def status(self) -> dict:
         return self._get("/internal/status")
+
+    def list_group_chats(self, include_deleted: bool = False) -> list[dict]:
+        return self._get(
+            "/internal/group-chats",
+            params={"include_deleted": str(include_deleted).lower()},
+        )
+
+    def create_group_chat(self, group: dict) -> dict:
+        response = self._client.post("/internal/group-chats", json=group)
+        response.raise_for_status()
+        return response.json()
+
+    def update_group_chat(self, group_id: str, group: dict) -> dict:
+        response = self._client.patch(
+            f"/internal/group-chats/{group_id}", json=group
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def delete_group_chat(self, group_id: str, now: str) -> dict:
+        response = self._client.request(
+            "DELETE", f"/internal/group-chats/{group_id}", json={"now": now}
+        )
+        response.raise_for_status()
+        return response.json()
 
     def login_state(self) -> str | None:
         heartbeat = self._get("/internal/login-state")

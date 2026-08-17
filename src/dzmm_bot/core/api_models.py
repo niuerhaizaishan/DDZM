@@ -58,6 +58,76 @@ class DirectInboundRoomsResponse(ApiModel):
     chatroom_ids: list[str]
 
 
+class GroupChatRuntimeResponse(ApiModel):
+    connection_state: Literal["pending", "connected", "failed", "disabled"]
+    last_connected_at: datetime | None
+    last_inbound_at: datetime | None
+    last_outbound_at: datetime | None
+    last_error_summary: str | None
+    worker_id: str | None
+    updated_at: datetime
+
+
+class GroupChatResponse(ApiModel):
+    id: UUID
+    name: str
+    chat_url: str | None
+    chatroom_id: str | None
+    listening_enabled: bool
+    games_enabled: bool
+    random_events_enabled: bool
+    announcements_enabled: bool
+    created_at: datetime
+    updated_at: datetime
+    deleted_at: datetime | None
+    runtime: GroupChatRuntimeResponse | None = None
+
+
+class CreateGroupChatRequest(ApiModel):
+    name: str = Field(min_length=1, max_length=64)
+    chat_url: str = Field(min_length=1, max_length=4096)
+    listening_enabled: bool = True
+    games_enabled: bool = True
+    random_events_enabled: bool = True
+    announcements_enabled: bool = True
+    now: AwareDatetime
+
+
+class UpdateGroupChatRequest(ApiModel):
+    name: str | None = Field(default=None, min_length=1, max_length=64)
+    chat_url: str | None = Field(default=None, min_length=1, max_length=4096)
+    listening_enabled: bool | None = None
+    games_enabled: bool | None = None
+    random_events_enabled: bool | None = None
+    announcements_enabled: bool | None = None
+    now: AwareDatetime
+
+
+class DeleteGroupChatRequest(ApiModel):
+    now: AwareDatetime
+
+
+class GroupChatTargetResponse(ApiModel):
+    group_chat_id: UUID
+    chatroom_id: str
+    chat_url: str
+
+
+class GroupChatRuntimeUpdateRequest(ApiModel):
+    group_chat_id: UUID
+    connection_state: Literal["pending", "connected", "failed", "disabled"]
+    last_connected_at: AwareDatetime | None = None
+    last_inbound_at: AwareDatetime | None = None
+    last_outbound_at: AwareDatetime | None = None
+    last_error_summary: str | None = Field(default=None, max_length=512)
+
+
+class SyncGroupChatRuntimeRequest(ApiModel):
+    worker_id: str = Field(min_length=1, max_length=255)
+    statuses: list[GroupChatRuntimeUpdateRequest] = Field(max_length=100)
+    now: AwareDatetime
+
+
 class ClaimRequest(ApiModel):
     worker_id: str = Field(min_length=1, max_length=255)
     now: AwareDatetime

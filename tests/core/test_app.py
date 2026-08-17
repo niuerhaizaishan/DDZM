@@ -1339,6 +1339,59 @@ def test_core_server_health_is_degraded_without_primary_group(app_context):
     assert response.json()["database_available"] is True
 
 
+def test_group_chat_crud_targets_and_runtime_api(app_context, headers):
+    primary = app_context.repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=group-main", NOW
+    )
+    created = app_context.client.post(
+        "/internal/group-chats",
+        headers=headers,
+        json={
+            "name": "第二群",
+            "chat_url": "https://www.aikda.com/chat?c=group-2&utm_source=admin",
+            "listening_enabled": True,
+            "games_enabled": False,
+            "random_events_enabled": True,
+            "announcements_enabled": False,
+            "now": NOW.isoformat(),
+        },
+    )
+
+    assert created.status_code == 201
+    second = created.json()
+    assert second["chat_url"] == "https://www.aikda.com/chat?c=group-2"
+    assert second["runtime"]["connection_state"] == "pending"
+
+    targets = app_context.client.get(
+        "/internal/group-chats/targets", headers=headers
+    )
+    assert {target["chatroom_id"] for target in targets.json()} == {
+        "group-main",
+        "group-2",
+    }
+    runtime = app_context.client.post(
+        "/internal/group-chats/runtime",
+        headers=headers,
+        json={
+            "worker_id": "worker-a",
+            "statuses": [
+                {
+                    "group_chat_id": second["id"],
+                    "connection_state": "connected",
+                    "last_connected_at": NOW.isoformat(),
+                }
+            ],
+            "now": NOW.isoformat(),
+        },
+    )
+    listed = app_context.client.get("/internal/group-chats", headers=headers)
+
+    assert runtime.json() == {"accepted": True}
+    listed_by_id = {item["id"]: item for item in listed.json()}
+    assert listed_by_id[second["id"]]["runtime"]["connection_state"] == "connected"
+    assert listed_by_id[str(primary.id)]["name"] == "主群聊"
+
+
 def test_database_backed_identifiers_reject_more_than_255_characters(
     client, headers, payload
 ):

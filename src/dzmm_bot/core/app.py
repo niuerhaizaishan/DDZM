@@ -41,6 +41,7 @@ from .api_models import (
     CompleteProfileImageUploadRequest,
     CommandDefinitionResponse,
     CommandTemplateResponse,
+    CreateGroupChatRequest,
     CreateDepartmentRequest,
     CreateAIPlayerImpressionRequest,
     CreateItemRequest,
@@ -48,9 +49,13 @@ from .api_models import (
     DailyJobsRequest,
     DirectChatSyncRequest,
     DirectInboundRoomsResponse,
+    DeleteGroupChatRequest,
     FailedRequest,
     FailProfileImageUploadRequest,
     GameSettingsResponse,
+    GroupChatResponse,
+    GroupChatRuntimeResponse,
+    GroupChatTargetResponse,
     PersonalProfileResponse,
     ProfileImageCleanupClaimResponse,
     ProfileImageUploadClaimResponse,
@@ -81,6 +86,7 @@ from .api_models import (
     SetAIKnowledgeCardRequest,
     UpdateAIPlayerImpressionRequest,
     SetGameSettingsRequest,
+    SyncGroupChatRuntimeRequest,
     SetPersonalProfileRequest,
     SetProfileSettingsRequest,
     RandomEventSettingsResponse,
@@ -131,6 +137,7 @@ from .api_models import (
     DepartmentResponse,
     SetBoardMembershipRequest,
     UpdateDepartmentRequest,
+    UpdateGroupChatRequest,
     UpdateRankRequest,
     UserProfileResponse,
     UserResponse,
@@ -142,6 +149,8 @@ from .commands import GroupCommandHandler
 from .repository import (
     ActivityLevelRule,
     CoreRepository,
+    GroupChatConflict,
+    GroupChatRuntimeUpdate,
     ManualLoginBusyError,
     ManualLoginLease,
     ManualLoginOwnerError,
@@ -227,6 +236,137 @@ def create_app(
         return InboundResponse(
             message_id=result.message_id, accepted=result.inserted
         )
+
+    @app.get("/internal/group-chats", response_model=list[GroupChatResponse])
+    def group_chats(
+        _: Annotated[None, Depends(authorize)],
+        include_deleted: bool = False,
+    ) -> list[GroupChatResponse]:
+        runtime = {
+            item.group_chat_id: item
+            for item in repository.group_chat_runtime_states()
+        }
+        return [
+            _group_chat_response(group, runtime.get(group.id))
+            for group in repository.list_group_chats(include_deleted)
+        ]
+
+    @app.post(
+        "/internal/group-chats",
+        response_model=GroupChatResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def create_group_chat(
+        request: CreateGroupChatRequest,
+        _: Annotated[None, Depends(authorize)],
+    ) -> GroupChatResponse:
+        try:
+            group = repository.create_group_chat(
+                request.name,
+                request.chat_url,
+                request.listening_enabled,
+                request.games_enabled,
+                request.random_events_enabled,
+                request.announcements_enabled,
+                request.now,
+            )
+        except (ValueError, GroupChatConflict) as error:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(error))
+        runtime = {
+            item.group_chat_id: item
+            for item in repository.group_chat_runtime_states()
+        }.get(group.id)
+        return _group_chat_response(group, runtime)
+
+    @app.get(
+        "/internal/group-chats/targets",
+        response_model=list[GroupChatTargetResponse],
+    )
+    def group_chat_targets(
+        _: Annotated[None, Depends(authorize)],
+    ) -> list[GroupChatTargetResponse]:
+        return [
+            GroupChatTargetResponse(
+                group_chat_id=target.group_chat_id,
+                chatroom_id=target.chatroom_id,
+                chat_url=target.chat_url,
+            )
+            for target in repository.enabled_group_targets()
+        ]
+
+    @app.post("/internal/group-chats/runtime", response_model=AcceptedResponse)
+    def sync_group_chat_runtime(
+        request: SyncGroupChatRuntimeRequest,
+        _: Annotated[None, Depends(authorize)],
+    ) -> AcceptedResponse:
+        try:
+            repository.record_group_chat_runtime(
+                request.worker_id,
+                tuple(
+                    GroupChatRuntimeUpdate(
+                        group_chat_id=item.group_chat_id,
+                        connection_state=item.connection_state,
+                        last_connected_at=item.last_connected_at,
+                        last_inbound_at=item.last_inbound_at,
+                        last_outbound_at=item.last_outbound_at,
+                        last_error_summary=item.last_error_summary,
+                    )
+                    for item in request.statuses
+                ),
+                request.now,
+            )
+        except LookupError as error:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(error))
+        return AcceptedResponse(accepted=True)
+
+    @app.patch(
+        "/internal/group-chats/{group_id}", response_model=GroupChatResponse
+    )
+    def update_group_chat(
+        group_id: UUID,
+        request: UpdateGroupChatRequest,
+        _: Annotated[None, Depends(authorize)],
+    ) -> GroupChatResponse:
+        try:
+            group = repository.update_group_chat(
+                group_id,
+                name=request.name,
+                chat_url=request.chat_url,
+                listening_enabled=request.listening_enabled,
+                games_enabled=request.games_enabled,
+                random_events_enabled=request.random_events_enabled,
+                announcements_enabled=request.announcements_enabled,
+                now=request.now,
+            )
+        except LookupError as error:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(error))
+        except (ValueError, GroupChatConflict) as error:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(error))
+        runtime = {
+            item.group_chat_id: item
+            for item in repository.group_chat_runtime_states()
+        }.get(group.id)
+        return _group_chat_response(group, runtime)
+
+    @app.delete(
+        "/internal/group-chats/{group_id}", response_model=GroupChatResponse
+    )
+    def delete_group_chat(
+        group_id: UUID,
+        request: DeleteGroupChatRequest,
+        _: Annotated[None, Depends(authorize)],
+    ) -> GroupChatResponse:
+        try:
+            group = repository.soft_delete_group_chat(group_id, request.now)
+        except LookupError as error:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(error))
+        except GroupChatConflict as error:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(error))
+        runtime = {
+            item.group_chat_id: item
+            for item in repository.group_chat_runtime_states()
+        }.get(group.id)
+        return _group_chat_response(group, runtime)
 
     @app.post("/internal/direct-chats/sync", response_model=AcceptedResponse)
     def sync_direct_chats(
@@ -2165,6 +2305,33 @@ def _ensure_primary_group(
         return repository.group_chat_bootstrap_ready()
     except (SQLAlchemyError, ValueError):
         return False
+
+
+def _group_chat_response(group, runtime) -> GroupChatResponse:
+    return GroupChatResponse(
+        id=group.id,
+        name=group.name,
+        chat_url=group.chat_url,
+        chatroom_id=group.chatroom_id,
+        listening_enabled=group.listening_enabled,
+        games_enabled=group.games_enabled,
+        random_events_enabled=group.random_events_enabled,
+        announcements_enabled=group.announcements_enabled,
+        created_at=group.created_at,
+        updated_at=group.updated_at,
+        deleted_at=group.deleted_at,
+        runtime=None
+        if runtime is None
+        else GroupChatRuntimeResponse(
+            connection_state=runtime.connection_state,
+            last_connected_at=runtime.last_connected_at,
+            last_inbound_at=runtime.last_inbound_at,
+            last_outbound_at=runtime.last_outbound_at,
+            last_error_summary=runtime.last_error_summary,
+            worker_id=runtime.worker_id,
+            updated_at=runtime.updated_at,
+        ),
+    )
 
 
 def _latest_heartbeat(repository: CoreRepository) -> WorkerInstanceRecord | None:

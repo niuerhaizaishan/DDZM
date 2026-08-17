@@ -173,6 +173,39 @@ class GroupChatConfig:
     deleted_at: datetime | None
 
 
+@dataclass(frozen=True)
+class GroupChatRuntimeState:
+    group_chat_id: UUID
+    connection_state: str
+    last_connected_at: datetime | None
+    last_inbound_at: datetime | None
+    last_outbound_at: datetime | None
+    last_error_summary: str | None
+    worker_id: str | None
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class GroupChatTarget:
+    group_chat_id: UUID
+    chatroom_id: str
+    chat_url: str
+
+
+@dataclass(frozen=True)
+class GroupChatRuntimeUpdate:
+    group_chat_id: UUID
+    connection_state: str
+    last_connected_at: datetime | None = None
+    last_inbound_at: datetime | None = None
+    last_outbound_at: datetime | None = None
+    last_error_summary: str | None = None
+
+
+class GroupChatConflict(RuntimeError):
+    pass
+
+
 def normalize_group_chat_url(
     url: str, allowed_origin: str | None = None
 ) -> tuple[str, str]:
@@ -218,6 +251,21 @@ def _group_chat_config(record: GroupChatRecord) -> GroupChatConfig:
         created_at=record.created_at,
         updated_at=record.updated_at,
         deleted_at=record.deleted_at,
+    )
+
+
+def _group_chat_runtime(
+    record: GroupChatRuntimeStateRecord,
+) -> GroupChatRuntimeState:
+    return GroupChatRuntimeState(
+        group_chat_id=record.group_chat_id,
+        connection_state=record.connection_state,
+        last_connected_at=record.last_connected_at,
+        last_inbound_at=record.last_inbound_at,
+        last_outbound_at=record.last_outbound_at,
+        last_error_summary=record.last_error_summary,
+        worker_id=record.worker_id,
+        updated_at=record.updated_at,
     )
 
 
@@ -1441,6 +1489,344 @@ class CoreRepository:
                 and record.listening_enabled
                 and record.deleted_at is None
             )
+
+    def list_group_chats(
+        self, include_deleted: bool = False
+    ) -> tuple[GroupChatConfig, ...]:
+        with self._session() as session:
+            query = select(GroupChatRecord)
+            if not include_deleted:
+                query = query.where(GroupChatRecord.deleted_at.is_(None))
+            records = session.scalars(
+                query.order_by(GroupChatRecord.created_at, GroupChatRecord.id)
+            )
+            return tuple(_group_chat_config(record) for record in records)
+
+    def group_chat_runtime_states(self) -> tuple[GroupChatRuntimeState, ...]:
+        with self._session() as session:
+            records = session.scalars(
+                select(GroupChatRuntimeStateRecord).order_by(
+                    GroupChatRuntimeStateRecord.group_chat_id
+                )
+            )
+            return tuple(_group_chat_runtime(record) for record in records)
+
+    def create_group_chat(
+        self,
+        name: str,
+        chat_url: str,
+        listening_enabled: bool,
+        games_enabled: bool,
+        random_events_enabled: bool,
+        announcements_enabled: bool,
+        now: datetime,
+    ) -> GroupChatConfig:
+        normalized_name = self._validate_group_chat_name(name)
+        with self._session() as session:
+            allowed_origin = self._primary_group_origin(session)
+            normalized_url, chatroom_id = normalize_group_chat_url(
+                chat_url, allowed_origin
+            )
+            self._ensure_group_chat_unique(
+                session, normalized_name, normalized_url, chatroom_id
+            )
+            record = GroupChatRecord(
+                name=normalized_name,
+                chat_url=normalized_url,
+                chatroom_id=chatroom_id,
+                listening_enabled=listening_enabled,
+                games_enabled=games_enabled,
+                random_events_enabled=random_events_enabled,
+                announcements_enabled=announcements_enabled,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(record)
+            session.flush()
+            session.add(
+                GroupChatRuntimeStateRecord(
+                    group_chat_id=record.id,
+                    connection_state=("pending" if listening_enabled else "disabled"),
+                    updated_at=now,
+                )
+            )
+            self._audit_group_chat(session, "group_chat_created", None, record, now)
+            session.flush()
+            return _group_chat_config(record)
+
+    def update_group_chat(
+        self,
+        group_id: UUID,
+        *,
+        name: str | None = None,
+        chat_url: str | None = None,
+        listening_enabled: bool | None = None,
+        games_enabled: bool | None = None,
+        random_events_enabled: bool | None = None,
+        announcements_enabled: bool | None = None,
+        now: datetime,
+    ) -> GroupChatConfig:
+        with self._session() as session:
+            record = session.get(
+                GroupChatRecord, group_id, with_for_update=True
+            )
+            if record is None or record.deleted_at is not None:
+                raise LookupError("group_chat_not_found")
+            before = _group_chat_config(record)
+            next_name = (
+                record.name if name is None else self._validate_group_chat_name(name)
+            )
+            next_url = record.chat_url
+            next_chatroom_id = record.chatroom_id
+            if chat_url is not None:
+                next_url, next_chatroom_id = normalize_group_chat_url(
+                    chat_url, self._primary_group_origin(session)
+                )
+            if next_url is None or next_chatroom_id is None:
+                raise ValueError("group chat URL is required")
+            self._ensure_group_chat_unique(
+                session,
+                next_name,
+                next_url,
+                next_chatroom_id,
+                excluding_id=group_id,
+            )
+            next_listening = (
+                record.listening_enabled
+                if listening_enabled is None
+                else listening_enabled
+            )
+            if record.listening_enabled and not next_listening:
+                self._guard_group_chat_can_stop(session, group_id)
+
+            record.name = next_name
+            record.chat_url = next_url
+            record.chatroom_id = next_chatroom_id
+            record.listening_enabled = next_listening
+            if games_enabled is not None:
+                record.games_enabled = games_enabled
+            if random_events_enabled is not None:
+                record.random_events_enabled = random_events_enabled
+            if announcements_enabled is not None:
+                record.announcements_enabled = announcements_enabled
+            record.updated_at = now
+            runtime = session.get(GroupChatRuntimeStateRecord, group_id)
+            if runtime is not None:
+                runtime.connection_state = (
+                    "pending" if record.listening_enabled else "disabled"
+                )
+                runtime.updated_at = now
+            self._audit_group_chat(
+                session, "group_chat_updated", before, record, now
+            )
+            session.flush()
+            return _group_chat_config(record)
+
+    def soft_delete_group_chat(
+        self, group_id: UUID, now: datetime
+    ) -> GroupChatConfig:
+        with self._session() as session:
+            record = session.get(
+                GroupChatRecord, group_id, with_for_update=True
+            )
+            if record is None or record.deleted_at is not None:
+                raise LookupError("group_chat_not_found")
+            if record.listening_enabled:
+                self._guard_group_chat_can_stop(session, group_id)
+            elif self._group_has_active_gameplay(session, group_id):
+                raise GroupChatConflict("active_gameplay")
+            before = _group_chat_config(record)
+            record.listening_enabled = False
+            record.games_enabled = False
+            record.random_events_enabled = False
+            record.announcements_enabled = False
+            record.deleted_at = now
+            record.updated_at = now
+            runtime = session.get(GroupChatRuntimeStateRecord, group_id)
+            if runtime is not None:
+                runtime.connection_state = "disabled"
+                runtime.updated_at = now
+            self._audit_group_chat(
+                session, "group_chat_deleted", before, record, now
+            )
+            session.flush()
+            return _group_chat_config(record)
+
+    def enabled_group_targets(self) -> tuple[GroupChatTarget, ...]:
+        with self._session() as session:
+            records = session.scalars(
+                select(GroupChatRecord)
+                .where(
+                    GroupChatRecord.deleted_at.is_(None),
+                    GroupChatRecord.listening_enabled.is_(True),
+                    GroupChatRecord.chat_url.is_not(None),
+                    GroupChatRecord.chatroom_id.is_not(None),
+                )
+                .order_by(GroupChatRecord.created_at, GroupChatRecord.id)
+            )
+            return tuple(
+                GroupChatTarget(record.id, record.chatroom_id, record.chat_url)
+                for record in records
+                if record.chatroom_id is not None and record.chat_url is not None
+            )
+
+    def record_group_chat_runtime(
+        self,
+        worker_id: str,
+        statuses: tuple[GroupChatRuntimeUpdate, ...],
+        now: datetime,
+    ) -> None:
+        if not worker_id or len(worker_id) > 255:
+            raise ValueError("invalid worker ID")
+        allowed_states = {"pending", "connected", "failed", "disabled"}
+        with self._session() as session:
+            for status in statuses:
+                if status.connection_state not in allowed_states:
+                    raise ValueError("invalid group connection state")
+                error_summary = status.last_error_summary
+                if error_summary is not None:
+                    error_summary = error_summary.strip()[:512] or None
+                record = session.get(
+                    GroupChatRuntimeStateRecord,
+                    status.group_chat_id,
+                    with_for_update=True,
+                )
+                if record is None:
+                    if session.get(GroupChatRecord, status.group_chat_id) is None:
+                        raise LookupError("group_chat_not_found")
+                    record = GroupChatRuntimeStateRecord(
+                        group_chat_id=status.group_chat_id,
+                        connection_state=status.connection_state,
+                        updated_at=now,
+                    )
+                    session.add(record)
+                record.connection_state = status.connection_state
+                record.last_connected_at = status.last_connected_at
+                record.last_inbound_at = status.last_inbound_at
+                record.last_outbound_at = status.last_outbound_at
+                record.last_error_summary = error_summary
+                record.worker_id = worker_id
+                record.updated_at = now
+
+    @staticmethod
+    def _validate_group_chat_name(name: str) -> str:
+        normalized = name.strip()
+        if not normalized or len(normalized) > 64:
+            raise ValueError("group chat name must contain 1 to 64 characters")
+        return normalized
+
+    @staticmethod
+    def _primary_group_origin(session: Session) -> str:
+        primary = session.get(GroupChatRecord, PRIMARY_GROUP_CHAT_ID)
+        if primary is None or primary.chat_url is None:
+            raise GroupChatConflict("primary_group_not_ready")
+        parsed = urlsplit(primary.chat_url)
+        return urlunsplit((parsed.scheme, parsed.netloc, "", "", ""))
+
+    @staticmethod
+    def _ensure_group_chat_unique(
+        session: Session,
+        name: str,
+        chat_url: str,
+        chatroom_id: str,
+        *,
+        excluding_id: UUID | None = None,
+    ) -> None:
+        query = select(GroupChatRecord).where(
+            or_(
+                GroupChatRecord.name == name,
+                GroupChatRecord.chat_url == chat_url,
+                GroupChatRecord.chatroom_id == chatroom_id,
+            ),
+        )
+        if excluding_id is not None:
+            query = query.where(GroupChatRecord.id != excluding_id)
+        duplicate = session.scalar(query.limit(1))
+        if duplicate is None:
+            return
+        if duplicate.name == name:
+            raise GroupChatConflict("duplicate_name")
+        raise GroupChatConflict("duplicate_chatroom")
+
+    def _guard_group_chat_can_stop(
+        self, session: Session, group_id: UUID
+    ) -> None:
+        if self._group_has_active_gameplay(session, group_id):
+            raise GroupChatConflict("active_gameplay")
+        enabled_count = session.scalar(
+            select(func.count(GroupChatRecord.id)).where(
+                GroupChatRecord.deleted_at.is_(None),
+                GroupChatRecord.listening_enabled.is_(True),
+            )
+        )
+        if int(enabled_count or 0) <= 1:
+            raise GroupChatConflict("last_enabled_group")
+
+    @staticmethod
+    def _group_has_active_gameplay(session: Session, group_id: UUID) -> bool:
+        checks = (
+            select(UndercoverSessionRecord.id).where(
+                UndercoverSessionRecord.group_chat_id == group_id,
+                UndercoverSessionRecord.active_key.is_not(None),
+            ),
+            select(BlameGameRecord.id).where(
+                BlameGameRecord.group_chat_id == group_id,
+                BlameGameRecord.active_key.is_not(None),
+            ),
+            select(RedPacketRecord.id).where(
+                RedPacketRecord.group_chat_id == group_id,
+                RedPacketRecord.active_key.is_not(None),
+            ),
+            select(NumberBombGameRecord.id).where(
+                NumberBombGameRecord.group_chat_id == group_id,
+                NumberBombGameRecord.active_key.is_not(None),
+            ),
+            select(HideAndSeekGameRecord.id).where(
+                HideAndSeekGameRecord.group_chat_id == group_id,
+                HideAndSeekGameRecord.state == "selecting",
+            ),
+            select(MemoryAssessmentGameRecord.id).where(
+                MemoryAssessmentGameRecord.group_chat_id == group_id,
+                MemoryAssessmentGameRecord.active_key.is_not(None),
+            ),
+            select(RandomEventRecord.id).where(
+                RandomEventRecord.group_chat_id == group_id,
+                RandomEventRecord.state.in_(("signup", "in_progress", "tipping")),
+            ),
+        )
+        return any(session.scalar(select(exists(check))) for check in checks)
+
+    @staticmethod
+    def _audit_group_chat(
+        session: Session,
+        event_type: str,
+        before: GroupChatConfig | None,
+        after: GroupChatRecord,
+        now: datetime,
+    ) -> None:
+        def safe(config: GroupChatConfig | GroupChatRecord | None) -> dict | None:
+            if config is None:
+                return None
+            return {
+                "id": str(config.id),
+                "name": config.name,
+                "chat_url": config.chat_url,
+                "chatroom_id": config.chatroom_id,
+                "listening_enabled": config.listening_enabled,
+                "games_enabled": config.games_enabled,
+                "random_events_enabled": config.random_events_enabled,
+                "announcements_enabled": config.announcements_enabled,
+                "deleted": config.deleted_at is not None,
+            }
+
+        session.add(
+            AuditEventRecord(
+                event_type=event_type,
+                actor="admin_api",
+                payload={"before": safe(before), "after": safe(after)},
+                created_at=now,
+            )
+        )
 
     @contextmanager
     def transaction(self) -> Iterator[None]:

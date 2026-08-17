@@ -346,6 +346,123 @@ def test_bootstrap_primary_group_rejects_invalid_urls(repository, now, chat_url)
     assert repository.group_chat_bootstrap_ready() is False
 
 
+def test_group_chat_duplicate_and_last_enabled_guards(repository, now):
+    from dzmm_bot.core.repository import GroupChatConflict
+
+    primary = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=group-main", now
+    )
+    second = repository.create_group_chat(
+        "第二群",
+        "https://www.aikda.com/chat?c=group-2",
+        True,
+        True,
+        True,
+        True,
+        now,
+    )
+    assert second.chatroom_id == "group-2"
+
+    with pytest.raises(GroupChatConflict, match="duplicate_chatroom"):
+        repository.create_group_chat(
+            "重复群",
+            "https://www.aikda.com/chat?c=group-2",
+            True,
+            True,
+            True,
+            True,
+            now,
+        )
+
+    repository.update_group_chat(
+        primary.id, listening_enabled=False, now=now + timedelta(minutes=1)
+    )
+    with pytest.raises(GroupChatConflict, match="last_enabled_group"):
+        repository.update_group_chat(
+            second.id, listening_enabled=False, now=now + timedelta(minutes=2)
+        )
+
+
+def test_group_chat_runtime_and_soft_delete(repository, now):
+    from dzmm_bot.core.repository import GroupChatRuntimeUpdate
+
+    primary = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=group-main", now
+    )
+    second = repository.create_group_chat(
+        "第二群",
+        "https://www.aikda.com/chat?c=group-2",
+        False,
+        True,
+        False,
+        True,
+        now,
+    )
+    repository.record_group_chat_runtime(
+        "worker-a",
+        (
+            GroupChatRuntimeUpdate(
+                primary.id,
+                "connected",
+                last_connected_at=now,
+                last_error_summary=" secret-free summary ",
+            ),
+        ),
+        now,
+    )
+
+    runtime = {
+        item.group_chat_id: item for item in repository.group_chat_runtime_states()
+    }[primary.id]
+    assert runtime.connection_state == "connected"
+    assert runtime.worker_id == "worker-a"
+    assert runtime.last_error_summary == "secret-free summary"
+    assert repository.enabled_group_targets()[0].chatroom_id == "group-main"
+
+    deleted = repository.soft_delete_group_chat(
+        second.id, now + timedelta(minutes=1)
+    )
+    assert deleted.deleted_at is not None
+    assert deleted.listening_enabled is False
+    assert second.id not in {group.id for group in repository.list_group_chats()}
+    assert second.id in {
+        group.id for group in repository.list_group_chats(include_deleted=True)
+    }
+
+
+def test_group_chat_with_active_gameplay_cannot_be_disabled(repository, now):
+    from dzmm_bot.core.repository import GroupChatConflict
+
+    repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=group-main", now
+    )
+    second = repository.create_group_chat(
+        "第二群",
+        "https://www.aikda.com/chat?c=group-2",
+        True,
+        True,
+        True,
+        True,
+        now,
+    )
+    with repository._session() as session:
+        session.add(
+            NumberBombGameRecord(
+                group_chat_id=second.id,
+                active_key="global",
+                state="signup",
+                target_player_count=3,
+                last_activity_at=now,
+                created_at=now,
+            )
+        )
+
+    with pytest.raises(GroupChatConflict, match="active_gameplay"):
+        repository.update_group_chat(
+            second.id, listening_enabled=False, now=now + timedelta(minutes=1)
+        )
+
+
 def test_employee_balance_ledger_pages_and_reconstructs_balance(repository, now):
     user, _ = repository.create_user("ledger-player", "流水员工", now, 0)
     repository.record_balance_change(user.id, 20, "onboarding", now + timedelta(minutes=1))

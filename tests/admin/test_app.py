@@ -240,6 +240,7 @@ class FakeCore:
     )
     manual_login_lease: dict | None = None
     ai_assistant_settings_request: dict | None = None
+    group_chats: list[dict] = field(default_factory=list)
 
     def status(self):
         return {
@@ -251,6 +252,44 @@ class FakeCore:
             "raw_cookies": "must-not-leak",
             "profile_path": "/secret/profile",
         }
+
+    def list_group_chats(self, include_deleted=False):
+        if include_deleted:
+            return self.group_chats
+        return [item for item in self.group_chats if item.get("deleted_at") is None]
+
+    def create_group_chat(self, group):
+        saved = {
+            "id": f"00000000-0000-0000-0000-{len(self.group_chats) + 1:012d}",
+            **{key: value for key, value in group.items() if key != "now"},
+            "chatroom_id": group["chat_url"].split("c=", 1)[1],
+            "created_at": group["now"],
+            "updated_at": group["now"],
+            "deleted_at": None,
+            "runtime": None,
+        }
+        self.group_chats.append(saved)
+        return saved
+
+    def update_group_chat(self, group_id, group):
+        record = next(item for item in self.group_chats if item["id"] == group_id)
+        record.update({key: value for key, value in group.items() if key != "now"})
+        record["updated_at"] = group["now"]
+        return record
+
+    def delete_group_chat(self, group_id, now):
+        record = next(item for item in self.group_chats if item["id"] == group_id)
+        record.update(
+            {
+                "listening_enabled": False,
+                "games_enabled": False,
+                "random_events_enabled": False,
+                "announcements_enabled": False,
+                "deleted_at": now,
+                "updated_at": now,
+            }
+        )
+        return record
 
     def login_state(self):
         return self.login_state_value
@@ -890,6 +929,55 @@ def test_health_is_public_and_discloses_no_configuration(client):
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_admin_group_chat_crud_uses_configuration_versioning(client, headers):
+    created = client.post(
+        "/api/group-chats",
+        headers={
+            **headers,
+            "Idempotency-Key": "group-create",
+            "If-Match": "0",
+        },
+        json={
+            "name": "第二群",
+            "chat_url": "https://www.aikda.com/chat?c=group-2",
+            "listening_enabled": True,
+            "games_enabled": True,
+            "random_events_enabled": False,
+            "announcements_enabled": True,
+        },
+    )
+
+    assert created.status_code == 201
+    assert created.json()["version"] == 1
+    group_id = created.json()["id"]
+    listed = client.get("/api/group-chats", headers=headers)
+    assert listed.json()["version"] == 1
+    assert listed.json()["items"][0]["name"] == "第二群"
+
+    updated = client.patch(
+        f"/api/group-chats/{group_id}",
+        headers={
+            **headers,
+            "Idempotency-Key": "group-update",
+            "If-Match": "1",
+        },
+        json={"games_enabled": False},
+    )
+    deleted = client.delete(
+        f"/api/group-chats/{group_id}",
+        headers={
+            **headers,
+            "Idempotency-Key": "group-delete",
+            "If-Match": "2",
+        },
+    )
+
+    assert updated.json()["version"] == 2
+    assert updated.json()["games_enabled"] is False
+    assert deleted.json()["version"] == 3
+    assert deleted.json()["deleted_at"] is not None
 
 
 def test_admin_proxies_categorized_ai_impression_crud(client, headers):
