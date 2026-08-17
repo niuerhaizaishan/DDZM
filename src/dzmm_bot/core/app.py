@@ -115,6 +115,8 @@ from .api_models import (
     BlameIncidentCardResponse,
     PaginatedBlameIncidentCardsResponse,
     PaginatedBalanceTransactionsResponse,
+    EmployeeGroupMessageResponse,
+    PaginatedEmployeeGroupMessagesResponse,
     CreateBlameIncidentCardRequest,
     UpdateBlameIncidentCardRequest,
     BlameGameSessionResponse,
@@ -937,6 +939,41 @@ def create_app(
             page_size=page_size,
             total=total,
             pages=(total + page_size - 1) // page_size,
+        )
+
+    @app.get(
+        "/internal/game/users/{platform_id}/group-messages",
+        response_model=PaginatedEmployeeGroupMessagesResponse,
+    )
+    def employee_group_messages(
+        platform_id: str,
+        _: Annotated[None, Depends(authorize)],
+        page: int = Query(1, ge=1),
+        page_size: int = Query(20, ge=1, le=100),
+        group_chat_id: UUID | None = Query(None),
+    ) -> PaginatedEmployeeGroupMessagesResponse:
+        history = repository.list_employee_group_messages_page(
+            platform_id, page, page_size, group_chat_id
+        )
+        if history is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
+        return PaginatedEmployeeGroupMessagesResponse(
+            platform_id=history.platform_id,
+            display_name=history.display_name,
+            items=[
+                EmployeeGroupMessageResponse(
+                    id=item.id,
+                    group_chat_id=item.group_chat_id,
+                    group_name=item.group_name,
+                    content=item.content,
+                    received_at=item.received_at,
+                )
+                for item in history.items
+            ],
+            page=page,
+            page_size=page_size,
+            total=history.total,
+            pages=(history.total + page_size - 1) // page_size,
         )
 
     @app.get("/internal/game/items", response_model=PaginatedItemsResponse)

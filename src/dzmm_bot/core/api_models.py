@@ -279,6 +279,24 @@ class PaginatedBalanceTransactionsResponse(ApiModel):
     pages: int
 
 
+class EmployeeGroupMessageResponse(ApiModel):
+    id: UUID
+    group_chat_id: UUID
+    group_name: str
+    content: str
+    received_at: datetime
+
+
+class PaginatedEmployeeGroupMessagesResponse(ApiModel):
+    platform_id: str
+    display_name: str
+    items: list[EmployeeGroupMessageResponse]
+    page: int
+    page_size: int
+    total: int
+    pages: int
+
+
 class RankResponse(ApiModel):
     id: UUID
     sort_order: int

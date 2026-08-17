@@ -55,6 +55,10 @@ class FakeCore:
     employees: list[dict] = field(default_factory=list)
     balance_ledgers: dict[str, dict] = field(default_factory=dict)
     balance_ledger_requests: list[tuple[str, int, int]] = field(default_factory=list)
+    employee_group_messages: dict[str, dict] = field(default_factory=dict)
+    employee_group_message_requests: list[tuple[str, int, int, str | None]] = field(
+        default_factory=list
+    )
     items: list[dict] = field(default_factory=list)
     template_error: bool = False
     game_settings: dict = field(
@@ -354,6 +358,14 @@ class FakeCore:
     def list_balance_transactions(self, platform_id, page, page_size):
         self.balance_ledger_requests.append((platform_id, page, page_size))
         return self.balance_ledgers[platform_id]
+
+    def list_employee_group_messages(
+        self, platform_id, page, page_size, group_chat_id=None
+    ):
+        self.employee_group_message_requests.append(
+            (platform_id, page, page_size, group_chat_id)
+        )
+        return self.employee_group_messages[platform_id]
 
     def list_game_items(self, page, page_size):
         return _page(self.items, page, page_size)
@@ -1312,6 +1324,30 @@ def test_admin_proxies_employee_balance_ledger(client, headers, core):
     assert client.get(
         "/api/game/users/user-1/balance-transactions?page=0", headers=headers
     ).status_code == 422
+
+
+def test_admin_proxies_employee_group_message_filter(client, headers, core):
+    group_id = "00000000-0000-0000-0000-000000000002"
+    core.employee_group_messages["user-1"] = {
+        "platform_id": "user-1",
+        "display_name": "员工1",
+        "items": [],
+        "page": 2,
+        "page_size": 20,
+        "total": 0,
+        "pages": 0,
+    }
+
+    response = client.get(
+        "/api/game/users/user-1/group-messages",
+        params={"page": 2, "page_size": 20, "group_chat_id": group_id},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert core.employee_group_message_requests == [
+        ("user-1", 2, 20, group_id)
+    ]
 
 
 def test_admin_proxies_rank_department_and_promotion_pages_with_board_boundary(

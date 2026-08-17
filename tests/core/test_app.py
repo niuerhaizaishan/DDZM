@@ -10,6 +10,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from dzmm_bot.runtime.contracts import InboundMessage
 from dzmm_bot.core.schema import (
     AIActivityEventRecord,
     DirectChatRecord,
@@ -1054,6 +1055,54 @@ def test_employee_balance_ledger_endpoint_is_paginated_and_protected(
     assert client.get(
         "/internal/game/users/ledger-api/balance-transactions?page=0", headers=headers
     ).status_code == 422
+
+
+def test_employee_group_messages_can_be_filtered_by_group(
+    app_context, client, headers
+):
+    first = app_context.repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=history-a", NOW
+    )
+    second = app_context.repository.create_group_chat(
+        "乙群",
+        "https://www.aikda.com/chat?c=history-b",
+        True,
+        True,
+        True,
+        True,
+        NOW,
+    )
+    app_context.repository.create_user("history-user", "历史员工", NOW, 0)
+    for group, message_id, content in (
+        (first, "history-message-a", "甲群消息"),
+        (second, "history-message-b", "乙群消息"),
+    ):
+        app_context.repository.accept_inbound(
+            InboundMessage(
+                message_id,
+                "history-user",
+                content,
+                NOW,
+                chatroom_id=group.chatroom_id,
+            ),
+            group_chat_id=group.id,
+        )
+
+    all_messages = client.get(
+        "/internal/game/users/history-user/group-messages", headers=headers
+    )
+    filtered = client.get(
+        "/internal/game/users/history-user/group-messages",
+        params={"group_chat_id": second.id},
+        headers=headers,
+    )
+
+    assert all_messages.status_code == 200
+    assert {item["group_name"] for item in all_messages.json()["items"]} == {
+        "主群聊",
+        "乙群",
+    }
+    assert [item["content"] for item in filtered.json()["items"]] == ["乙群消息"]
 
 
 def test_game_settings_can_be_read_and_updated(client, headers):

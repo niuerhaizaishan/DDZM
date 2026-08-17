@@ -530,6 +530,20 @@ def create_app(
             lambda: core.list_balance_transactions(platform_id, page, page_size)
         )
 
+    @app.get("/api/game/users/{platform_id}/group-messages")
+    def employee_group_messages(
+        platform_id: str,
+        _: Annotated[None, Depends(authorize)],
+        page: int = Query(1, ge=1),
+        page_size: int = Query(20, ge=1, le=100),
+        group_chat_id: str | None = Query(None),
+    ) -> dict:
+        return _relay_core(
+            lambda: core.list_employee_group_messages(
+                platform_id, page, page_size, group_chat_id
+            )
+        )
+
     @app.get("/api/game/ranks")
     def game_ranks(_: Annotated[None, Depends(authorize)]) -> list[dict]:
         return _relay_core(core.list_ranks)

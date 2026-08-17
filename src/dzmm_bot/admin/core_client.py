@@ -41,6 +41,14 @@ class AdminCorePort(Protocol):
         self, platform_id: str, page: int, page_size: int
     ) -> dict: ...
 
+    def list_employee_group_messages(
+        self,
+        platform_id: str,
+        page: int,
+        page_size: int,
+        group_chat_id: str | None = None,
+    ) -> dict: ...
+
     def list_game_items(self, page: int, page_size: int) -> dict: ...
 
     def create_game_item(self, item: dict) -> dict: ...
@@ -318,6 +326,21 @@ class CoreClient:
         return self._get(
             f"/internal/game/users/{platform_id}/balance-transactions",
             params={"page": page, "page_size": page_size},
+        )
+
+    def list_employee_group_messages(
+        self,
+        platform_id: str,
+        page: int,
+        page_size: int,
+        group_chat_id: str | None = None,
+    ) -> dict:
+        params: dict[str, int | str] = {"page": page, "page_size": page_size}
+        if group_chat_id is not None:
+            params["group_chat_id"] = group_chat_id
+        return self._get(
+            f"/internal/game/users/{platform_id}/group-messages",
+            params=params,
         )
 
     def list_game_items(self, page: int, page_size: int) -> dict:

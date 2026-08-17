@@ -3132,6 +3132,7 @@ def _insert_completed_ai_turn(
     chatroom_id,
     status="completed",
     request_created_at=None,
+    group_chat_id=None,
 ):
     from dzmm_bot.core.schema import AIRequestRecord
 
@@ -3142,7 +3143,8 @@ def _insert_completed_ai_turn(
             f"@总监事 {question}",
             received_at,
             chatroom_id=chatroom_id,
-        )
+        ),
+        group_chat_id=group_chat_id,
     )
     with session_factory.begin() as session:
         session.add(
@@ -3155,6 +3157,97 @@ def _insert_completed_ai_turn(
                 completed_at=received_at if status == "completed" else None,
             )
         )
+
+
+def test_ai_history_stays_in_current_group_and_recent_evidence_crosses_groups(
+    repository, session_factory, now
+):
+    from dzmm_bot.core.schema import AIAssistantSettingsRecord, InboundRecord
+
+    first = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=ai-group-a", now
+    )
+    second = repository.create_group_chat(
+        "乙群",
+        "https://www.aikda.com/chat?c=ai-group-b",
+        True,
+        True,
+        True,
+        True,
+        now,
+    )
+    requester, _ = repository.create_user("ai-requester", "甲员工", now, 0)
+    target, _ = repository.create_user("ai-target", "乙员工", now, 0)
+    repository.get_ai_assistant_settings()
+    with session_factory.begin() as session:
+        session.get(AIAssistantSettingsRecord, 1).enabled = True
+
+    _insert_completed_ai_turn(
+        repository,
+        session_factory,
+        user=requester,
+        platform_message_id="ai-history-a",
+        question="甲群旧话题",
+        answer="甲群旧回复",
+        received_at=now + timedelta(seconds=1),
+        chatroom_id=first.chatroom_id,
+        group_chat_id=first.id,
+    )
+    _insert_completed_ai_turn(
+        repository,
+        session_factory,
+        user=requester,
+        platform_message_id="ai-history-b",
+        question="乙群旧话题",
+        answer="乙群旧回复",
+        received_at=now + timedelta(seconds=2),
+        chatroom_id=second.chatroom_id,
+        group_chat_id=second.id,
+    )
+    for group, message_id, content in (
+        (first, "ai-evidence-a", "我今天迟到了"),
+        (second, "ai-evidence-b", "我刚刚摔了一跤"),
+    ):
+        inbound, _ = repository.accept_inbound(
+            InboundMessage(
+                message_id,
+                target.platform_id,
+                content,
+                now + timedelta(seconds=3),
+                chatroom_id=group.chatroom_id,
+            ),
+            group_chat_id=group.id,
+        )
+        with session_factory.begin() as session:
+            session.get(InboundRecord, inbound.id).ai_memory_eligible = True
+
+    current_at = now + timedelta(seconds=4)
+    current, _ = repository.accept_inbound(
+        InboundMessage(
+            "ai-current-a",
+            requester.platform_id,
+            "@总监事 乙员工最近怎么样",
+            current_at,
+            chatroom_id=first.chatroom_id,
+        ),
+        group_chat_id=first.id,
+    )
+    assert repository.try_enqueue_ai_request(
+        current.id, requester.platform_id, current.content, current_at
+    ).state == "queued"
+
+    claim = repository.claim_ai_request("ai-worker", current_at, 90)
+
+    assert claim is not None
+    assert [message.content for message in claim.history_messages] == [
+        "甲群旧话题",
+        "甲群旧回复",
+    ]
+    assert "乙群旧话题" not in " ".join(
+        message.content for message in claim.history_messages
+    )
+    assert "[群聊：主群聊] [员工发言] 我今天迟到了" in claim.system_prompt
+    assert "[群聊：乙群] [员工发言] 我刚刚摔了一跤" in claim.system_prompt
 
 
 def test_ai_social_context_loads_latest_thirty_eligible_messages_and_paired_reply(

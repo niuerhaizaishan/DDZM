@@ -1178,6 +1178,23 @@ class EmployeeBalanceLedger:
     total: int
 
 
+@dataclass(frozen=True)
+class EmployeeGroupMessage:
+    id: UUID
+    group_chat_id: UUID
+    group_name: str
+    content: str
+    received_at: datetime
+
+
+@dataclass(frozen=True)
+class EmployeeGroupMessageHistory:
+    platform_id: str
+    display_name: str
+    items: tuple[EmployeeGroupMessage, ...]
+    total: int
+
+
 def balance_source_label(source: str) -> str:
     return _BALANCE_SOURCE_LABELS.get(source, source)
 
@@ -14247,6 +14264,63 @@ class CoreRepository:
                 current_balance=first["current_balance"],
                 items=items,
                 total=int(first["total"]),
+            )
+
+    def list_employee_group_messages_page(
+        self,
+        platform_id: str,
+        page: int,
+        page_size: int,
+        group_chat_id: UUID | None = None,
+    ) -> EmployeeGroupMessageHistory | None:
+        with self._session() as session:
+            user = session.scalar(
+                select(UserRecord).where(UserRecord.platform_id == platform_id)
+            )
+            if user is None:
+                return None
+            filters = (
+                InboundRecord.sender_platform_id == platform_id,
+                InboundRecord.source_type == "group",
+                *(
+                    ()
+                    if group_chat_id is None
+                    else (InboundRecord.group_chat_id == group_chat_id,)
+                ),
+            )
+            total = int(
+                session.scalar(
+                    select(func.count(InboundRecord.id)).where(*filters)
+                )
+                or 0
+            )
+            rows = session.execute(
+                select(InboundRecord, GroupChatRecord.name)
+                .outerjoin(
+                    GroupChatRecord,
+                    GroupChatRecord.id == InboundRecord.group_chat_id,
+                )
+                .where(*filters)
+                .order_by(InboundRecord.received_at.desc(), InboundRecord.id.desc())
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            )
+            return EmployeeGroupMessageHistory(
+                platform_id=user.platform_id,
+                display_name=user.display_name,
+                items=tuple(
+                    EmployeeGroupMessage(
+                        id=message.id,
+                        group_chat_id=message.group_chat_id,
+                        group_name=(
+                            group_name or message.chatroom_id or "历史主群"
+                        ),
+                        content=message.content,
+                        received_at=message.received_at,
+                    )
+                    for message, group_name in rows
+                ),
+                total=total,
             )
 
     def add_item(
