@@ -795,6 +795,14 @@ class NumberBombGameResult:
 
 
 @dataclass(frozen=True)
+class PrivateGameCandidate:
+    index: int
+    group_chat_id: UUID
+    group_name: str
+    game_id: UUID
+
+
+@dataclass(frozen=True)
 class ActiveGameplaySummary:
     game_type: str | None
     game_id: UUID | None = None
@@ -5814,14 +5822,17 @@ class CoreRepository:
                 return True
 
     def start_number_bomb_game(
-        self, platform_id: str, now: datetime
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
     ) -> NumberBombGameResult:
         now = now.astimezone(BEIJING)
         settings = self.get_number_bomb_settings()
         with self.transaction():
             with self._session() as session:
                 self._lock_gameplay_gate(session)
-                if self._active_number_bomb_game(session) is not None:
+                if self._active_number_bomb_game(session, group_chat_id) is not None:
                     return NumberBombGameResult("already_active")
                 user = session.scalar(
                     select(UserRecord)
@@ -5834,9 +5845,13 @@ class CoreRepository:
                     return NumberBombGameResult("disabled")
                 if not self._has_direct_chat(session, platform_id):
                     return NumberBombGameResult("direct_chat_required")
-                if self._active_random_event(session) is not None or self._has_active_game(session):
+                if (
+                    self._active_random_event(session, group_chat_id) is not None
+                    or self._has_active_game(session, group_chat_id)
+                ):
                     return NumberBombGameResult("multiplayer_active")
                 game = NumberBombGameRecord(
+                    group_chat_id=group_chat_id,
                     active_key="global",
                     state="signup",
                     target_player_count=0,
@@ -5869,12 +5884,15 @@ class CoreRepository:
                 )
 
     def join_number_bomb_game(
-        self, platform_id: str, now: datetime
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
     ) -> NumberBombGameResult:
         now = now.astimezone(BEIJING)
         with self.transaction():
             with self._session() as session:
-                game = self._active_number_bomb_game(session)
+                game = self._active_number_bomb_game(session, group_chat_id)
                 if game is None:
                     return NumberBombGameResult("no_game")
                 user = session.scalar(
@@ -5950,13 +5968,16 @@ class CoreRepository:
                 return NumberBombGameResult("queued", game_id=game.id)
 
     def start_number_bomb_round(
-        self, platform_id: str, now: datetime
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
     ) -> NumberBombGameResult:
         now = now.astimezone(BEIJING)
         settings = self.get_number_bomb_settings()
         with self.transaction():
             with self._session() as session:
-                game = self._active_number_bomb_game(session)
+                game = self._active_number_bomb_game(session, group_chat_id)
                 if game is None or game.state != "signup":
                     return NumberBombGameResult("cannot_start")
                 actor = session.scalar(
@@ -6008,12 +6029,15 @@ class CoreRepository:
                 return self._start_number_bomb_round(session, game, 1, 1, now)
 
     def leave_number_bomb_game(
-        self, platform_id: str, now: datetime
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
     ) -> NumberBombGameResult:
         now = now.astimezone(BEIJING)
         with self.transaction():
             with self._session() as session:
-                game = self._active_number_bomb_game(session)
+                game = self._active_number_bomb_game(session, group_chat_id)
                 if game is None:
                     return NumberBombGameResult("no_game")
                 member = session.scalar(
@@ -6048,12 +6072,16 @@ class CoreRepository:
                 return NumberBombGameResult("cannot_leave", game_id=game.id)
 
     def submit_number_bomb(
-        self, platform_id: str, number: int, now: datetime
+        self,
+        platform_id: str,
+        number: int,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
     ) -> NumberBombGameResult:
         now = now.astimezone(BEIJING)
         with self.transaction():
             with self._session() as session:
-                game = self._active_number_bomb_game(session)
+                game = self._active_number_bomb_game(session, group_chat_id)
                 if game is None:
                     return NumberBombGameResult("no_game")
                 if game.state != "collecting":
@@ -6123,13 +6151,58 @@ class CoreRepository:
                     session, game, round_record, now
                 )
 
+    def number_bomb_private_candidates(
+        self, platform_id: str
+    ) -> tuple[PrivateGameCandidate, ...]:
+        with self._session() as session:
+            rows = list(
+                session.execute(
+                    select(NumberBombGameRecord, GroupChatRecord)
+                    .join(
+                        NumberBombMemberRecord,
+                        NumberBombMemberRecord.game_id == NumberBombGameRecord.id,
+                    )
+                    .join(UserRecord, UserRecord.id == NumberBombMemberRecord.user_id)
+                    .outerjoin(
+                        GroupChatRecord,
+                        GroupChatRecord.id == NumberBombGameRecord.group_chat_id,
+                    )
+                    .where(
+                        NumberBombGameRecord.active_key == "global",
+                        NumberBombGameRecord.state == "collecting",
+                        NumberBombMemberRecord.state.in_(("current", "pending_exit")),
+                        UserRecord.platform_id == platform_id,
+                    )
+                )
+            )
+        ordered = sorted(
+            rows,
+            key=lambda row: (
+                "主群聊" if row[1] is None else row[1].name,
+                str(row[0].group_chat_id),
+            ),
+        )
+        return tuple(
+            PrivateGameCandidate(
+                index=index,
+                group_chat_id=game.group_chat_id,
+                group_name="主群聊" if group is None else group.name,
+                game_id=game.id,
+            )
+            for index, (game, group) in enumerate(ordered, 1)
+        )
+
     def skip_number_bomb_players(
-        self, platform_id: str, targets: tuple[str, ...], now: datetime
+        self,
+        platform_id: str,
+        targets: tuple[str, ...],
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
     ) -> NumberBombGameResult:
         now = now.astimezone(BEIJING)
         with self.transaction():
             with self._session() as session:
-                game = self._active_number_bomb_game(session)
+                game = self._active_number_bomb_game(session, group_chat_id)
                 if game is None:
                     return NumberBombGameResult("no_game")
                 if game.state != "collecting":
@@ -6369,12 +6442,15 @@ class CoreRepository:
         )
 
     def continue_number_bomb_game(
-        self, platform_id: str, now: datetime
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
     ) -> NumberBombGameResult:
         now = now.astimezone(BEIJING)
         with self.transaction():
             with self._session() as session:
-                game = self._active_number_bomb_game(session)
+                game = self._active_number_bomb_game(session, group_chat_id)
                 if game is None or game.state != "waiting_continue":
                     return NumberBombGameResult("cannot_continue")
                 actor = session.scalar(
@@ -6416,12 +6492,15 @@ class CoreRepository:
                 )
 
     def end_number_bomb_game(
-        self, platform_id: str, now: datetime
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
     ) -> NumberBombGameResult:
         now = now.astimezone(BEIJING)
         with self.transaction():
             with self._session() as session:
-                game = self._active_number_bomb_game(session)
+                game = self._active_number_bomb_game(session, group_chat_id)
                 if game is None:
                     return NumberBombGameResult("cannot_end")
                 member = session.scalar(
@@ -6595,11 +6674,15 @@ class CoreRepository:
             round_number=game.round_number or None,
         )
 
-    def run_number_bomb_jobs(self, now: datetime) -> list[str]:
+    def run_number_bomb_jobs(
+        self,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> list[str]:
         now = now.astimezone(BEIJING)
         with self.transaction():
             with self._session() as session:
-                game = self._active_number_bomb_game(session)
+                game = self._active_number_bomb_game(session, group_chat_id)
                 if game is None:
                     return []
                 if game.state == "signup":
@@ -6687,7 +6770,11 @@ class CoreRepository:
             return render_template(definition, definition.default, context)
 
     def start_undercover_signup(
-        self, platform_id: str, player_count: int, now: datetime
+        self,
+        platform_id: str,
+        player_count: int,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
     ) -> UndercoverGameResult:
         now = now.astimezone(BEIJING)
         if player_count not in range(4, 9):
@@ -6703,15 +6790,19 @@ class CoreRepository:
                     return UndercoverGameResult("disabled")
                 if not self._has_direct_chat(session, platform_id):
                     return UndercoverGameResult("direct_chat_required")
-                if self._active_random_event(session) is not None or self._active_memory_duel(session):
+                if (
+                    self._active_random_event(session, group_chat_id) is not None
+                    or self._active_memory_duel(session, group_chat_id)
+                ):
                     return UndercoverGameResult("multiplayer_active")
-                if self._active_blame_game(session) is not None:
+                if self._active_blame_game(session, group_chat_id) is not None:
                     return UndercoverGameResult("multiplayer_active")
-                if self._active_number_bomb_game(session) is not None:
+                if self._active_number_bomb_game(session, group_chat_id) is not None:
                     return UndercoverGameResult("multiplayer_active")
-                if self._active_undercover_session(session) is not None:
+                if self._active_undercover_session(session, group_chat_id) is not None:
                     return UndercoverGameResult("already_active")
                 session_record = UndercoverSessionRecord(
+                    group_chat_id=group_chat_id,
                     state="signup",
                     active_key=_UNDERCOVER_ACTIVE_KEY,
                     target_player_count=player_count,
@@ -6737,11 +6828,18 @@ class CoreRepository:
                     player_count=1,
                 )
 
-    def join_undercover(self, platform_id: str, now: datetime) -> UndercoverGameResult:
+    def join_undercover(
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> UndercoverGameResult:
         now = now.astimezone(BEIJING)
         with self.transaction():
             with self._session() as session:
-                session_record = self._active_undercover_session(session)
+                session_record = self._active_undercover_session(
+                    session, group_chat_id
+                )
                 if session_record is None:
                     return UndercoverGameResult("no_signup")
                 user = self._undercover_user(session, platform_id)
@@ -6847,11 +6945,18 @@ class CoreRepository:
                     session, session_record, game, player, delivered, now
                 )
 
-    def start_undercover_vote(self, platform_id: str, now: datetime) -> UndercoverGameResult:
+    def start_undercover_vote(
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> UndercoverGameResult:
         now = now.astimezone(BEIJING)
         with self.transaction():
             with self._session() as session:
-                session_record, game, player = self._undercover_active_player(session, platform_id)
+                session_record, game, player = self._undercover_active_player(
+                    session, platform_id, group_chat_id
+                )
                 if session_record is None or game is None or player is None:
                     return UndercoverGameResult("cannot_start_vote")
                 if game.state not in ("speaking", "tie_break") or player.state != "alive":
@@ -6865,12 +6970,18 @@ class CoreRepository:
                 return self._undercover_game_result(session, game, "voting")
 
     def cast_undercover_vote(
-        self, platform_id: str, target_seat: int, now: datetime
+        self,
+        platform_id: str,
+        target_seat: int,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
     ) -> UndercoverGameResult:
         now = now.astimezone(BEIJING)
         with self.transaction():
             with self._session() as session:
-                session_record, game, voter = self._undercover_active_player(session, platform_id)
+                session_record, game, voter = self._undercover_active_player(
+                    session, platform_id, group_chat_id
+                )
                 if session_record is None or game is None or voter is None:
                     return UndercoverGameResult("cannot_vote")
                 if game.state in ("speaking", "tie_break") and voter.state == "alive":
@@ -6957,13 +7068,17 @@ class CoreRepository:
                 )
 
     def skip_undercover_vote(
-        self, platform_id: str, target_seat: int, now: datetime
+        self,
+        platform_id: str,
+        target_seat: int,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
     ) -> UndercoverGameResult:
         now = now.astimezone(BEIJING)
         with self.transaction():
             with self._session() as session:
                 session_record, game, actor = self._undercover_active_player(
-                    session, platform_id
+                    session, platform_id, group_chat_id
                 )
                 if session_record is None or game is None or actor is None:
                     return UndercoverGameResult("cannot_skip_vote")
@@ -7042,9 +7157,13 @@ class CoreRepository:
                     ),
                 )
 
-    def undercover_session_summary(self) -> UndercoverSessionSummary:
+    def undercover_session_summary(
+        self, group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID
+    ) -> UndercoverSessionSummary:
         with self._session() as session:
-            session_record = self._active_undercover_session(session)
+            session_record = self._active_undercover_session(
+                session, group_chat_id
+            )
             if session_record is None:
                 return UndercoverSessionSummary(None)
             game = self._undercover_latest_game(session, session_record.id)
@@ -7104,11 +7223,18 @@ class CoreRepository:
                 players=tuple(players),
             )
 
-    def continue_undercover(self, platform_id: str, now: datetime) -> UndercoverGameResult:
+    def continue_undercover(
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> UndercoverGameResult:
         now = now.astimezone(BEIJING)
         with self.transaction():
             with self._session() as session:
-                session_record = self._active_undercover_session(session)
+                session_record = self._active_undercover_session(
+                    session, group_chat_id
+                )
                 user = self._undercover_user(session, platform_id)
                 if session_record is None or user is None or session_record.state != "awaiting_continue":
                     return UndercoverGameResult("cannot_continue")
@@ -7176,7 +7302,13 @@ class CoreRepository:
                         session_record.state = "closed"
                         session_record.active_key = None
                         session_record.finished_at = now
-                        self.enqueue_system_outbound("【谁是卧底】报名超时，本局已关闭。")
+                        self.enqueue_system_outbound(
+                            "【谁是卧底】报名超时，本局已关闭。",
+                            group_chat_id=session_record.group_chat_id,
+                            destination_chatroom_id=self.group_chat_destination(
+                                session_record.group_chat_id
+                            ),
+                        )
                         results.append("signup_expired")
                         continue
                     if (
@@ -7187,7 +7319,13 @@ class CoreRepository:
                         session_record.state = "closed"
                         session_record.active_key = None
                         session_record.finished_at = now
-                        self.enqueue_system_outbound("【谁是卧底】等待下一局超时，本局已关闭。")
+                        self.enqueue_system_outbound(
+                            "【谁是卧底】等待下一局超时，本局已关闭。",
+                            group_chat_id=session_record.group_chat_id,
+                            destination_chatroom_id=self.group_chat_destination(
+                                session_record.group_chat_id
+                            ),
+                        )
                         results.append("expired")
                         continue
                     game = self._undercover_latest_game(session, session_record.id)
@@ -7210,13 +7348,20 @@ class CoreRepository:
                             base=result,
                             abstained_labels=abstained_labels,
                         )
-                        self._enqueue_undercover_vote_result(session, result, now)
+                        self._enqueue_undercover_vote_result(
+                            session, result, now, session_record.group_chat_id
+                        )
                         results.append(result.status)
         return results
 
     def _enqueue_undercover_vote_result(
-        self, session: Session, result: UndercoverGameResult, now: datetime
+        self,
+        session: Session,
+        result: UndercoverGameResult,
+        now: datetime,
+        group_chat_id: UUID,
     ) -> None:
+        destination_chatroom_id = self.group_chat_destination(group_chat_id)
         if result.abstained_labels:
             labels = "、".join(result.abstained_labels)
             self.enqueue_system_outbound(
@@ -7225,15 +7370,23 @@ class CoreRepository:
                     "timeout_abstention",
                     now,
                     {"{弃票玩家列表}": labels},
-                )
+                ),
+                group_chat_id=group_chat_id,
+                destination_chatroom_id=destination_chatroom_id,
             )
         if result.status == "vote_expired":
-            self.enqueue_system_outbound("【谁是卧底】本轮无人投票，继续自由发言。")
+            self.enqueue_system_outbound(
+                "【谁是卧底】本轮无人投票，继续自由发言。",
+                group_chat_id=group_chat_id,
+                destination_chatroom_id=destination_chatroom_id,
+            )
             return
         if result.status == "tied":
             seats = "、".join(f"{seat}号" for seat in result.tied_seats)
             self.enqueue_system_outbound(
-                f"【谁是卧底】{seats}票数并列，请补充发言后重新投票。"
+                f"【谁是卧底】{seats}票数并列，请补充发言后重新投票。",
+                group_chat_id=group_chat_id,
+                destination_chatroom_id=destination_chatroom_id,
             )
             return
         if result.status not in {"eliminated", "settled"} or result.game_id is None:
@@ -7245,7 +7398,9 @@ class CoreRepository:
                     "settled",
                     now,
                     undercover_settlement_template_values(result),
-                )
+                ),
+                group_chat_id=group_chat_id,
+                destination_chatroom_id=destination_chatroom_id,
             )
             return
         row = session.execute(
@@ -7260,7 +7415,11 @@ class CoreRepository:
             return
         message = f"【谁是卧底】{row[0]} 出局，身份：{_undercover_role_label(row[1])}。"
         message += "请继续描述。"
-        self.enqueue_system_outbound(message)
+        self.enqueue_system_outbound(
+            message,
+            group_chat_id=group_chat_id,
+            destination_chatroom_id=destination_chatroom_id,
+        )
 
     def _undercover_automatic_message(
         self,
@@ -7278,11 +7437,16 @@ class CoreRepository:
         except ValueError:
             return render_template(definition, definition.default, context)
 
-    def end_undercover(self, platform_id: str, now: datetime) -> UndercoverGameResult:
+    def end_undercover(
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> UndercoverGameResult:
         now = now.astimezone(BEIJING)
         with self.transaction():
             with self._session() as session:
-                signup = self._active_undercover_session(session)
+                signup = self._active_undercover_session(session, group_chat_id)
                 if signup is not None and signup.state == "signup":
                     user = self._undercover_user(session, platform_id)
                     member = None if user is None else session.scalar(
@@ -7299,7 +7463,9 @@ class CoreRepository:
                         signup.active_key = None
                         signup.finished_at = now
                         return UndercoverGameResult("ended", session_id=signup.id)
-                session_record, game, player = self._undercover_active_player(session, platform_id)
+                session_record, game, player = self._undercover_active_player(
+                    session, platform_id, group_chat_id
+                )
                 if session_record is None or game is None or player is None:
                     return UndercoverGameResult("cannot_end")
                 if player.state not in ("alive", "eliminated"):
@@ -7314,11 +7480,18 @@ class CoreRepository:
                 self._record_undercover_facts(session, game, None, "ended", now)
                 return UndercoverGameResult("ended", session_id=session_record.id, game_id=game.id)
 
-    def leave_undercover(self, platform_id: str, now: datetime) -> UndercoverGameResult:
+    def leave_undercover(
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> UndercoverGameResult:
         now = now.astimezone(BEIJING)
         with self.transaction():
             with self._session() as session:
-                session_record = self._active_undercover_session(session)
+                session_record = self._active_undercover_session(
+                    session, group_chat_id
+                )
                 user = self._undercover_user(session, platform_id)
                 if session_record is None or user is None:
                     return UndercoverGameResult("cannot_leave")
@@ -7405,37 +7578,69 @@ class CoreRepository:
             .with_for_update()
         )
 
-    def _active_memory_duel(self, session: Session) -> bool:
+    def _active_memory_duel(
+        self, session: Session, group_chat_id: UUID | None = None
+    ) -> bool:
         return bool(
             session.scalar(
                 select(exists().where(
                     MemoryAssessmentGameRecord.active_key == "global",
                     MemoryAssessmentGameRecord.mode == "duel",
+                    *(
+                        ()
+                        if group_chat_id is None
+                        else (MemoryAssessmentGameRecord.group_chat_id == group_chat_id,)
+                    ),
                 ))
             )
         )
 
-    def _has_active_game(self, session: Session) -> bool:
+    def _has_active_game(
+        self, session: Session, group_chat_id: UUID | None = None
+    ) -> bool:
         return bool(
             session.scalar(
-                select(exists().where(MemoryAssessmentGameRecord.active_key == "global"))
+                select(exists().where(
+                    MemoryAssessmentGameRecord.active_key == "global",
+                    *(() if group_chat_id is None else (
+                        MemoryAssessmentGameRecord.group_chat_id == group_chat_id,
+                    )),
+                ))
             )
             or session.scalar(
-                select(exists().where(HideAndSeekGameRecord.state == "selecting"))
+                select(exists().where(
+                    HideAndSeekGameRecord.state == "selecting",
+                    *(() if group_chat_id is None else (
+                        HideAndSeekGameRecord.group_chat_id == group_chat_id,
+                    )),
+                ))
             )
             or session.scalar(
                 select(
                     exists().where(
                         UndercoverSessionRecord.active_key == _UNDERCOVER_ACTIVE_KEY
+                        , *(() if group_chat_id is None else (
+                            UndercoverSessionRecord.group_chat_id == group_chat_id,
+                        ))
                     )
                 )
             )
             or session.scalar(
-                select(exists().where(BlameGameRecord.active_key == "global"))
+                select(exists().where(
+                    BlameGameRecord.active_key == "global",
+                    *(() if group_chat_id is None else (
+                        BlameGameRecord.group_chat_id == group_chat_id,
+                    )),
+                ))
             )
             or session.scalar(
                 select(
-                    exists().where(NumberBombGameRecord.active_key == "global")
+                    exists().where(
+                        NumberBombGameRecord.active_key == "global",
+                        *(() if group_chat_id is None else (
+                            NumberBombGameRecord.group_chat_id == group_chat_id,
+                        )),
+                    )
                 )
             )
         )
@@ -7665,13 +7870,16 @@ class CoreRepository:
         )
 
     def _undercover_active_player(
-        self, session: Session, platform_id: str
+        self,
+        session: Session,
+        platform_id: str,
+        group_chat_id: UUID | None = None,
     ) -> tuple[
         UndercoverSessionRecord | None,
         UndercoverGameRecord | None,
         UndercoverGamePlayerRecord | None,
     ]:
-        session_record = self._active_undercover_session(session)
+        session_record = self._active_undercover_session(session, group_chat_id)
         if session_record is None:
             return None, None, None
         game = self._undercover_latest_game(session, session_record.id)
@@ -9173,7 +9381,11 @@ class CoreRepository:
             return True
 
     def start_blame_game(
-        self, platform_id: str, player_count: int, now: datetime
+        self,
+        platform_id: str,
+        player_count: int,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
     ) -> BlameGameResult:
         now = now.astimezone(BEIJING)
         if player_count not in range(2, 11):
@@ -9190,16 +9402,16 @@ class CoreRepository:
                     return BlameGameResult("not_joined")
                 if not settings.enabled:
                     return BlameGameResult("disabled")
-                if self._active_blame_game(session) is not None:
+                if self._active_blame_game(session, group_chat_id) is not None:
                     return BlameGameResult("already_active")
                 user = session.get(UserRecord, user.id, with_for_update=True)
                 if user is None:
                     return BlameGameResult("not_joined")
                 if (
-                    self._active_random_event(session) is not None
-                    or self._active_memory_duel(session)
-                    or self._active_undercover_session(session) is not None
-                    or self._active_number_bomb_game(session) is not None
+                    self._active_random_event(session, group_chat_id) is not None
+                    or self._active_memory_duel(session, group_chat_id)
+                    or self._active_undercover_session(session, group_chat_id) is not None
+                    or self._active_number_bomb_game(session, group_chat_id) is not None
                 ):
                     return BlameGameResult("multiplayer_active")
                 if session.scalar(
@@ -9230,6 +9442,7 @@ class CoreRepository:
                     )
                     session.add(daily)
                 game = BlameGameRecord(
+                    group_chat_id=group_chat_id,
                     state="signup",
                     active_key="global",
                     creator_user_id=user.id,
@@ -9260,11 +9473,16 @@ class CoreRepository:
                     target_player_count=player_count,
                 )
 
-    def join_blame_game(self, platform_id: str, now: datetime) -> BlameGameResult:
+    def join_blame_game(
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> BlameGameResult:
         now = now.astimezone(BEIJING)
         with self.transaction():
             with self._session() as session:
-                game = self._active_blame_game(session)
+                game = self._active_blame_game(session, group_chat_id)
                 if game is None:
                     return BlameGameResult("no_game")
                 due = self._resolve_due_blame_game(session, game, now)
@@ -9326,11 +9544,16 @@ class CoreRepository:
                     )
                 return self._start_blame_game_round(session, game, players, now)
 
-    def leave_blame_game(self, platform_id: str, now: datetime) -> BlameGameResult:
+    def leave_blame_game(
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> BlameGameResult:
         now = now.astimezone(BEIJING)
         with self.transaction():
             with self._session() as session:
-                game = self._active_blame_game(session)
+                game = self._active_blame_game(session, group_chat_id)
                 if game is None:
                     return BlameGameResult("no_game")
                 due = self._resolve_due_blame_game(session, game, now)
@@ -9373,11 +9596,12 @@ class CoreRepository:
         target_number: int,
         reason: str,
         now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
     ) -> BlameGameResult:
         now = now.astimezone(BEIJING)
         with self.transaction():
             with self._session() as session:
-                game = self._active_blame_game(session)
+                game = self._active_blame_game(session, group_chat_id)
                 if game is None or game.state != "active":
                     return BlameGameResult("no_game")
                 due = self._resolve_due_blame_game(session, game, now)
@@ -9476,11 +9700,16 @@ class CoreRepository:
                     temperature=_blame_temperature(game, now),
                 )
 
-    def end_blame_game(self, platform_id: str, now: datetime) -> BlameGameResult:
+    def end_blame_game(
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> BlameGameResult:
         now = now.astimezone(BEIJING)
         with self.transaction():
             with self._session() as session:
-                game = self._active_blame_game(session)
+                game = self._active_blame_game(session, group_chat_id)
                 if game is None:
                     return BlameGameResult("no_game")
                 due = self._resolve_due_blame_game(session, game, now)
@@ -9502,11 +9731,15 @@ class CoreRepository:
                     return BlameGameResult("not_participant", game_id=game.id)
                 return self._cancel_blame_game(session, game, "participant_ended", now)
 
-    def admin_end_blame_game(self, now: datetime) -> BlameGameResult:
+    def admin_end_blame_game(
+        self,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> BlameGameResult:
         now = now.astimezone(BEIJING)
         with self.transaction():
             with self._session() as session:
-                game = self._active_blame_game(session)
+                game = self._active_blame_game(session, group_chat_id)
                 if game is None:
                     return BlameGameResult("no_game")
                 due = self._resolve_due_blame_game(session, game, now)
@@ -9514,13 +9747,17 @@ class CoreRepository:
                     return due
                 return self._cancel_blame_game(session, game, "admin_ended", now)
 
-    def run_blame_game_jobs(self, now: datetime) -> list[str]:
+    def run_blame_game_jobs(
+        self,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> list[str]:
         now = now.astimezone(BEIJING)
         results: list[str] = []
         with self.transaction():
             with self._session() as session:
                 self._lock_gameplay_gate(session)
-                game = self._active_blame_game(session)
+                game = self._active_blame_game(session, group_chat_id)
                 if game is None:
                     return results
                 due = self._resolve_due_blame_game(session, game, now, notify=True)
@@ -9541,7 +9778,11 @@ class CoreRepository:
                     self.enqueue_system_outbound(
                         self._blame_automatic_message(
                             _BLAME_TEMPERATURE_SCENARIOS[temperature], now
-                        )
+                        ),
+                        group_chat_id=game.group_chat_id,
+                        destination_chatroom_id=self.group_chat_destination(
+                            game.group_chat_id
+                        ),
                     )
                     results.append("temperature_changed")
                 return results
@@ -9570,7 +9811,11 @@ class CoreRepository:
             game.finished_at = now
             if notify:
                 self.enqueue_system_outbound(
-                    self._blame_automatic_message("signup_expired", now)
+                    self._blame_automatic_message("signup_expired", now),
+                    group_chat_id=game.group_chat_id,
+                    destination_chatroom_id=self.group_chat_destination(
+                        game.group_chat_id
+                    ),
                 )
             return BlameGameResult(
                 "signup_expired",
@@ -9597,7 +9842,11 @@ class CoreRepository:
             self.enqueue_system_outbound(
                 self._blame_automatic_message(
                     scenario, now, blame_settlement_template_values(settled)
-                )
+                ),
+                group_chat_id=game.group_chat_id,
+                destination_chatroom_id=self.group_chat_destination(
+                    game.group_chat_id
+                ),
             )
         return settled
 
@@ -9733,11 +9982,18 @@ class CoreRepository:
             target_player_count=game.target_player_count,
         )
 
-    def blame_game_summary(self, now: datetime | None = None) -> BlameGameSummary:
+    def blame_game_summary(
+        self,
+        now: datetime | None = None,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> BlameGameSummary:
         current_time = (now or datetime.now(BEIJING)).astimezone(BEIJING)
         with self._session() as session:
             game = session.scalar(
-                select(BlameGameRecord).where(BlameGameRecord.active_key == "global")
+                select(BlameGameRecord).where(
+                    BlameGameRecord.active_key == "global",
+                    BlameGameRecord.group_chat_id == group_chat_id,
+                )
             )
             if game is None:
                 return BlameGameSummary(None)
@@ -11791,9 +12047,16 @@ class CoreRepository:
             self._settle_activity_rewards(now)
             self._enqueue_due_income_reports(now)
             self.run_undercover_jobs(now)
-            self.run_blame_game_jobs(now)
-            for message in self.run_number_bomb_jobs(now):
-                self.enqueue_system_outbound(message)
+            for group_chat_id in group_ids:
+                self.run_blame_game_jobs(now, group_chat_id)
+                for message in self.run_number_bomb_jobs(now, group_chat_id):
+                    self.enqueue_system_outbound(
+                        message,
+                        group_chat_id=group_chat_id,
+                        destination_chatroom_id=self.group_chat_destination(
+                            group_chat_id
+                        ),
+                    )
             self.run_random_event_jobs(now)
         if should_backfill:
             self._current_day_history_backfilled = now.date()

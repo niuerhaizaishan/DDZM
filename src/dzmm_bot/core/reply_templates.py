@@ -316,6 +316,8 @@ TEMPLATE_DEFINITIONS = (
     TemplateDefinition("/报数", "group_only", "仅限私聊", "请私聊总监事发送 /报数 1-100，群内报数不会生效。", ("{日期}",)),
     TemplateDefinition("/报数", "submitted", "报数成功", "报数成功，本轮数字已锁定。", ("{日期}",)),
     TemplateDefinition("/报数", "invalid_number", "数字无效", "请发送 /报数 1-100，数字必须是范围内的整数。", ("{日期}",)),
+    TemplateDefinition("/报数", "ambiguous_group", "请选择群聊", "你同时参加了多个群的蹦蹦数字炸弹，请发送 /报数 群序号 数字：\n{群聊列表}", ("{群聊列表}", "{日期}")),
+    TemplateDefinition("/报数", "invalid_group", "群序号无效", "群序号无效，请按最新列表发送 /报数 群序号 数字：\n{群聊列表}", ("{群聊列表}", "{日期}")),
     TemplateDefinition("/报数", "duplicate", "重复报数", "你本轮已经报过数，不能修改。", ("{日期}",)),
     TemplateDefinition("/报数", "not_participant", "非参与者", "你不是当前轮参与者，无法报数。", ("{日期}",)),
     TemplateDefinition("/报数", "not_collecting", "未收数", "当前没有正在收集数字的蹦蹦数字炸弹轮次。", ("{日期}",)),

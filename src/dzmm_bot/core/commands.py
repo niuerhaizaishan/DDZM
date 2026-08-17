@@ -88,7 +88,7 @@ class GroupCommandHandler:
             return self._join(message.sender_platform_id, content, received_at)
         if command == "/蹦蹦数字炸弹":
             return self._number_bomb_start(
-                message.sender_platform_id, content, received_at
+                message.sender_platform_id, content, received_at, group_chat_id
             )
         if command == "/开始":
             summary = self._repository.active_gameplay_summary(
@@ -98,7 +98,7 @@ class GroupCommandHandler:
             )
             if summary.game_type == "number_bomb":
                 return self._number_bomb_manual_start(
-                    message.sender_platform_id, received_at
+                    message.sender_platform_id, received_at, group_chat_id
                 )
             return self._reply("/开始", "no_current_game", received_at)
         if command == "/报数":
@@ -113,29 +113,43 @@ class GroupCommandHandler:
             )
             if summary.game_type == "undercover":
                 return self._undercover_skip(
-                    message.sender_platform_id, content, received_at
+                    message.sender_platform_id, content, received_at, group_chat_id
                 )
             if summary.game_type == "number_bomb":
                 return self._number_bomb_skip(
-                    message.sender_platform_id, content, received_at
+                    message.sender_platform_id, content, received_at, group_chat_id
                 )
             if summary.game_type == "conflict":
                 return self._reply("/当前游戏", "conflict", received_at)
             return self._reply("/跳过", "no_current_game", received_at)
         if command == "/甩锅游戏":
-            return self._blame_start(message.sender_platform_id, content, received_at)
+            return self._blame_start(
+                message.sender_platform_id, content, received_at, group_chat_id
+            )
         if command == "/甩锅":
-            return self._blame_transfer(message.sender_platform_id, content, received_at)
+            return self._blame_transfer(
+                message.sender_platform_id, content, received_at, group_chat_id
+            )
         if command == "/退出甩锅":
-            return self._blame_leave(message.sender_platform_id, received_at)
+            return self._blame_leave(
+                message.sender_platform_id, received_at, group_chat_id
+            )
         if command == "/谁是卧底":
-            return self._undercover_start(message.sender_platform_id, content, received_at)
+            return self._undercover_start(
+                message.sender_platform_id, content, received_at, group_chat_id
+            )
         if command == "/开始投票":
-            return self._undercover_start_vote(message.sender_platform_id, received_at)
+            return self._undercover_start_vote(
+                message.sender_platform_id, received_at, group_chat_id
+            )
         if command == "/投票":
-            return self._undercover_vote(message.sender_platform_id, content, received_at)
+            return self._undercover_vote(
+                message.sender_platform_id, content, received_at, group_chat_id
+            )
         if command == "/退出谁是卧底":
-            return self._undercover_leave(message.sender_platform_id, received_at)
+            return self._undercover_leave(
+                message.sender_platform_id, received_at, group_chat_id
+            )
         if command == "/结束游戏":
             summary = self._repository.active_gameplay_summary(
                 message.sender_platform_id,
@@ -159,11 +173,17 @@ class GroupCommandHandler:
             ):
                 return None
             if summary.game_type == "number_bomb":
-                return self._number_bomb_end(message.sender_platform_id, received_at)
+                return self._number_bomb_end(
+                    message.sender_platform_id, received_at, group_chat_id
+                )
             if summary.game_type == "blame_bomb":
-                return self._blame_end(message.sender_platform_id, received_at)
+                return self._blame_end(
+                    message.sender_platform_id, received_at, group_chat_id
+                )
             if summary.game_type == "undercover":
-                return self._undercover_end(message.sender_platform_id, received_at)
+                return self._undercover_end(
+                    message.sender_platform_id, received_at, group_chat_id
+                )
             if summary.game_type == "memory_duel" and summary.state == "waiting_opponent":
                 return self._memory_assessment_cancel_waiting(
                     "/结束游戏",
@@ -237,11 +257,17 @@ class GroupCommandHandler:
                 group_chat_id,
             )
             if summary.game_type == "number_bomb":
-                return self._number_bomb_join(message.sender_platform_id, received_at)
+                return self._number_bomb_join(
+                    message.sender_platform_id, received_at, group_chat_id
+                )
             if summary.game_type == "blame_bomb":
-                return self._blame_join(message.sender_platform_id, received_at)
+                return self._blame_join(
+                    message.sender_platform_id, received_at, group_chat_id
+                )
             if summary.game_type == "undercover":
-                return self._undercover_join(message.sender_platform_id, received_at)
+                return self._undercover_join(
+                    message.sender_platform_id, received_at, group_chat_id
+                )
             if summary.game_type == "conflict":
                 return self._reply("/当前游戏", "conflict", received_at)
             return self._event_join(
@@ -254,11 +280,17 @@ class GroupCommandHandler:
                 group_chat_id,
             )
             if summary.game_type == "number_bomb":
-                return self._number_bomb_leave(message.sender_platform_id, received_at)
+                return self._number_bomb_leave(
+                    message.sender_platform_id, received_at, group_chat_id
+                )
             if summary.game_type == "blame_bomb":
-                return self._blame_leave(message.sender_platform_id, received_at)
+                return self._blame_leave(
+                    message.sender_platform_id, received_at, group_chat_id
+                )
             if summary.game_type == "undercover":
-                return self._undercover_leave(message.sender_platform_id, received_at)
+                return self._undercover_leave(
+                    message.sender_platform_id, received_at, group_chat_id
+                )
             if summary.game_type == "memory_duel":
                 if summary.state == "waiting_opponent":
                     return self._memory_assessment_cancel_waiting(
@@ -289,10 +321,12 @@ class GroupCommandHandler:
             )
             if summary.game_type == "number_bomb":
                 return self._number_bomb_continue(
-                    message.sender_platform_id, received_at
+                    message.sender_platform_id, received_at, group_chat_id
                 )
             if summary.game_type == "undercover":
-                return self._undercover_continue(message.sender_platform_id, received_at)
+                return self._undercover_continue(
+                    message.sender_platform_id, received_at, group_chat_id
+                )
             if summary.game_type == "conflict":
                 return self._reply("/当前游戏", "conflict", received_at)
             return self._memory_assessment_continue(
@@ -961,12 +995,17 @@ class GroupCommandHandler:
             },
         )
 
-    def _undercover_start(self, platform_id: str, content: str, received_at) -> str:
+    def _undercover_start(
+        self, platform_id: str, content: str, received_at, group_chat_id=None
+    ) -> str:
         parts = content.split()
         if len(parts) != 2 or not parts[1].isdigit():
             return self._reply("/谁是卧底", "usage", received_at)
         result = self._repository.start_undercover_signup(
-            platform_id, int(parts[1]), received_at
+            platform_id,
+            int(parts[1]),
+            received_at,
+            **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
         )
         if result.status == "signup_started":
             return self._reply(
@@ -985,12 +1024,19 @@ class GroupCommandHandler:
         }
         return self._reply("/谁是卧底", scenarios[result.status], received_at)
 
-    def _blame_start(self, platform_id: str, content: str, received_at) -> str:
+    def _blame_start(
+        self, platform_id: str, content: str, received_at, group_chat_id=None
+    ) -> str:
         parts = content.split()
         if len(parts) != 2 or not parts[1].isdigit():
             return self._reply("/甩锅游戏", "usage", received_at)
         player_count = int(parts[1])
-        result = self._repository.start_blame_game(platform_id, player_count, received_at)
+        result = self._repository.start_blame_game(
+            platform_id,
+            player_count,
+            received_at,
+            **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
+        )
         if result.status == "signup_started":
             user = self._repository.find_user(platform_id)
             return self._reply(
@@ -1009,11 +1055,15 @@ class GroupCommandHandler:
         )
 
     def _number_bomb_start(
-        self, platform_id: str, content: str, received_at
+        self, platform_id: str, content: str, received_at, group_chat_id=None
     ) -> str:
         if content != "/蹦蹦数字炸弹":
             return self._reply("/蹦蹦数字炸弹", "usage", received_at)
-        result = self._repository.start_number_bomb_game(platform_id, received_at)
+        result = self._repository.start_number_bomb_game(
+            platform_id,
+            received_at,
+            **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
+        )
         if result.status == "signup_started":
             user = self._repository.find_user(platform_id)
             return self._reply(
@@ -1032,9 +1082,13 @@ class GroupCommandHandler:
         return self._reply("/蹦蹦数字炸弹", scenario, received_at)
 
     def _number_bomb_manual_start(
-        self, platform_id: str, received_at
+        self, platform_id: str, received_at, group_chat_id=None
     ) -> list[CommandReply] | str:
-        result = self._repository.start_number_bomb_round(platform_id, received_at)
+        result = self._repository.start_number_bomb_round(
+            platform_id,
+            received_at,
+            **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
+        )
         if result.status == "started":
             return self._number_bomb_round_started_replies(
                 "/开始", result, received_at
@@ -1054,8 +1108,14 @@ class GroupCommandHandler:
             values["{当前人数}"] = result.player_count
         return self._reply("/开始", scenario, received_at, values)
 
-    def _number_bomb_join(self, platform_id: str, received_at) -> str:
-        result = self._repository.join_number_bomb_game(platform_id, received_at)
+    def _number_bomb_join(
+        self, platform_id: str, received_at, group_chat_id=None
+    ) -> str:
+        result = self._repository.join_number_bomb_game(
+            platform_id,
+            received_at,
+            **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
+        )
         if result.status == "joined":
             user = self._repository.find_user(platform_id)
             return self._reply(
@@ -1079,8 +1139,14 @@ class GroupCommandHandler:
             received_at,
         )
 
-    def _number_bomb_leave(self, platform_id: str, received_at) -> str:
-        result = self._repository.leave_number_bomb_game(platform_id, received_at)
+    def _number_bomb_leave(
+        self, platform_id: str, received_at, group_chat_id=None
+    ) -> str:
+        result = self._repository.leave_number_bomb_game(
+            platform_id,
+            received_at,
+            **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
+        )
         scenarios = {
             "signup_left": "number_bomb_signup_left",
             "exit_queued": "number_bomb_exit_queued",
@@ -1093,9 +1159,13 @@ class GroupCommandHandler:
         )
 
     def _number_bomb_continue(
-        self, platform_id: str, received_at
+        self, platform_id: str, received_at, group_chat_id=None
     ) -> str | list[CommandReply]:
-        result = self._repository.continue_number_bomb_game(platform_id, received_at)
+        result = self._repository.continue_number_bomb_game(
+            platform_id,
+            received_at,
+            **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
+        )
         if result.status == "started":
             return self._number_bomb_round_started_replies(
                 "/继续", result, received_at
@@ -1108,8 +1178,14 @@ class GroupCommandHandler:
             received_at,
         )
 
-    def _number_bomb_end(self, platform_id: str, received_at) -> str:
-        result = self._repository.end_number_bomb_game(platform_id, received_at)
+    def _number_bomb_end(
+        self, platform_id: str, received_at, group_chat_id=None
+    ) -> str:
+        result = self._repository.end_number_bomb_game(
+            platform_id,
+            received_at,
+            **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
+        )
         return self._reply(
             "/结束游戏",
             "number_bomb_ended"
@@ -1122,9 +1198,63 @@ class GroupCommandHandler:
         self, message: InboundMessage, content: str, received_at
     ) -> list[CommandReply]:
         parts = content.split()
-        number = int(parts[1]) if len(parts) == 2 and parts[1].isdigit() else 0
+        candidates = self._repository.number_bomb_private_candidates(
+            message.sender_platform_id
+        )
+        candidate_lines = "\n".join(
+            f"{candidate.index}. {candidate.group_name}"
+            for candidate in candidates
+        )
+        if len(candidates) > 1 and len(parts) != 3:
+            return [CommandReply(
+                self._reply(
+                    "/报数", "ambiguous_group", received_at,
+                    {"{群聊列表}": candidate_lines},
+                ),
+                destination_chatroom_id=message.chatroom_id,
+                delivery_kind="number_bomb_private",
+            )]
+        selected = None
+        if len(parts) == 3:
+            if not parts[1].isdigit():
+                selected = None
+            else:
+                selected = next(
+                    (
+                        candidate
+                        for candidate in candidates
+                        if candidate.index == int(parts[1])
+                    ),
+                    None,
+                )
+            if selected is None:
+                return [CommandReply(
+                    self._reply(
+                        "/报数", "invalid_group", received_at,
+                        {"{群聊列表}": candidate_lines or "暂无可选群聊"},
+                    ),
+                    destination_chatroom_id=message.chatroom_id,
+                    delivery_kind="number_bomb_private",
+                )]
+            number_text = parts[2]
+        else:
+            selected = candidates[0] if len(candidates) == 1 else None
+            number_text = parts[1] if len(parts) == 2 else ""
+        number = int(number_text) if number_text.isdigit() else 0
         result = self._repository.submit_number_bomb(
-            message.sender_platform_id, number, received_at
+            message.sender_platform_id,
+            number,
+            received_at,
+            **(
+                {}
+                if selected is None
+                else {"group_chat_id": selected.group_chat_id}
+            ),
+        )
+        group_destination = (
+            None
+            if selected is None
+            else self._repository.group_chat_destination(selected.group_chat_id)
         )
         scenarios = {
             "submitted": "submitted",
@@ -1155,6 +1285,8 @@ class GroupCommandHandler:
                         {"{结果正文}": result.public_message},
                     ),
                     force_group_destination=True,
+                    group_chat_id=(None if selected is None else selected.group_chat_id),
+                    destination_chatroom_id=group_destination,
                 )
             )
         if result.status == "invalid_round":
@@ -1162,13 +1294,16 @@ class GroupCommandHandler:
         return replies
 
     def _number_bomb_skip(
-        self, platform_id: str, content: str, received_at
+        self, platform_id: str, content: str, received_at, group_chat_id=None
     ) -> str | list[CommandReply]:
         parts = content.split()
         if len(parts) < 2:
             return self._reply("/跳过", "usage", received_at)
         result = self._repository.skip_number_bomb_players(
-            platform_id, tuple(parts[1:]), received_at
+            platform_id,
+            tuple(parts[1:]),
+            received_at,
+            **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
         )
         if result.status in {"skipped", "settled", "ended_insufficient"}:
             values = {
@@ -1258,8 +1393,14 @@ class GroupCommandHandler:
             if player.state == "current" and player.direct_chatroom_id is not None
         ]
 
-    def _blame_join(self, platform_id: str, received_at) -> str:
-        result = self._repository.join_blame_game(platform_id, received_at)
+    def _blame_join(
+        self, platform_id: str, received_at, group_chat_id=None
+    ) -> str:
+        result = self._repository.join_blame_game(
+            platform_id,
+            received_at,
+            **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
+        )
         if result.status == "joined":
             user = self._repository.find_user(platform_id)
             return self._reply(
@@ -1273,7 +1414,10 @@ class GroupCommandHandler:
                 },
             )
         if result.status == "started":
-            summary = self._repository.blame_game_summary(received_at)
+            summary = self._repository.blame_game_summary(
+                received_at,
+                **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
+            )
             holder = next(
                 player for player in summary.players
                 if player.seat_number == summary.current_holder_number
@@ -1311,12 +1455,18 @@ class GroupCommandHandler:
             {"{原因}": reasons.get(result.status, "当前无法加入甩锅游戏。")},
         )
 
-    def _blame_transfer(self, platform_id: str, content: str, received_at) -> str:
+    def _blame_transfer(
+        self, platform_id: str, content: str, received_at, group_chat_id=None
+    ) -> str:
         parts = content.split(maxsplit=2)
         if len(parts) != 3 or not parts[1].isdigit() or not parts[2].strip():
             return self._reply("/甩锅", "usage", received_at)
         result = self._repository.transfer_blame(
-            platform_id, int(parts[1]), parts[2].strip(), received_at
+            platform_id,
+            int(parts[1]),
+            parts[2].strip(),
+            received_at,
+            **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
         )
         if result.status == "transferred":
             return self._reply(
@@ -1342,8 +1492,14 @@ class GroupCommandHandler:
         } else "usage"
         return self._reply("/甩锅", scenario, received_at)
 
-    def _blame_leave(self, platform_id: str, received_at) -> str:
-        result = self._repository.leave_blame_game(platform_id, received_at)
+    def _blame_leave(
+        self, platform_id: str, received_at, group_chat_id=None
+    ) -> str:
+        result = self._repository.leave_blame_game(
+            platform_id,
+            received_at,
+            **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
+        )
         if result.status == "left_signup":
             return self._reply("/退出甩锅", "left_signup", received_at)
         if result.status == "settled":
@@ -1352,8 +1508,14 @@ class GroupCommandHandler:
             return self._reply("/甩锅游戏", "signup_expired", received_at)
         return self._reply("/退出甩锅", "cannot_leave", received_at)
 
-    def _blame_end(self, platform_id: str, received_at) -> str:
-        result = self._repository.end_blame_game(platform_id, received_at)
+    def _blame_end(
+        self, platform_id: str, received_at, group_chat_id=None
+    ) -> str:
+        result = self._repository.end_blame_game(
+            platform_id,
+            received_at,
+            **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
+        )
         if result.status == "settled":
             return self._blame_settlement_reply(result, received_at)
         if result.status == "signup_expired":
@@ -1383,11 +1545,19 @@ class GroupCommandHandler:
             blame_settlement_template_values(result),
         )
 
-    def _undercover_join(self, platform_id: str, received_at) -> str:
-        result = self._repository.join_undercover(platform_id, received_at)
+    def _undercover_join(
+        self, platform_id: str, received_at, group_chat_id=None
+    ) -> str:
+        result = self._repository.join_undercover(
+            platform_id,
+            received_at,
+            **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
+        )
         if result.status == "joined_signup":
             employee = self._repository.find_user(platform_id)
-            summary = self._repository.undercover_session_summary()
+            summary = self._repository.undercover_session_summary(
+                **({} if group_chat_id is None else {"group_chat_id": group_chat_id})
+            )
             return self._reply(
                 "/加入",
                 "undercover_joined",
@@ -1409,11 +1579,19 @@ class GroupCommandHandler:
         }
         return self._reply("/加入", scenarios.get(result.status, "invalid"), received_at)
 
-    def _undercover_start_vote(self, platform_id: str, received_at) -> str:
-        result = self._repository.start_undercover_vote(platform_id, received_at)
+    def _undercover_start_vote(
+        self, platform_id: str, received_at, group_chat_id=None
+    ) -> str:
+        result = self._repository.start_undercover_vote(
+            platform_id,
+            received_at,
+            **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
+        )
         if result.status != "voting":
             return self._reply("/开始投票", "cannot_start", received_at)
-        summary = self._repository.undercover_session_summary()
+        summary = self._repository.undercover_session_summary(
+            **({} if group_chat_id is None else {"group_chat_id": group_chat_id})
+        )
         vote_seconds = (
             max(int((summary.vote_deadline - received_at).total_seconds()), 1)
             if summary.vote_deadline is not None
@@ -1433,12 +1611,17 @@ class GroupCommandHandler:
             },
         )
 
-    def _undercover_vote(self, platform_id: str, content: str, received_at) -> str:
+    def _undercover_vote(
+        self, platform_id: str, content: str, received_at, group_chat_id=None
+    ) -> str:
         parts = content.split()
         if len(parts) != 2 or not parts[1].isdigit() or int(parts[1]) < 1:
             return self._reply("/投票", "usage", received_at)
         result = self._repository.cast_undercover_vote(
-            platform_id, int(parts[1]), received_at
+            platform_id,
+            int(parts[1]),
+            received_at,
+            **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
         )
         scenarios = {
             "vote_recorded": "recorded",
@@ -1464,22 +1647,27 @@ class GroupCommandHandler:
                 "/投票",
                 "tied",
                 received_at,
-                {"{并列玩家}": self._undercover_player_labels(result.tied_seats)},
+                {"{并列玩家}": self._undercover_player_labels(result.tied_seats, group_chat_id)},
             )
         if result.status in {"eliminated", "settled"}:
             if result.status == "settled":
                 values = undercover_settlement_template_values(result)
             else:
-                values = self._undercover_elimination_values(result)
+                values = self._undercover_elimination_values(result, group_chat_id)
             return self._reply("/投票", result.status, received_at, values)
         return self._reply("/投票", "cannot_vote", received_at)
 
-    def _undercover_skip(self, platform_id: str, content: str, received_at) -> str:
+    def _undercover_skip(
+        self, platform_id: str, content: str, received_at, group_chat_id=None
+    ) -> str:
         parts = content.split()
         if len(parts) != 2 or not parts[1].isdigit() or int(parts[1]) < 1:
             return self._reply("/跳过", "undercover_usage", received_at)
         result = self._repository.skip_undercover_vote(
-            platform_id, int(parts[1]), received_at
+            platform_id,
+            int(parts[1]),
+            received_at,
+            **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
         )
         if result.status == "abstained":
             return self._reply(
@@ -1511,18 +1699,24 @@ class GroupCommandHandler:
                 "/投票",
                 "tied",
                 received_at,
-                {"{并列玩家}": self._undercover_player_labels(result.tied_seats)},
+                {"{并列玩家}": self._undercover_player_labels(result.tied_seats, group_chat_id)},
             )
         if result.status in {"eliminated", "settled"}:
             if result.status == "settled":
                 values = undercover_settlement_template_values(result)
             else:
-                values = self._undercover_elimination_values(result)
+                values = self._undercover_elimination_values(result, group_chat_id)
             return self._reply("/投票", result.status, received_at, values)
         return self._reply("/跳过", "undercover_cannot_skip", received_at)
 
-    def _undercover_leave(self, platform_id: str, received_at) -> str:
-        result = self._repository.leave_undercover(platform_id, received_at)
+    def _undercover_leave(
+        self, platform_id: str, received_at, group_chat_id=None
+    ) -> str:
+        result = self._repository.leave_undercover(
+            platform_id,
+            received_at,
+            **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
+        )
         if result.status in {"left", "left_signup", "left_waiting_continue"}:
             return self._reply("/退出谁是卧底", "left", received_at)
         if result.status == "leave_after_round":
@@ -1544,31 +1738,51 @@ class GroupCommandHandler:
             )
         return self._reply("/退出谁是卧底", "cannot_leave", received_at)
 
-    def _undercover_end(self, platform_id: str, received_at) -> str:
-        result = self._repository.end_undercover(platform_id, received_at)
+    def _undercover_end(
+        self, platform_id: str, received_at, group_chat_id=None
+    ) -> str:
+        result = self._repository.end_undercover(
+            platform_id,
+            received_at,
+            **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
+        )
         return self._reply(
             "/结束游戏",
             "ended" if result.status == "ended" else "cannot_end",
             received_at,
         )
 
-    def _undercover_continue(self, platform_id: str, received_at) -> str:
-        result = self._repository.continue_undercover(platform_id, received_at)
+    def _undercover_continue(
+        self, platform_id: str, received_at, group_chat_id=None
+    ) -> str:
+        result = self._repository.continue_undercover(
+            platform_id,
+            received_at,
+            **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
+        )
         if result.status == "dealing":
             return self._reply("/继续", "undercover_dealing", received_at)
         if result.status == "insufficient_players":
             return self._reply("/继续", "undercover_insufficient", received_at)
         return self._reply("/继续", "undercover_cannot_continue", received_at)
 
-    def _undercover_player_labels(self, seats: tuple[int, ...]) -> str:
+    def _undercover_player_labels(
+        self, seats: tuple[int, ...], group_chat_id=None
+    ) -> str:
         names = {
             player.seat_number: player.display_name
-            for player in self._repository.undercover_session_summary().players
+            for player in self._repository.undercover_session_summary(
+                **({} if group_chat_id is None else {"group_chat_id": group_chat_id})
+            ).players
         }
         return "、".join(f"{seat}号 {names.get(seat, '玩家')}" for seat in seats)
 
-    def _undercover_elimination_values(self, result) -> dict[str, str]:
-        summary = self._repository.undercover_session_summary()
+    def _undercover_elimination_values(
+        self, result, group_chat_id=None
+    ) -> dict[str, str]:
+        summary = self._repository.undercover_session_summary(
+            **({} if group_chat_id is None else {"group_chat_id": group_chat_id})
+        )
         player = next(
             item
             for item in summary.players
@@ -1593,10 +1807,17 @@ class GroupCommandHandler:
     ) -> str:
         parts = content.split(maxsplit=1)
         if len(parts) != 2 or not parts[1].strip():
-            if self._repository.blame_game_summary(received_at).state is not None:
-                return self._blame_join(platform_id, received_at)
-            if self._repository.undercover_session_summary().state is not None:
-                return self._undercover_join(platform_id, received_at)
+            if self._repository.blame_game_summary(
+                received_at,
+                **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
+            ).state is not None:
+                return self._blame_join(platform_id, received_at, group_chat_id)
+            if self._repository.undercover_session_summary(
+                **({} if group_chat_id is None else {"group_chat_id": group_chat_id})
+            ).state is not None:
+                return self._undercover_join(
+                    platform_id, received_at, group_chat_id
+                )
             duel = self._repository.join_memory_assessment_duel(
                 platform_id,
                 received_at,

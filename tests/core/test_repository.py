@@ -538,6 +538,55 @@ def test_memory_games_are_per_group_but_single_daily_limit_is_global(
     ).status == "daily_limit"
 
 
+def test_multiplayer_sessions_and_private_number_targets_are_group_scoped(
+    repository, now
+):
+    primary = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=group-main", now
+    )
+    second = repository.create_group_chat(
+        "乙群", "https://www.aikda.com/chat?c=group-b",
+        True, True, True, True, now,
+    )
+    platform_ids = ("multi-a", "multi-b", "multi-c", "multi-d", "multi-e")
+    for index, platform_id in enumerate(platform_ids, 1):
+        repository.create_user(platform_id, f"多群玩家{index}", now, 20)
+    repository.upsert_direct_chats(
+        [(platform_id, f"direct-{platform_id}") for platform_id in platform_ids],
+        now,
+    )
+
+    undercover_a = repository.start_undercover_signup(
+        "multi-a", 4, now, primary.id
+    )
+    undercover_b = repository.start_undercover_signup(
+        "multi-b", 4, now, second.id
+    )
+    assert undercover_a.status == undercover_b.status == "signup_started"
+    assert undercover_a.session_id != undercover_b.session_id
+    repository.force_end_gameplay(
+        "undercover", undercover_a.session_id, now, primary.id
+    )
+    repository.force_end_gameplay(
+        "undercover", undercover_b.session_id, now, second.id
+    )
+
+    repository.start_number_bomb_game("multi-a", now, primary.id)
+    repository.join_number_bomb_game("multi-b", now, primary.id)
+    repository.join_number_bomb_game("multi-c", now, primary.id)
+    repository.start_number_bomb_round("multi-a", now, primary.id)
+    repository.start_number_bomb_game("multi-a", now, second.id)
+    repository.join_number_bomb_game("multi-d", now, second.id)
+    repository.join_number_bomb_game("multi-e", now, second.id)
+    repository.start_number_bomb_round("multi-a", now, second.id)
+
+    candidates = repository.number_bomb_private_candidates("multi-a")
+    assert [(item.index, item.group_name) for item in candidates] == [
+        (1, "主群聊"),
+        (2, "乙群"),
+    ]
+
+
 def test_active_gameplay_and_admin_summaries_are_scoped_by_group(repository, now):
     primary = repository.bootstrap_primary_group(
         "https://www.aikda.com/chat?c=group-main", now

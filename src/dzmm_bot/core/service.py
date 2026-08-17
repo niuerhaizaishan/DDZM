@@ -44,6 +44,7 @@ class CommandReply:
     image_url: str | None = None
     image_alt: str | None = None
     force_group_destination: bool = False
+    group_chat_id: UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -230,7 +231,7 @@ class CoreService:
             )
             for reply_index, reply in enumerate(replies):
                 destination_chatroom_id = reply.destination_chatroom_id
-                group_chat_id = None
+                group_chat_id = reply.group_chat_id
                 if reply.delivery_kind == "group" and group_context is not None:
                     group_chat_id = group_context.group_chat_id
                     destination_chatroom_id = (
@@ -308,7 +309,7 @@ class CoreService:
                 reply = CommandReply(item)
             destination = reply.destination_chatroom_id
             delivery_kind = reply.delivery_kind
-            group_chat_id = None
+            group_chat_id = reply.group_chat_id
             if (
                 destination is None
                 and default_destination_chatroom_id is not None
