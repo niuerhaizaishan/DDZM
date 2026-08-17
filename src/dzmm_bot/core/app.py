@@ -408,6 +408,7 @@ def create_app(
         return OutboundClaimResponse(
             id=record.id,
             inbound_message_id=record.inbound_message_id,
+            group_chat_id=record.group_chat_id,
             text=record.text,
             content_type=record.content_type,
             image_url=record.image_url,

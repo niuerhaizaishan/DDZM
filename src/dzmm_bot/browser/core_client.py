@@ -21,6 +21,7 @@ class OutboundClaim:
     inbound_message_id: str | None
     text: str
     lease_token: UUID
+    group_chat_id: UUID | None = None
     content_type: str = "text"
     image_url: str | None = None
     image_alt: str | None = None
@@ -374,6 +375,11 @@ class CoreClient:
             inbound_message_id=data["inbound_message_id"],
             text=data["text"],
             lease_token=UUID(data["lease_token"]),
+            group_chat_id=(
+                None
+                if data.get("group_chat_id") is None
+                else UUID(data["group_chat_id"])
+            ),
             content_type=data["content_type"],
             image_url=data["image_url"],
             image_alt=data["image_alt"],

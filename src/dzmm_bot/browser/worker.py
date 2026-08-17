@@ -54,7 +54,6 @@ class BrowserWorker:
         sleep: Callable[[float], None] = default_sleep,
         lease_seconds: int = 30,
         bot_sender: BotSender | None = None,
-        bot_chatroom_id: str | None = None,
         outbound_concurrency: int = 4,
     ) -> None:
         if not 1 <= outbound_concurrency <= 16:
@@ -68,7 +67,6 @@ class BrowserWorker:
         self._sleep = sleep
         self._lease_seconds = lease_seconds
         self._bot_sender = bot_sender
-        self._bot_chatroom_id = bot_chatroom_id
         self._gateway: ChatGateway | None = None
         self._listening = True
         self._login_state = LoginState.READY
@@ -450,13 +448,20 @@ class BrowserWorker:
             )
         if (
             self._bot_sender is not None
-            and self._bot_chatroom_id is not None
-            and outbound.destination_chatroom_id is None
+            and outbound.destination_chatroom_id is not None
             and outbound.delivery_kind == "group"
             and outbound.recall_after_seconds is None
             and requires_bot_group_sender(outbound.text)
         ):
-            return self._bot_sender.send_to(self._bot_chatroom_id, outbound.text)
+            return self._bot_sender.send_to(
+                outbound.destination_chatroom_id, outbound.text
+            )
+        if (
+            outbound.delivery_kind == "group"
+            and outbound.group_chat_id is not None
+            and outbound.destination_chatroom_id is None
+        ):
+            raise RuntimeError("group outbound missing destination chatroom")
         if outbound.destination_chatroom_id is not None:
             return gateway.send_to(
                 outbound.destination_chatroom_id,

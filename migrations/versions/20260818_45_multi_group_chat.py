@@ -55,7 +55,9 @@ def _add_group_chat_column(table_name: str) -> None:
         table_name, naming_convention=NAMING_CONVENTION
     ) as batch_op:
         batch_op.alter_column(
-            "group_chat_id", existing_type=sa.Uuid(), nullable=False
+            "group_chat_id",
+            existing_type=sa.Uuid(),
+            nullable=table_name in {"inbound_messages", "outbound_messages"},
         )
 
 

@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from typing import Protocol
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from dzmm_bot.runtime.contracts import InboundMessage
 
@@ -52,6 +52,12 @@ class ReceiveResult:
     inserted: bool
 
 
+@dataclass(frozen=True)
+class GroupMessageContext:
+    group_chat_id: UUID
+    chatroom_id: str
+
+
 class CoreService:
     def __init__(
         self,
@@ -64,10 +70,26 @@ class CoreService:
 
     def receive_inbound(self, message: InboundMessage) -> ReceiveResult:
         with self._repository.transaction():
+            group_context: GroupMessageContext | None = None
+            if (
+                message.source_type == "group"
+                and self._repository.group_chat_bootstrap_ready()
+            ):
+                if message.chatroom_id is None:
+                    return ReceiveResult(uuid4(), False)
+                group = self._repository.resolve_enabled_group_chat(
+                    message.chatroom_id
+                )
+                if group is None or group.chatroom_id is None:
+                    return ReceiveResult(uuid4(), False)
+                group_context = GroupMessageContext(group.id, group.chatroom_id)
             command_parts = message.content.strip().split(maxsplit=1)
             if command_parts and command_parts[0] == "/甩锅":
                 self._repository.lock_gameplay_order()
-            stored, inserted = self._repository.accept_inbound(message)
+            stored, inserted = self._repository.accept_inbound(
+                message,
+                None if group_context is None else group_context.group_chat_id,
+            )
             if not inserted:
                 return ReceiveResult(stored.id, False)
             command = command_parts[0] if command_parts else ""
@@ -76,7 +98,9 @@ class CoreService:
                 if not self._repository.is_command_enabled(command):
                     return ReceiveResult(stored.id, True)
                 submission_reply = self._submission_handler.handle(message)
-                self._enqueue_replies(stored.id, submission_reply)
+                self._enqueue_replies(
+                    stored.id, submission_reply, group_context=group_context
+                )
                 return ReceiveResult(stored.id, True)
             if message.source_type == "direct":
                 parts = message.content.strip().split(maxsplit=1)
@@ -142,7 +166,19 @@ class CoreService:
                         message.received_at,
                     )
                     self._repository.enqueue_outbound(
-                        stored.id, settings.blocked_message, 0
+                        stored.id,
+                        settings.blocked_message,
+                        0,
+                        group_chat_id=(
+                            None
+                            if group_context is None
+                            else group_context.group_chat_id
+                        ),
+                        destination_chatroom_id=(
+                            None
+                            if group_context is None
+                            else group_context.chatroom_id
+                        ),
                     )
                     return ReceiveResult(stored.id, True)
             had_active_game_context = self._repository.user_has_active_game_context(
@@ -191,6 +227,13 @@ class CoreService:
                 message.received_at,
             )
             for reply_index, reply in enumerate(replies):
+                destination_chatroom_id = reply.destination_chatroom_id
+                group_chat_id = None
+                if reply.delivery_kind == "group" and group_context is not None:
+                    group_chat_id = group_context.group_chat_id
+                    destination_chatroom_id = (
+                        destination_chatroom_id or group_context.chatroom_id
+                    )
                 if reply.content_type == "image":
                     if reply.image_url is None:
                         raise RuntimeError("图片回复缺少图片地址")
@@ -199,7 +242,8 @@ class CoreService:
                         reply.image_url,
                         reply_index,
                         image_alt=reply.image_alt or "image",
-                        destination_chatroom_id=reply.destination_chatroom_id,
+                        group_chat_id=group_chat_id,
+                        destination_chatroom_id=destination_chatroom_id,
                         delivery_kind=reply.delivery_kind,
                     )
                     continue
@@ -212,14 +256,19 @@ class CoreService:
                         and reply.delivery_kind == "group"
                     ):
                         self._repository.enqueue_outbound(
-                            stored.id, reply.text, reply_index
+                            stored.id,
+                            reply.text,
+                            reply_index,
+                            group_chat_id=group_chat_id,
+                            destination_chatroom_id=destination_chatroom_id,
                         )
                     else:
                         self._repository.enqueue_outbound(
                             stored.id,
                             reply.text,
                             reply_index,
-                            destination_chatroom_id=reply.destination_chatroom_id,
+                            group_chat_id=group_chat_id,
+                            destination_chatroom_id=destination_chatroom_id,
                             delivery_kind=reply.delivery_kind,
                         )
                     continue
@@ -229,7 +278,8 @@ class CoreService:
                     reply_index,
                     recall_after_seconds=reply.recall_after_seconds,
                     memory_round_id=reply.memory_round_id,
-                    destination_chatroom_id=reply.destination_chatroom_id,
+                    group_chat_id=group_chat_id,
+                    destination_chatroom_id=destination_chatroom_id,
                     delivery_kind=reply.delivery_kind,
                 )
             return ReceiveResult(stored.id, True)
@@ -240,6 +290,7 @@ class CoreService:
         response,
         *,
         default_destination_chatroom_id: str | None = None,
+        group_context: GroupMessageContext | None = None,
     ) -> None:
         items = response if isinstance(response, list) else [response]
         for reply_index, item in enumerate(item for item in items if item is not None):
@@ -255,6 +306,7 @@ class CoreService:
                 reply = CommandReply(item)
             destination = reply.destination_chatroom_id
             delivery_kind = reply.delivery_kind
+            group_chat_id = None
             if (
                 destination is None
                 and default_destination_chatroom_id is not None
@@ -262,6 +314,9 @@ class CoreService:
             ):
                 destination = default_destination_chatroom_id
                 delivery_kind = "direct"
+            elif delivery_kind == "group" and group_context is not None:
+                destination = destination or group_context.chatroom_id
+                group_chat_id = group_context.group_chat_id
             if reply.content_type == "image":
                 if reply.image_url is None:
                     raise RuntimeError("图片回复缺少图片地址")
@@ -270,6 +325,7 @@ class CoreService:
                     reply.image_url,
                     reply_index,
                     image_alt=reply.image_alt or "image",
+                    group_chat_id=group_chat_id,
                     destination_chatroom_id=destination,
                     delivery_kind=delivery_kind,
                 )
@@ -280,6 +336,7 @@ class CoreService:
                     reply_index,
                     recall_after_seconds=reply.recall_after_seconds,
                     memory_round_id=reply.memory_round_id,
+                    group_chat_id=group_chat_id,
                     destination_chatroom_id=destination,
                     delivery_kind=delivery_kind,
                 )

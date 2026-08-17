@@ -7,7 +7,7 @@ from time import sleep
 from dzmm_bot.auth_desktop import AuthDesktopController
 from dzmm_bot.runtime.settings import Settings
 
-from .bot_api import DzmmBotSender, chatroom_id_from_url
+from .bot_api import DzmmBotSender
 from .core_client import CoreClient
 from .session import BrowserSession
 from .worker import BrowserWorker
@@ -39,13 +39,6 @@ def create_worker(settings: Settings) -> BrowserWorker:
         novnc_port=settings.novnc_port,
     )
     bot_sender = DzmmBotSender(settings.bot_api_token) if settings.bot_api_token else None
-    bot_chatroom_id = (
-        chatroom_id_from_url(settings.chat_url)
-        if bot_sender is not None and settings.chat_url is not None
-        else None
-    )
-    if bot_sender is not None and bot_chatroom_id is None:
-        raise ValueError("DZMM_CHAT_URL must be set when DZMM_BOT_API_TOKEN is configured")
     worker = BrowserWorker(
         worker_id=os.environ.get("DZMM_WORKER_ID", "browser-worker-1"),
         core=CoreClient(
@@ -55,7 +48,6 @@ def create_worker(settings: Settings) -> BrowserWorker:
         desktop=desktop,
         clock=lambda: datetime.now(ZoneInfo("Asia/Shanghai")),
         bot_sender=bot_sender,
-        bot_chatroom_id=bot_chatroom_id,
         outbound_concurrency=settings.outbound_concurrency,
     )
     return worker

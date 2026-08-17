@@ -22,6 +22,7 @@ NOW = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
 LEASE = UUID("00000000-0000-0000-0000-000000000001")
 OUTBOUND_ID = UUID("00000000-0000-0000-0000-000000000002")
 COMMAND_ID = UUID("00000000-0000-0000-0000-000000000003")
+GROUP_ID = UUID("00000000-0000-0000-0000-000000000101")
 
 
 @dataclass
@@ -798,10 +799,12 @@ def test_worker_uses_bot_api_for_group_replies_over_the_newline_limit(context):
         desktop=desktop,
         clock=lambda: NOW,
         bot_sender=bot_sender,
-        bot_chatroom_id="group-1",
     )
     text = "\n".join(f"第{index}行" for index in range(12))
-    core.pending = [OutboundClaim(OUTBOUND_ID, "in-1", text, LEASE)]
+    core.pending = [OutboundClaim(
+        OUTBOUND_ID, "in-1", text, LEASE,
+        group_chat_id=GROUP_ID, destination_chatroom_id="group-1",
+    )]
 
     worker.run_once()
 
@@ -820,15 +823,17 @@ def test_worker_keeps_group_replies_within_platform_limits_on_the_browser_gatewa
         desktop=desktop,
         clock=lambda: NOW,
         bot_sender=bot_sender,
-        bot_chatroom_id="group-1",
     )
     text = "\n".join(f"第{index}行" for index in range(11))
-    core.pending = [OutboundClaim(OUTBOUND_ID, "in-1", text, LEASE)]
+    core.pending = [OutboundClaim(
+        OUTBOUND_ID, "in-1", text, LEASE,
+        group_chat_id=GROUP_ID, destination_chatroom_id="group-1",
+    )]
 
     worker.run_once()
 
     assert bot_sender.sent_to == []
-    assert gateway.sent == [text]
+    assert gateway.sent_to == [("group-1", text)]
 
 
 def test_worker_uses_bot_api_for_group_replies_over_the_character_limit(context):
@@ -841,10 +846,12 @@ def test_worker_uses_bot_api_for_group_replies_over_the_character_limit(context)
         desktop=desktop,
         clock=lambda: NOW,
         bot_sender=bot_sender,
-        bot_chatroom_id="group-1",
     )
     text = "字" * 1001
-    core.pending = [OutboundClaim(OUTBOUND_ID, "in-1", text, LEASE)]
+    core.pending = [OutboundClaim(
+        OUTBOUND_ID, "in-1", text, LEASE,
+        group_chat_id=GROUP_ID, destination_chatroom_id="group-1",
+    )]
 
     worker.run_once()
 
@@ -862,7 +869,6 @@ def test_worker_routes_referenced_long_reply_through_bot_without_reply_metadata(
         desktop=desktop,
         clock=lambda: NOW,
         bot_sender=bot_sender,
-        bot_chatroom_id="group-1",
     )
     text = "字" * 1001
     core.pending = [OutboundClaim(
@@ -870,6 +876,8 @@ def test_worker_routes_referenced_long_reply_through_bot_without_reply_metadata(
         "in-1",
         text,
         LEASE,
+        group_chat_id=GROUP_ID,
+        destination_chatroom_id="group-1",
         reference_message_id="trigger-1",
         reference_sender_platform_id="employee-1",
         reference_content_type="text",
@@ -893,7 +901,6 @@ def test_worker_keeps_recalled_group_replies_on_the_browser_gateway(context):
         desktop=desktop,
         clock=lambda: NOW,
         bot_sender=bot_sender,
-        bot_chatroom_id="group-1",
     )
     text = "\n".join(f"第{index}行" for index in range(12))
     core.pending = [
@@ -902,6 +909,8 @@ def test_worker_keeps_recalled_group_replies_on_the_browser_gateway(context):
             "in-1",
             text,
             LEASE,
+            group_chat_id=GROUP_ID,
+            destination_chatroom_id="group-1",
             recall_after_seconds=3,
         )
     ]
@@ -909,7 +918,7 @@ def test_worker_keeps_recalled_group_replies_on_the_browser_gateway(context):
     worker.run_once()
 
     assert bot_sender.sent_to == []
-    assert gateway.sent == [text]
+    assert gateway.sent_to == [("group-1", text)]
 
 
 def test_worker_keeps_direct_messages_on_the_browser_gateway(context):
@@ -922,7 +931,6 @@ def test_worker_keeps_direct_messages_on_the_browser_gateway(context):
         desktop=desktop,
         clock=lambda: NOW,
         bot_sender=bot_sender,
-        bot_chatroom_id="group-1",
     )
     core.pending = [
         OutboundClaim(

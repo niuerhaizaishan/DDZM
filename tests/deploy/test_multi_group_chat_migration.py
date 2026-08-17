@@ -212,7 +212,9 @@ def test_multi_group_migration_backfills_legacy_group_rows(tmp_path, monkeypatch
                 for column in inspector.get_columns(table_name)
                 if column["name"] == "group_chat_id"
             )
-            assert group_column["nullable"] is False
+            assert group_column["nullable"] is (
+                table_name in {"inbound_messages", "outbound_messages"}
+            )
 
     assert "group_chat_runtime_states" in inspector.get_table_names()
 

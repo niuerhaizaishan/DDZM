@@ -139,6 +139,7 @@ class ClaimRequest(ApiModel):
 class OutboundClaimResponse(ApiModel):
     id: UUID
     inbound_message_id: UUID | None
+    group_chat_id: UUID | None
     text: str
     content_type: Literal["text", "image"]
     image_url: str | None

@@ -70,6 +70,88 @@ def test_duplicate_message_does_not_invoke_handler_twice(session_factory, inboun
     assert handler.calls == 1
 
 
+def test_group_reply_inherits_source_group_and_disabled_group_is_rejected(
+    session_factory,
+):
+    from dzmm_bot.core.repository import CoreRepository
+    from dzmm_bot.core.schema import OutboundRecord
+    from dzmm_bot.core.service import CoreService
+
+    class ReplyHandler:
+        def handle(self, message):
+            return "reply"
+
+    repository = CoreRepository(session_factory)
+    now = datetime(2026, 8, 18, 12, 0, tzinfo=UTC)
+    primary = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=group-a", now
+    )
+    repository.create_group_chat(
+        "停用群",
+        "https://www.aikda.com/chat?c=group-b",
+        False,
+        True,
+        True,
+        True,
+        now,
+    )
+    service = CoreService(repository, ReplyHandler())
+
+    accepted = service.receive_inbound(
+        InboundMessage("m-a", "p1", "hello", now, chatroom_id="group-a")
+    )
+    rejected = service.receive_inbound(
+        InboundMessage("m-b", "p1", "hello", now, chatroom_id="group-b")
+    )
+
+    with session_factory() as session:
+        outbound = session.scalar(
+            select(OutboundRecord).where(
+                OutboundRecord.inbound_message_id == accepted.message_id
+            )
+        )
+    assert outbound.group_chat_id == primary.id
+    assert outbound.destination_chatroom_id == "group-a"
+    assert outbound.delivery_key == "group-a"
+    assert rejected.inserted is False
+
+
+def test_same_platform_message_id_is_unique_per_enabled_group(session_factory):
+    from dzmm_bot.core.repository import CoreRepository
+    from dzmm_bot.core.service import CoreService
+
+    repository = CoreRepository(session_factory)
+    now = datetime(2026, 8, 18, 12, 0, tzinfo=UTC)
+    repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=group-a", now
+    )
+    repository.create_group_chat(
+        "第二群",
+        "https://www.aikda.com/chat?c=group-b",
+        True,
+        True,
+        True,
+        True,
+        now,
+    )
+    service = CoreService(repository)
+
+    first = service.receive_inbound(
+        InboundMessage("same-id", "p1", "hello", now, chatroom_id="group-a")
+    )
+    second = service.receive_inbound(
+        InboundMessage("same-id", "p1", "hello", now, chatroom_id="group-b")
+    )
+    duplicate = service.receive_inbound(
+        InboundMessage("same-id", "p1", "hello", now, chatroom_id="group-a")
+    )
+
+    assert first.inserted is True
+    assert second.inserted is True
+    assert duplicate.inserted is False
+    assert duplicate.message_id == first.message_id
+
+
 def test_service_queues_multiple_replies_for_one_inbound_in_order(session_factory, inbound):
     from dzmm_bot.core.repository import CoreRepository
     from dzmm_bot.core.schema import OutboundRecord
@@ -565,7 +647,7 @@ def test_enqueue_failure_rolls_back_inbound(session_factory, inbound):
     service = CoreService(repository, ReplyHandler())
     original_enqueue = repository.enqueue_outbound
 
-    def fail_enqueue(message_id, reply, reply_index=0):
+    def fail_enqueue(message_id, reply, reply_index=0, **kwargs):
         raise RuntimeError("enqueue failed")
 
     repository.enqueue_outbound = fail_enqueue

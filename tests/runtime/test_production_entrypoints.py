@@ -91,4 +91,4 @@ def test_browser_worker_factory_wires_the_bot_sender_to_the_configured_group(mon
     worker = browser_main.create_worker(settings)
 
     assert worker._bot_sender.token == "bot-secret"
-    assert worker._bot_chatroom_id == "group-1"
+    assert not hasattr(worker, "_bot_chatroom_id")

@@ -1658,6 +1658,19 @@ class CoreRepository:
                 if record.chatroom_id is not None and record.chat_url is not None
             )
 
+    def resolve_enabled_group_chat(
+        self, chatroom_id: str
+    ) -> GroupChatConfig | None:
+        with self._session() as session:
+            record = session.scalar(
+                select(GroupChatRecord).where(
+                    GroupChatRecord.chatroom_id == chatroom_id,
+                    GroupChatRecord.deleted_at.is_(None),
+                    GroupChatRecord.listening_enabled.is_(True),
+                )
+            )
+            return None if record is None else _group_chat_config(record)
+
     def record_group_chat_runtime(
         self,
         worker_id: str,
@@ -1837,12 +1850,17 @@ class CoreRepository:
         with self._session_factory.begin() as session:
             yield session
 
-    def accept_inbound(self, message: InboundMessage) -> tuple[InboundRecord, bool]:
+    def accept_inbound(
+        self,
+        message: InboundMessage,
+        group_chat_id: UUID | None = None,
+    ) -> tuple[InboundRecord, bool]:
         with self._session() as session:
             record_id = uuid4()
-            group_chat_id = (
-                PRIMARY_GROUP_CHAT_ID if message.source_type == "group" else None
-            )
+            if message.source_type == "group" and group_chat_id is None:
+                group_chat_id = PRIMARY_GROUP_CHAT_ID
+            if message.source_type != "group":
+                group_chat_id = None
             values = dict(
                 id=record_id,
                 platform_message_id=message.platform_message_id,
@@ -13509,6 +13527,7 @@ class CoreRepository:
         *,
         recall_after_seconds: int | None = None,
         memory_round_id: UUID | None = None,
+        group_chat_id: UUID | None = None,
         destination_chatroom_id: str | None = None,
         delivery_kind: str = "group",
     ) -> OutboundRecord:
@@ -13519,6 +13538,16 @@ class CoreRepository:
             inbound = session.get(InboundRecord, inbound_id)
             if inbound is None:
                 raise ValueError("入站消息不存在")
+            if delivery_kind == "group":
+                group_chat_id = group_chat_id or inbound.group_chat_id
+                destination_chatroom_id = (
+                    destination_chatroom_id
+                    or (
+                        inbound.chatroom_id
+                        if inbound.source_type == "group"
+                        else None
+                    )
+                )
             latest_reply_index = session.scalar(
                 select(func.max(OutboundRecord.reply_index)).where(
                     OutboundRecord.inbound_message_id == inbound_id
@@ -13530,7 +13559,6 @@ class CoreRepository:
             uses_bot_group_sender = (
                 self._preserve_long_group_messages
                 and recall_after_seconds is None
-                and destination_chatroom_id is None
                 and delivery_kind == "group"
                 and requires_bot_group_sender(reply)
             )
@@ -13549,6 +13577,9 @@ class CoreRepository:
             records = [
                 OutboundRecord(
                     inbound_message_id=inbound_id,
+                    group_chat_id=(
+                        group_chat_id if delivery_kind == "group" else None
+                    ),
                     text=text,
                     reply_index=first_reply_index + index,
                     recall_after_seconds=recall_after_seconds,
@@ -13576,11 +13607,17 @@ class CoreRepository:
         *,
         recall_after_seconds: int | None = None,
         memory_round_id: UUID | None = None,
+        group_chat_id: UUID | None = None,
         destination_chatroom_id: str | None = None,
         delivery_kind: str = "group",
     ) -> OutboundRecord:
         if recall_after_seconds is not None and recall_after_seconds < 1:
             raise ValueError("撤回秒数必须为正整数")
+        if delivery_kind == "group" and (
+            group_chat_id is None or destination_chatroom_id is None
+        ):
+            if self.group_chat_bootstrap_ready():
+                raise ValueError("群系统消息必须指定目标群")
         with self._session() as session:
             texts = [text] if self._keeps_group_reply_intact(
                 text,
@@ -13592,6 +13629,9 @@ class CoreRepository:
             records = [
                 OutboundRecord(
                     inbound_message_id=None,
+                    group_chat_id=(
+                        group_chat_id if delivery_kind == "group" else None
+                    ),
                     text=part,
                     reply_index=index,
                     recall_after_seconds=recall_after_seconds,
@@ -13619,6 +13659,7 @@ class CoreRepository:
         reply_index: int = 0,
         *,
         image_alt: str = "image",
+        group_chat_id: UUID | None = None,
         destination_chatroom_id: str | None = None,
         delivery_kind: str = "group",
     ) -> OutboundRecord:
@@ -13633,6 +13674,16 @@ class CoreRepository:
             inbound = session.get(InboundRecord, inbound_id)
             if inbound is None:
                 raise ValueError("入站消息不存在")
+            if delivery_kind == "group":
+                group_chat_id = group_chat_id or inbound.group_chat_id
+                destination_chatroom_id = (
+                    destination_chatroom_id
+                    or (
+                        inbound.chatroom_id
+                        if inbound.source_type == "group"
+                        else None
+                    )
+                )
             latest_reply_index = session.scalar(
                 select(func.max(OutboundRecord.reply_index)).where(
                     OutboundRecord.inbound_message_id == inbound_id
@@ -13646,6 +13697,7 @@ class CoreRepository:
             )
             record = OutboundRecord(
                 inbound_message_id=inbound_id,
+                group_chat_id=(group_chat_id if delivery_kind == "group" else None),
                 text="",
                 content_type="image",
                 image_url=normalized_url,
@@ -13674,7 +13726,6 @@ class CoreRepository:
             or (
                 self._preserve_long_group_messages
                 and not has_reference
-                and destination_chatroom_id is None
                 and delivery_kind == "group"
                 and requires_bot_group_sender(text)
             )
@@ -14226,11 +14277,15 @@ def _random_event_submission(
 def _outbound_reference_snapshot(
     inbound: InboundRecord, destination_chatroom_id: str | None
 ) -> dict[str, str]:
-    inbound_delivery_key = (
-        inbound.chatroom_id if inbound.source_type == "direct" else "__group__"
+    legacy_primary = (
+        inbound.source_type == "group"
+        and inbound.chatroom_id is None
+        and destination_chatroom_id is None
     )
-    outbound_delivery_key = destination_chatroom_id or "__group__"
-    if inbound_delivery_key != outbound_delivery_key:
+    if not legacy_primary and (
+        inbound.chatroom_id is None
+        or inbound.chatroom_id != destination_chatroom_id
+    ):
         return {}
     return {
         "reference_message_id": inbound.platform_message_id,
