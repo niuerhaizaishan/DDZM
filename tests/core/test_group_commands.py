@@ -55,6 +55,40 @@ def _latest_reply(factory):
         )
 
 
+def test_group_game_switch_blocks_only_new_game_creation():
+    service, repository, factory = _service()
+    now = datetime(2026, 8, 18, 10, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=group-main", now
+    )
+    group = repository.create_group_chat(
+        "休息群",
+        "https://www.aikda.com/chat?c=group-rest",
+        True,
+        False,
+        True,
+        True,
+        now,
+    )
+    repository.create_user("switch-player", "开关玩家", now, 0)
+
+    service.receive_inbound(
+        InboundMessage(
+            "switch-create",
+            "switch-player",
+            "/蹦蹦数字炸弹",
+            now,
+            source_type="group",
+            chatroom_id=group.chatroom_id,
+        )
+    )
+
+    assert _latest_reply(factory) == "蹦蹦数字炸弹当前未开放。"
+    assert repository.active_gameplay_summary(
+        "switch-player", now, group.id
+    ).game_type is None
+
+
 def _replies_for(factory, inbound_id):
     from dzmm_bot.core.schema import OutboundRecord
 

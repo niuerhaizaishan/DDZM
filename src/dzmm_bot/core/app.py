@@ -73,6 +73,7 @@ from .api_models import (
     NumberBombSettingsResponse,
     RedPacketSettingsResponse,
     GameplayParticipantResponse,
+    GameplaySummariesResponse,
     GameplaySummaryResponse,
     QueueCountsResponse,
     RecalledRequest,
@@ -1494,41 +1495,52 @@ def create_app(
 
     @app.get(
         "/internal/gameplay/current",
-        response_model=GameplaySummaryResponse,
+        response_model=GameplaySummariesResponse,
     )
     def current_gameplay(
         _: Annotated[None, Depends(authorize)],
-    ) -> GameplaySummaryResponse:
-        summary = repository.current_gameplay_admin_summary(clock())
-        return GameplaySummaryResponse(
-            game_type=summary.game_type,
-            game_id=summary.game_id,
-            state=summary.state,
-            participants=[
-                GameplayParticipantResponse(
-                    number=participant.number,
-                    display_name=participant.display_name,
-                    reported=participant.reported,
+    ) -> GameplaySummariesResponse:
+        return GameplaySummariesResponse(
+            items=[
+                GameplaySummaryResponse(
+                    group_chat_id=summary.group_chat_id,
+                    group_name=summary.group_name,
+                    game_type=summary.game_type,
+                    game_id=summary.game_id,
+                    state=summary.state,
+                    participants=[
+                        GameplayParticipantResponse(
+                            number=participant.number,
+                            display_name=participant.display_name,
+                            reported=participant.reported,
+                        )
+                        for participant in summary.participants
+                    ],
+                    signup_deadline=summary.signup_deadline,
+                    next_reminder_at=summary.next_reminder_at,
+                    tipping_deadline=summary.tipping_deadline,
+                    tip_total=summary.tip_total,
+                    skip_enabled=summary.skip_enabled,
                 )
-                for participant in summary.participants
-            ],
-            signup_deadline=summary.signup_deadline,
-            next_reminder_at=summary.next_reminder_at,
-            tipping_deadline=summary.tipping_deadline,
-            tip_total=summary.tip_total,
-            skip_enabled=summary.skip_enabled,
+                for summary in repository.current_gameplay_admin_summaries(clock())
+                if summary.group_chat_id is not None
+                and summary.group_name is not None
+            ]
         )
 
     @app.post(
-        "/internal/gameplay/{game_type}/{game_id}/force-end",
+        "/internal/gameplay/{group_chat_id}/{game_type}/{game_id}/force-end",
         response_model=AcceptedResponse,
     )
     def force_end_gameplay(
+        group_chat_id: UUID,
         game_type: str,
         game_id: UUID,
         _: Annotated[None, Depends(authorize)],
     ) -> AcceptedResponse:
-        if not repository.force_end_gameplay(game_type, game_id, clock()):
+        if not repository.force_end_gameplay(
+            game_type, game_id, clock(), group_chat_id
+        ):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="gameplay identity is stale or mismatched",

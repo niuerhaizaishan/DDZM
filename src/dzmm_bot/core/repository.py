@@ -816,6 +816,8 @@ class GameplayAdminParticipant:
 
 @dataclass(frozen=True)
 class GameplayAdminSummary:
+    group_chat_id: UUID | None = None
+    group_name: str | None = None
     game_type: str | None = None
     game_id: UUID | None = None
     state: str | None = None
@@ -5205,15 +5207,42 @@ class CoreRepository:
             )
 
     def active_gameplay_summary(
-        self, platform_id: str, now: datetime
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID | None = None,
     ) -> ActiveGameplaySummary:
+        if group_chat_id is None:
+            group_ids = tuple(group.id for group in self.list_group_chats())
+            if group_ids:
+                active = tuple(
+                    summary
+                    for candidate_group_id in group_ids
+                    if (
+                        summary := self.active_gameplay_summary(
+                            platform_id, now, candidate_group_id
+                        )
+                    ).game_type
+                    is not None
+                )
+                if not active:
+                    return ActiveGameplaySummary(None)
+                if len(active) > 1:
+                    return ActiveGameplaySummary("conflict", state="conflict")
+                return active[0]
+            group_chat_id = PRIMARY_GROUP_CHAT_ID
         del now
         with self._session() as session:
             active: list[ActiveGameplaySummary] = []
 
             number_game = session.scalar(
                 select(NumberBombGameRecord).where(
-                    NumberBombGameRecord.active_key == "global"
+                    NumberBombGameRecord.active_key == "global",
+                    *(
+                        ()
+                        if group_chat_id is None
+                        else (NumberBombGameRecord.group_chat_id == group_chat_id,)
+                    ),
                 )
             )
             if number_game is not None:
@@ -5267,7 +5296,14 @@ class CoreRepository:
                 )
 
             blame_game = session.scalar(
-                select(BlameGameRecord).where(BlameGameRecord.active_key == "global")
+                select(BlameGameRecord).where(
+                    BlameGameRecord.active_key == "global",
+                    *(
+                        ()
+                        if group_chat_id is None
+                        else (BlameGameRecord.group_chat_id == group_chat_id,)
+                    ),
+                )
             )
             if blame_game is not None:
                 rows = list(
@@ -5298,7 +5334,12 @@ class CoreRepository:
 
             undercover = session.scalar(
                 select(UndercoverSessionRecord).where(
-                    UndercoverSessionRecord.active_key == _UNDERCOVER_ACTIVE_KEY
+                    UndercoverSessionRecord.active_key == _UNDERCOVER_ACTIVE_KEY,
+                    *(
+                        ()
+                        if group_chat_id is None
+                        else (UndercoverSessionRecord.group_chat_id == group_chat_id,)
+                    ),
                 )
             )
             if undercover is not None:
@@ -5364,7 +5405,12 @@ class CoreRepository:
 
             memory = session.scalar(
                 select(MemoryAssessmentGameRecord).where(
-                    MemoryAssessmentGameRecord.active_key == "global"
+                    MemoryAssessmentGameRecord.active_key == "global",
+                    *(
+                        ()
+                        if group_chat_id is None
+                        else (MemoryAssessmentGameRecord.group_chat_id == group_chat_id,)
+                    ),
                 )
             )
             if memory is not None:
@@ -5407,7 +5453,14 @@ class CoreRepository:
 
             event = session.scalar(
                 select(RandomEventRecord)
-                .where(RandomEventRecord.state.in_(("signup", "in_progress", "tipping")))
+                .where(
+                    RandomEventRecord.state.in_(("signup", "in_progress", "tipping")),
+                    *(
+                        ()
+                        if group_chat_id is None
+                        else (RandomEventRecord.group_chat_id == group_chat_id,)
+                    ),
+                )
                 .order_by(RandomEventRecord.started_at)
             )
             if event is not None:
@@ -5468,13 +5521,24 @@ class CoreRepository:
             return active[0]
 
     def current_gameplay_admin_summary(
-        self, now: datetime
+        self,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
     ) -> GameplayAdminSummary:
-        summary = self.active_gameplay_summary("", now)
+        with self._session() as session:
+            group = session.get(GroupChatRecord, group_chat_id)
+            group_name = (
+                "主群聊"
+                if group is None and group_chat_id == PRIMARY_GROUP_CHAT_ID
+                else None if group is None else group.name
+            )
+        summary = self.active_gameplay_summary("", now, group_chat_id)
         if summary.game_type is None:
-            return GameplayAdminSummary()
+            return GameplayAdminSummary(group_chat_id, group_name)
         if summary.game_type != "number_bomb":
             return GameplayAdminSummary(
+                group_chat_id=group_chat_id,
+                group_name=group_name,
                 game_type=summary.game_type,
                 game_id=summary.game_id,
                 state=summary.state,
@@ -5489,8 +5553,12 @@ class CoreRepository:
             )
         with self._session() as session:
             game = session.get(NumberBombGameRecord, summary.game_id)
-            if game is None or game.active_key != "global":
-                return GameplayAdminSummary()
+            if (
+                game is None
+                or game.active_key != "global"
+                or game.group_chat_id != group_chat_id
+            ):
+                return GameplayAdminSummary(group_chat_id, group_name)
             reported_user_ids: set[UUID] = set()
             if game.state == "collecting":
                 round_record = session.scalar(
@@ -5523,6 +5591,8 @@ class CoreRepository:
                 )
             )
             return GameplayAdminSummary(
+                group_chat_id=group_chat_id,
+                group_name=group_name,
                 game_type="number_bomb",
                 game_id=game.id,
                 state=game.state,
@@ -5541,10 +5611,32 @@ class CoreRepository:
                 skip_enabled=game.skip_enabled,
             )
 
+    def current_gameplay_admin_summaries(
+        self, now: datetime
+    ) -> tuple[GameplayAdminSummary, ...]:
+        groups = self.list_group_chats()
+        if not groups:
+            summary = self.current_gameplay_admin_summary(
+                now, PRIMARY_GROUP_CHAT_ID
+            )
+            return () if summary.game_type is None else (summary,)
+        return tuple(
+            summary
+            for group in groups
+            if (summary := self.current_gameplay_admin_summary(now, group.id)).game_type
+            is not None
+        )
+
     def force_end_gameplay(
-        self, game_type: str, game_id: UUID, now: datetime
+        self,
+        game_type: str,
+        game_id: UUID,
+        now: datetime,
+        group_chat_id: UUID | None = None,
     ) -> bool:
         now = now.astimezone(BEIJING)
+        if group_chat_id is None:
+            group_chat_id = PRIMARY_GROUP_CHAT_ID
         game_names = {
             "number_bomb": "蹦蹦数字炸弹",
             "blame_bomb": "甩锅游戏",
@@ -5561,19 +5653,31 @@ class CoreRepository:
                 ended = False
                 if game_type == "number_bomb":
                     game = session.get(NumberBombGameRecord, game_id, with_for_update=True)
-                    if game is not None and game.active_key == "global":
+                    if (
+                        game is not None
+                        and game.active_key == "global"
+                        and game.group_chat_id == group_chat_id
+                    ):
                         self._finish_number_bomb_game(
                             session, game, "admin_forced", now
                         )
                         ended = True
                 elif game_type == "blame_bomb":
                     game = session.get(BlameGameRecord, game_id, with_for_update=True)
-                    if game is not None and game.active_key == "global":
+                    if (
+                        game is not None
+                        and game.active_key == "global"
+                        and game.group_chat_id == group_chat_id
+                    ):
                         self._cancel_blame_game(session, game, "admin_forced", now)
                         ended = True
                 elif game_type == "undercover":
                     game = session.get(UndercoverSessionRecord, game_id, with_for_update=True)
-                    if game is not None and game.active_key == _UNDERCOVER_ACTIVE_KEY:
+                    if (
+                        game is not None
+                        and game.active_key == _UNDERCOVER_ACTIVE_KEY
+                        and game.group_chat_id == group_chat_id
+                    ):
                         game.state = "closed"
                         game.active_key = None
                         game.finished_at = now
@@ -5601,6 +5705,7 @@ class CoreRepository:
                     if (
                         game is not None
                         and game.active_key == "global"
+                        and game.group_chat_id == group_chat_id
                         and game.mode == expected_mode
                     ):
                         game.state = "cancelled"
@@ -5617,7 +5722,11 @@ class CoreRepository:
                         ended = True
                 else:
                     event = session.get(RandomEventRecord, game_id, with_for_update=True)
-                    if event is not None and event.state in {"signup", "in_progress", "tipping"}:
+                    if (
+                        event is not None
+                        and event.group_chat_id == group_chat_id
+                        and event.state in {"signup", "in_progress", "tipping"}
+                    ):
                         if event.state == "tipping":
                             self._settle_random_event_tipping(session, event, now, forced=True)
                             return True
@@ -5638,7 +5747,12 @@ class CoreRepository:
                     message = render_template(definition, template, context)
                 except ValueError:
                     message = render_template(definition, definition.default, context)
-                self.enqueue_system_outbound(message)
+                group = session.get(GroupChatRecord, group_chat_id)
+                self.enqueue_system_outbound(
+                    message,
+                    group_chat_id=group_chat_id,
+                    destination_chatroom_id=(None if group is None else group.chatroom_id),
+                )
                 return True
 
     def start_number_bomb_game(

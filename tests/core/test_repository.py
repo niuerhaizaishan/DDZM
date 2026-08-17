@@ -463,6 +463,49 @@ def test_group_chat_with_active_gameplay_cannot_be_disabled(repository, now):
         )
 
 
+def test_active_gameplay_and_admin_summaries_are_scoped_by_group(repository, now):
+    primary = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=group-main", now
+    )
+    second = repository.create_group_chat(
+        "第二群",
+        "https://www.aikda.com/chat?c=group-2",
+        True,
+        True,
+        True,
+        True,
+        now,
+    )
+    with repository._session() as session:
+        game_a = NumberBombGameRecord(
+            group_chat_id=primary.id,
+            active_key="global",
+            state="signup",
+            target_player_count=3,
+            last_activity_at=now,
+            created_at=now,
+        )
+        game_b = NumberBombGameRecord(
+            group_chat_id=second.id,
+            active_key="global",
+            state="signup",
+            target_player_count=4,
+            last_activity_at=now,
+            created_at=now,
+        )
+        session.add_all((game_a, game_b))
+        session.flush()
+        first_id, second_id = game_a.id, game_b.id
+
+    assert repository.active_gameplay_summary("nobody", now, primary.id).game_id == first_id
+    assert repository.active_gameplay_summary("nobody", now, second.id).game_id == second_id
+    summaries = repository.current_gameplay_admin_summaries(now)
+    assert [(item.group_chat_id, item.group_name, item.game_id) for item in summaries] == [
+        (primary.id, "主群聊", first_id),
+        (second.id, "第二群", second_id),
+    ]
+
+
 def test_employee_balance_ledger_pages_and_reconstructs_balance(repository, now):
     user, _ = repository.create_user("ledger-player", "流水员工", now, 0)
     repository.record_balance_change(user.id, 20, "onboarding", now + timedelta(minutes=1))

@@ -37,6 +37,7 @@ TEMPLATE_DEFINITIONS = (
     TemplateDefinition("/发红包", "usage", "指令格式", "请用 /发红包 人数 总金额 创建红包。", ("{日期}",)),
     TemplateDefinition("/发红包", "group_only", "仅限群聊", "请回到群里发送 /发红包 人数 总金额。", ("{日期}",)),
     TemplateDefinition("/发红包", "not_joined", "未入职", "请先用 /入职 名字 加入摸鱼公司。", ("{日期}",)),
+    TemplateDefinition("/发红包", "disabled", "玩法关闭", "当前群聊已关闭小游戏功能。", ("{日期}",)),
     TemplateDefinition("/发红包", "invalid_parameters", "参数无效", "红包人数必须是 2–50，总金额必须是人数至 99999 的半角整数。", ("{日期}",)),
     TemplateDefinition("/发红包", "insufficient_balance", "余额不足", "余额不足，无法发出这个红包。", ("{日期}",)),
     TemplateDefinition("/发红包", "daily_limit", "次数用尽", "你今天的 5 次发红包机会已经用完了。", ("{日期}",)),

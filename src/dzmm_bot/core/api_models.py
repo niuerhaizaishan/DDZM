@@ -770,6 +770,8 @@ class GameplayParticipantResponse(ApiModel):
 
 
 class GameplaySummaryResponse(ApiModel):
+    group_chat_id: UUID
+    group_name: str
     game_type: str | None = None
     game_id: UUID | None = None
     state: str | None = None
@@ -779,6 +781,10 @@ class GameplaySummaryResponse(ApiModel):
     tipping_deadline: AwareDatetime | None = None
     tip_total: int = 0
     skip_enabled: bool = False
+
+
+class GameplaySummariesResponse(ApiModel):
+    items: list[GameplaySummaryResponse] = Field(default_factory=list)
 
 
 class RandomEventSettingsResponse(ApiModel):

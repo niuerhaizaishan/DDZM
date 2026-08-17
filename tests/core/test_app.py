@@ -319,7 +319,9 @@ def test_gameplay_current_hides_numbers_and_force_end_requires_exact_identity(
     current = app_context.client.get("/internal/gameplay/current", headers=headers)
 
     assert current.status_code == 200
-    assert current.json() == {
+    assert current.json() == {"items": [{
+        "group_chat_id": "00000000-0000-0000-0000-000000000001",
+        "group_name": "主群聊",
         "game_type": "number_bomb",
         "game_id": str(created.game_id),
         "state": "collecting",
@@ -335,22 +337,22 @@ def test_gameplay_current_hides_numbers_and_force_end_requires_exact_identity(
         "tipping_deadline": None,
         "tip_total": 0,
         "skip_enabled": False,
-    }
+    }]}
     assert all(
         "submitted_number" not in participant
-        for participant in current.json()["participants"]
+        for participant in current.json()["items"][0]["participants"]
     )
 
     stale = app_context.client.post(
-        f"/internal/gameplay/blame_bomb/{created.game_id}/force-end",
+        f"/internal/gameplay/00000000-0000-0000-0000-000000000001/blame_bomb/{created.game_id}/force-end",
         headers=headers,
     )
     ended = app_context.client.post(
-        f"/internal/gameplay/number_bomb/{created.game_id}/force-end",
+        f"/internal/gameplay/00000000-0000-0000-0000-000000000001/number_bomb/{created.game_id}/force-end",
         headers=headers,
     )
     repeated = app_context.client.post(
-        f"/internal/gameplay/number_bomb/{created.game_id}/force-end",
+        f"/internal/gameplay/00000000-0000-0000-0000-000000000001/number_bomb/{created.game_id}/force-end",
         headers=headers,
     )
 
@@ -373,7 +375,7 @@ def test_admin_can_force_end_single_memory_assessment(app_context, headers):
     created = repository.start_memory_assessment_single("memory-single-player", NOW)
 
     response = app_context.client.post(
-        f"/internal/gameplay/memory_single/{created.game_id}/force-end",
+        f"/internal/gameplay/00000000-0000-0000-0000-000000000001/memory_single/{created.game_id}/force-end",
         headers=headers,
     )
 
@@ -1962,12 +1964,13 @@ def test_random_event_tipping_is_visible_in_gameplay_and_event_details(
     )
 
     assert current.status_code == 200
-    assert current.json()["state"] == "tipping"
-    assert current.json()["tipping_deadline"] == (
+    gameplay = current.json()["items"][0]
+    assert gameplay["state"] == "tipping"
+    assert gameplay["tipping_deadline"] == (
         now + timedelta(seconds=120)
     ).isoformat()
-    assert current.json()["tip_total"] == 3
-    assert [item["display_name"] for item in current.json()["participants"]] == [
+    assert gameplay["tip_total"] == 3
+    assert [item["display_name"] for item in gameplay["participants"]] == [
         "接口收款人"
     ]
     assert details.json()["tips"] == [

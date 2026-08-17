@@ -57,6 +57,21 @@ class GroupCommandHandler:
         if not self._repository.is_command_enabled(command):
             return None
         received_at = message.received_at.astimezone(_BEIJING)
+        group = (
+            self._repository.resolve_enabled_group_chat(message.chatroom_id)
+            if message.source_type == "group" and message.chatroom_id is not None
+            else None
+        )
+        group_chat_id = None if group is None else group.id
+        if (
+            group is not None
+            and not group.games_enabled
+            and command in {
+                "/发红包", "/摸鱼躲猫猫", "/记忆考核", "/谁是卧底",
+                "/甩锅游戏", "/蹦蹦数字炸弹",
+            }
+        ):
+            return self._reply(command, "disabled", received_at)
         if command == "/发红包":
             return self._red_packet_create(message, content, received_at)
         if command == "/抢红包":
@@ -64,7 +79,9 @@ class GroupCommandHandler:
         if command == "/打赏":
             return self._random_event_tip(message, content, received_at)
         if command == "/当前游戏":
-            return self._current_game(message.sender_platform_id, received_at)
+            return self._current_game(
+                message.sender_platform_id, received_at, group_chat_id
+            )
         if command == "/入职":
             return self._join(message.sender_platform_id, content, received_at)
         if command == "/蹦蹦数字炸弹":
@@ -73,7 +90,9 @@ class GroupCommandHandler:
             )
         if command == "/开始":
             summary = self._repository.active_gameplay_summary(
-                message.sender_platform_id, received_at
+                message.sender_platform_id,
+                received_at,
+                group_chat_id,
             )
             if summary.game_type == "number_bomb":
                 return self._number_bomb_manual_start(
@@ -86,7 +105,9 @@ class GroupCommandHandler:
             return self._number_bomb_submit(message, content, received_at)
         if command == "/跳过":
             summary = self._repository.active_gameplay_summary(
-                message.sender_platform_id, received_at
+                message.sender_platform_id,
+                received_at,
+                group_chat_id,
             )
             if summary.game_type == "undercover":
                 return self._undercover_skip(
@@ -115,7 +136,9 @@ class GroupCommandHandler:
             return self._undercover_leave(message.sender_platform_id, received_at)
         if command == "/结束游戏":
             summary = self._repository.active_gameplay_summary(
-                message.sender_platform_id, received_at
+                message.sender_platform_id,
+                received_at,
+                group_chat_id,
             )
             profile = self._repository.get_user_profile(
                 message.sender_platform_id
@@ -126,7 +149,10 @@ class GroupCommandHandler:
                 and summary.game_type not in {None, "conflict"}
                 and summary.game_id is not None
                 and self._repository.force_end_gameplay(
-                    summary.game_type, summary.game_id, received_at
+                    summary.game_type,
+                    summary.game_id,
+                    received_at,
+                    group_chat_id,
                 )
             ):
                 return None
@@ -201,7 +227,9 @@ class GroupCommandHandler:
             )
         if command == "/加入":
             summary = self._repository.active_gameplay_summary(
-                message.sender_platform_id, received_at
+                message.sender_platform_id,
+                received_at,
+                group_chat_id,
             )
             if summary.game_type == "number_bomb":
                 return self._number_bomb_join(message.sender_platform_id, received_at)
@@ -214,7 +242,9 @@ class GroupCommandHandler:
             return self._event_join(message.sender_platform_id, content, received_at)
         if command == "/退出":
             summary = self._repository.active_gameplay_summary(
-                message.sender_platform_id, received_at
+                message.sender_platform_id,
+                received_at,
+                group_chat_id,
             )
             if summary.game_type == "number_bomb":
                 return self._number_bomb_leave(message.sender_platform_id, received_at)
@@ -241,7 +271,9 @@ class GroupCommandHandler:
             )
         if command == "/继续":
             summary = self._repository.active_gameplay_summary(
-                message.sender_platform_id, received_at
+                message.sender_platform_id,
+                received_at,
+                group_chat_id,
             )
             if summary.game_type == "number_bomb":
                 return self._number_bomb_continue(
@@ -339,8 +371,10 @@ class GroupCommandHandler:
             return "空包"
         return f"{amount} {self._repository.get_game_settings().currency_name}"
 
-    def _current_game(self, platform_id: str, received_at) -> str:
-        summary = self._repository.active_gameplay_summary(platform_id, received_at)
+    def _current_game(self, platform_id: str, received_at, group_chat_id=None) -> str:
+        summary = self._repository.active_gameplay_summary(
+            platform_id, received_at, group_chat_id
+        )
         if summary.game_type is None:
             return self._reply("/当前游戏", "none", received_at)
         if summary.game_type == "conflict":

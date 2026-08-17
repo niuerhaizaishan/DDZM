@@ -976,8 +976,9 @@ def create_app(
             "version": repository.config_version(),
         }
 
-    @app.post("/api/gameplay/{game_type}/{game_id}/force-end")
+    @app.post("/api/gameplay/{group_chat_id}/{game_type}/{game_id}/force-end")
     def force_end_gameplay(
+        group_chat_id: str,
         game_type: str,
         game_id: str,
         identity: Annotated[AdminIdentity, Depends(authorize)],
@@ -991,7 +992,9 @@ def create_app(
             idempotency_key,
             if_match,
             lambda: _relay_core(
-                lambda: core.force_end_gameplay(game_type, game_id)
+                lambda: core.force_end_gameplay(
+                    group_chat_id, game_type, game_id
+                )
             ),
             scope="force-end-gameplay",
         )

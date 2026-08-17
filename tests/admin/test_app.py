@@ -102,19 +102,23 @@ class FakeCore:
     red_packet_settings_requests: list[dict] = field(default_factory=list)
     gameplay_current: dict = field(
         default_factory=lambda: {
-            "game_type": "number_bomb",
-            "game_id": "00000000-0000-0000-0000-000000000099",
-            "state": "collecting",
-            "participants": [
-                {"number": 1, "display_name": "甲", "reported": True},
-                {"number": 2, "display_name": "乙", "reported": False},
-            ],
-            "signup_deadline": None,
-            "next_reminder_at": "2026-08-11T12:00:15+08:00",
-            "skip_enabled": True,
+            "items": [{
+                "group_chat_id": "00000000-0000-0000-0000-000000000001",
+                "group_name": "主群聊",
+                "game_type": "number_bomb",
+                "game_id": "00000000-0000-0000-0000-000000000099",
+                "state": "collecting",
+                "participants": [
+                    {"number": 1, "display_name": "甲", "reported": True},
+                    {"number": 2, "display_name": "乙", "reported": False},
+                ],
+                "signup_deadline": None,
+                "next_reminder_at": "2026-08-11T12:00:15+08:00",
+                "skip_enabled": True,
+            }],
         }
     )
-    forced_gameplays: list[tuple[str, str]] = field(default_factory=list)
+    forced_gameplays: list[tuple[str, str, str]] = field(default_factory=list)
     ai_assistant_settings: dict = field(
         default_factory=lambda: {
             "enabled": False,
@@ -592,8 +596,8 @@ class FakeCore:
     def get_current_gameplay(self):
         return self.gameplay_current
 
-    def force_end_gameplay(self, game_type, game_id):
-        self.forced_gameplays.append((game_type, game_id))
+    def force_end_gameplay(self, group_chat_id, game_type, game_id):
+        self.forced_gameplays.append((group_chat_id, game_type, game_id))
         return {"accepted": True}
 
     def get_random_event_settings(self):
@@ -2715,7 +2719,7 @@ def test_number_bomb_settings_surface_has_new_controls_and_gameplay_card():
 def test_admin_relays_current_gameplay_and_versioned_force_end(client, headers, core):
     current = client.get("/api/gameplay/current", headers=headers)
     ended = client.post(
-        "/api/gameplay/number_bomb/00000000-0000-0000-0000-000000000099/force-end",
+        "/api/gameplay/00000000-0000-0000-0000-000000000001/number_bomb/00000000-0000-0000-0000-000000000099/force-end",
         headers={
             **headers,
             "If-Match": str(current.json()["version"]),
@@ -2724,9 +2728,13 @@ def test_admin_relays_current_gameplay_and_versioned_force_end(client, headers, 
     )
 
     assert current.status_code == 200
-    assert current.json()["participants"][1]["reported"] is False
+    assert current.json()["items"][0]["participants"][1]["reported"] is False
     assert ended.json()["accepted"] is True
     assert ended.json()["version"] == current.json()["version"] + 1
     assert core.forced_gameplays == [
-        ("number_bomb", "00000000-0000-0000-0000-000000000099")
+        (
+            "00000000-0000-0000-0000-000000000001",
+            "number_bomb",
+            "00000000-0000-0000-0000-000000000099",
+        )
     ]

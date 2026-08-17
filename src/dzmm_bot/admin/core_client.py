@@ -121,7 +121,9 @@ class AdminCorePort(Protocol):
 
     def get_current_gameplay(self) -> dict: ...
 
-    def force_end_gameplay(self, game_type: str, game_id: str) -> dict: ...
+    def force_end_gameplay(
+        self, group_chat_id: str, game_type: str, game_id: str
+    ) -> dict: ...
 
     def get_random_event_settings(self) -> dict: ...
 
@@ -449,9 +451,11 @@ class CoreClient:
     def get_current_gameplay(self) -> dict:
         return self._get("/internal/gameplay/current")
 
-    def force_end_gameplay(self, game_type: str, game_id: str) -> dict:
+    def force_end_gameplay(
+        self, group_chat_id: str, game_type: str, game_id: str
+    ) -> dict:
         response = self._client.post(
-            f"/internal/gameplay/{game_type}/{game_id}/force-end"
+            f"/internal/gameplay/{group_chat_id}/{game_type}/{game_id}/force-end"
         )
         response.raise_for_status()
         return response.json()
