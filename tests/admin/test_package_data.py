@@ -22,3 +22,12 @@ def test_packaged_admin_assets_include_red_packet_settings_surface():
     assert 'id="save-red-packet-settings"' in page
     assert 'requestGame("/api/game/red-packet/settings")' in script
     assert 'method: "PATCH"' in script
+
+
+def test_packaged_admin_assets_include_multi_group_surface():
+    root = Path(__file__).resolve().parents[2]
+    page = (root / "src/dzmm_bot/admin/templates/index.html").read_text()
+
+    assert 'id="group-chats-view"' in page
+    assert 'id="group-chat-modal"' in page
+    assert 'id="employee-group-message-filter"' in page

@@ -77,6 +77,7 @@
                 </div>
                 <div class="nav-group">
                   <p class="nav-group-label">人员与系统</p>
+                  <button id="nav-group-chats" class="nav-item" data-view="group-chats" type="button">群聊管理</button>
                   <button id="nav-organization" class="nav-item" data-view="organization" type="button">职位与部门</button>
                   <button id="nav-employees" class="nav-item" data-view="employees" type="button">员工</button>
                   <button id="nav-admins" class="nav-item" data-view="admins" type="button" hidden>管理员</button>
@@ -230,6 +231,12 @@
                 <nav id="employee-pagination" class="pagination" aria-label="员工分页"></nav>
               </section>
 
+              <section id="group-chats-view" class="dashboard-view panel" hidden>
+                <p class="eyebrow">多群运行</p>
+                <div class="panel-heading"><div><h2>群聊管理</h2><p class="muted">员工和经济数据全局共享；游戏、随机事件和当前对话按群独立。</p></div><button id="create-group-chat" class="primary" type="button">新增群聊</button></div>
+                <div id="group-chat-list" class="data-list" aria-live="polite"></div>
+              </section>
+
               <section id="organization-view" class="dashboard-view panel" hidden>
                 <p class="eyebrow">群内组织</p>
                 <nav class="management-tabs" data-management-tabs="organization" aria-label="组织分类"><button class="management-tab active" data-management-tab="ranks" type="button">职位</button><button class="management-tab" data-management-tab="departments" type="button">部门</button><button class="management-tab" data-management-tab="promotions" type="button">晋升审批</button><button class="management-tab" data-management-tab="department-requests" type="button">部门审批</button></nav>
@@ -260,6 +267,30 @@
       </main>
     </div>
     <div id="notification-region" class="notification-region" aria-live="polite" aria-atomic="true"></div>
+    <div id="group-chat-modal" class="template-modal" role="dialog" aria-modal="true" aria-labelledby="group-chat-modal-title" hidden>
+      <div class="template-modal-backdrop" data-close-group-chat-modal></div>
+      <section class="template-modal-card"><div class="template-modal-heading"><div><p class="eyebrow">多群配置</p><h2 id="group-chat-modal-title">新增群聊</h2><p class="muted">群链接必须与主群同域，格式为 https://站点/chat?c=群ID。</p></div><button class="text-button" data-close-group-chat-modal type="button">关闭</button></div>
+        <label>群名称<input id="group-chat-name" maxlength="64" required></label>
+        <label>群聊链接<input id="group-chat-url" maxlength="4096" required></label>
+        <label>群聊 ID（保存后自动识别）<input id="group-chat-room-id" readonly></label>
+        <div class="event-input-grid">
+          <label><input id="group-chat-listening-enabled" type="checkbox"> 开启监听与回复</label>
+          <label><input id="group-chat-games-enabled" type="checkbox"> 允许创建游戏</label>
+          <label><input id="group-chat-random-events-enabled" type="checkbox"> 开启随机事件</label>
+          <label><input id="group-chat-announcements-enabled" type="checkbox"> 接收定时活动与公告</label>
+        </div>
+        <div class="template-modal-actions"><button class="secondary" data-close-group-chat-modal type="button">取消</button><button id="save-group-chat" class="primary" type="button">保存群聊</button></div>
+      </section>
+    </div>
+    <div id="employee-group-messages-modal" class="template-modal" role="dialog" aria-modal="true" aria-labelledby="employee-group-messages-modal-title" hidden>
+      <div class="template-modal-backdrop" data-close-employee-group-messages-modal></div>
+      <section class="template-modal-card"><div class="template-modal-heading"><div><p class="eyebrow">员工群聊记录</p><h2 id="employee-group-messages-modal-title">消息记录</h2><p class="muted">默认查看全部群聊，可按单群筛选；私聊不会显示在这里。</p></div><button class="text-button" data-close-employee-group-messages-modal type="button">关闭</button></div>
+        <label>群聊筛选<select id="employee-group-message-filter"><option value="">全部群聊</option></select></label>
+        <div id="employee-group-message-list" class="data-list"></div>
+        <nav id="employee-group-message-pagination" class="pagination" aria-label="员工消息分页"></nav>
+        <div class="template-modal-actions"><button class="secondary" data-close-employee-group-messages-modal type="button">关闭</button></div>
+      </section>
+    </div>
     <div id="template-modal" class="template-modal" role="dialog" aria-modal="true" aria-labelledby="template-modal-title" hidden>
       <div class="template-modal-backdrop" data-close-template-modal></div>
       <section class="template-modal-card">
@@ -402,7 +433,7 @@
     </div>
     <div id="random-event-add-modal" class="template-modal" role="dialog" aria-modal="true" aria-labelledby="random-event-add-modal-title" hidden>
       <div class="template-modal-backdrop" data-close-random-event-add-modal></div>
-      <section class="template-modal-card"><div class="template-modal-heading"><div><p class="eyebrow">今日随机事件</p><h2 id="random-event-add-modal-title">补充今日事件</h2><p class="muted">选择场景和一个事件模板，系统会冻结本次规则。</p></div><button class="text-button" data-close-random-event-add-modal type="button">关闭</button></div><label for="random-event-add-scene">场景</label><select id="random-event-add-scene"></select><label for="random-event-add-template">事件</label><select id="random-event-add-template"></select><label for="random-event-add-scheduled-at">开始时间（北京时间）</label><input id="random-event-add-scheduled-at" type="datetime-local"><div class="template-modal-actions"><button class="secondary" data-close-random-event-add-modal type="button">取消</button><button id="save-random-event-add" class="primary" type="button">补充事件</button></div></section>
+      <section class="template-modal-card"><div class="template-modal-heading"><div><p class="eyebrow">今日随机事件</p><h2 id="random-event-add-modal-title">补充今日事件</h2><p class="muted">选择目标群、场景和一个事件模板，系统会冻结本次规则。</p></div><button class="text-button" data-close-random-event-add-modal type="button">关闭</button></div><label for="random-event-add-group">目标群聊</label><select id="random-event-add-group"></select><label for="random-event-add-scene">场景</label><select id="random-event-add-scene"></select><label for="random-event-add-template">事件</label><select id="random-event-add-template"></select><label for="random-event-add-scheduled-at">开始时间（北京时间）</label><input id="random-event-add-scheduled-at" type="datetime-local"><div class="template-modal-actions"><button class="secondary" data-close-random-event-add-modal type="button">取消</button><button id="save-random-event-add" class="primary" type="button">补充事件</button></div></section>
     </div>
     <div id="random-event-details-modal" class="template-modal" role="dialog" aria-modal="true" aria-labelledby="random-event-details-modal-title" hidden>
       <div class="template-modal-backdrop" data-close-random-event-details-modal></div>

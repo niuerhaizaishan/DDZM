@@ -996,6 +996,20 @@ def test_admin_group_chat_crud_uses_configuration_versioning(client, headers):
     assert deleted.json()["deleted_at"] is not None
 
 
+def test_admin_page_contains_multi_group_controls(client):
+    page = client.get("/").text
+    script = client.get("/static/admin.js").text
+
+    assert 'data-view="group-chats"' in page
+    assert 'id="group-chat-list"' in page
+    assert 'id="group-chat-name"' in page
+    assert 'id="group-chat-url"' in page
+    for switch in ("listening", "games", "random-events", "announcements"):
+        assert f'id="group-chat-{switch}-enabled"' in page
+    assert 'requestGame("/api/group-chats"' in script
+    assert 'data-employee-group-messages' in script
+
+
 def test_admin_proxies_categorized_ai_impression_crud(client, headers):
     created = client.post(
         "/api/game/users/player/ai-impressions",

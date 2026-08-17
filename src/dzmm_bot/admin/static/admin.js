@@ -43,6 +43,8 @@ let todayRandomEvents = [];
 let todayRandomEventPage = 1;
 let rankDefinitions = [];
 let rankPage = 1;
+let groupChats = [];
+let employeeGroupMessagePage = 1;
 
 const pageSizeOptions = [5, 10, 15, 20, 50];
 const pageSizeByList = new Map();
@@ -75,6 +77,7 @@ const pageContext = {
   shop: {crumb: "玩法与资源 / 物品与商店", title: "物品与商店", description: "上架物品、维护库存，并查看当前兑换资源。"},
   organization: {crumb: "人员与系统 / 职位与部门", title: "职位与部门", description: "维护群内组织结构，以及晋升和部门申请记录。"},
   employees: {crumb: "人员与系统 / 员工", title: "员工管理", description: "查看员工资料、余额和当前群内身份。"},
+  "group-chats": {crumb: "人员与系统 / 群聊管理", title: "群聊管理", description: "管理多个群的监听、玩法、随机事件和公告开关。"},
   admins: {crumb: "人员与系统 / 管理员", title: "管理员管理", description: "仅超级管理员可创建、停用或删除后台管理员账号。"},
 };
 
@@ -285,6 +288,8 @@ const aiAssistantSettingsModal = document.querySelector("#ai-assistant-settings-
 const employeeMemoryModal = document.querySelector("#employee-memory-modal");
 const employeeBalanceLedgerModal = document.querySelector("#employee-balance-ledger-modal");
 let employeeBalanceLedgerRequestId = 0;
+const groupChatModal = document.querySelector("#group-chat-modal");
+const employeeGroupMessagesModal = document.querySelector("#employee-group-messages-modal");
 const employeeProfileModal = document.querySelector("#employee-profile-modal");
 let employeeProfileImagePoll = null;
 const aiKnowledgeCardModal = document.querySelector("#ai-knowledge-card-modal");
@@ -901,7 +906,8 @@ function openHideAndSeekSceneModal(scene = null) {
 }
 
 function renderTodayRandomEvents(events) {
-  const filtered = filterList("random-event-today", events, (event) => `${event.scene_name || ""} ${event.event_name || ""} ${eventStatusLabel(event.status)}`);
+  const groupNames = new Map(groupChats.map((group) => [group.id, group.name]));
+  const filtered = filterList("random-event-today", events, (event) => `${groupNames.get(event.group_chat_id) || ""} ${event.scene_name || ""} ${event.event_name || ""} ${eventStatusLabel(event.status)}`);
   const pageData = renderLocalPagination(
     document.querySelector("#today-random-event-pagination"),
     filtered,
@@ -915,19 +921,21 @@ function renderTodayRandomEvents(events) {
   );
   todayRandomEventPage = pageData.page;
   document.querySelector("#today-random-event-list").innerHTML = pageData.items.map((event) => `
-    <article class="data-row"><div><b>${escapeHtml(event.scene_name || "未安排场景")}－${escapeHtml(event.event_name || "未安排事件")}${event.is_cross_day ? "（跨日）" : ""}</b><small>${statusBadge(eventStatusLabel(event.status), event.status === "in_progress" ? "success" : event.status === "pending" ? "warning" : "")}</small><small>${formatHeartbeat(event.scheduled_at)}</small></div>${event.status === "pending" ? `<div class="command-actions"><button class="secondary" data-trigger-random-event="${event.id}" type="button">立即触发</button><button class="secondary" data-adjust-random-event="${event.id}" data-scheduled-at="${event.scheduled_at}" type="button">调整时间</button><button class="danger-button" data-delete-random-event="${event.id}" type="button">移除</button></div>` : event.status === "skipped" ? "" : `<button class="secondary" data-view-random-event-details="${event.id}" type="button">查看详情</button>`}</article>`).join("") || "<p class=\"muted\">暂无符合条件的今日场次。</p>";
+    <article class="data-row"><div><b>${escapeHtml(groupNames.get(event.group_chat_id) || "未知群聊")} · ${escapeHtml(event.scene_name || "未安排场景")}－${escapeHtml(event.event_name || "未安排事件")}${event.is_cross_day ? "（跨日）" : ""}</b><small>${statusBadge(eventStatusLabel(event.status), event.status === "in_progress" ? "success" : event.status === "pending" ? "warning" : "")}</small><small>${formatHeartbeat(event.scheduled_at)}</small></div>${event.status === "pending" ? `<div class="command-actions"><button class="secondary" data-trigger-random-event="${event.id}" type="button">立即触发</button><button class="secondary" data-adjust-random-event="${event.id}" data-scheduled-at="${event.scheduled_at}" type="button">调整时间</button><button class="danger-button" data-delete-random-event="${event.id}" type="button">移除</button></div>` : event.status === "skipped" ? "" : `<button class="secondary" data-view-random-event-details="${event.id}" type="button">查看详情</button>`}</article>`).join("") || "<p class=\"muted\">暂无符合条件的今日场次。</p>";
 }
 
 async function loadRandomEvents(page = randomEventScenePage) {
-  const [settings, scenes, today, submissions] = await Promise.all([
+  const [settings, scenes, today, submissions, groups] = await Promise.all([
     requestGame("/api/game/random-events/settings"),
     requestGame(`/api/game/random-events/scenes?page=${page}&page_size=${pageSizeFor("random-event-scenes")}`),
     requestGame("/api/game/random-events/today"),
     requestGame(buildRandomEventSubmissionsPath(randomEventSubmissionPage, pageSizeFor("random-event-submissions"), randomEventSubmissionStatus)),
+    requestGame("/api/group-chats", {cache: "no-store"}),
   ]);
   randomEventSettings = settings;
   randomEventScenePage = scenes.page;
   todayRandomEvents = today.items;
+  groupChats = groups.items;
   configurationVersion = settings.version;
   renderRandomEventSettings(settings);
   renderRandomEventScenes(scenes.items);
@@ -1082,7 +1090,15 @@ function renderRandomEventAddTemplates() {
 }
 
 async function openRandomEventAddModal() {
-  const scenes = await requestGame("/api/game/random-events/scenes?page=1&page_size=100");
+  const [scenes, groups] = await Promise.all([
+    requestGame("/api/game/random-events/scenes?page=1&page_size=100"),
+    requestGame("/api/group-chats", {cache: "no-store"}),
+  ]);
+  groupChats = groups.items;
+  document.querySelector("#random-event-add-group").innerHTML = groupChats
+    .filter((group) => group.listening_enabled && group.random_events_enabled)
+    .map((group) => `<option value="${group.id}">${escapeHtml(group.name)}</option>`)
+    .join("");
   randomEventAddScenes = scenes.items.filter((scene) => scene.enabled && scene.events.length);
   const sceneInput = document.querySelector("#random-event-add-scene");
   sceneInput.innerHTML = randomEventAddScenes.map((scene) => `<option value="${scene.id}">${escapeHtml(scene.name)}</option>`).join("");
@@ -1359,13 +1375,79 @@ function formatEmployeeNumber(number) {
   return `#${String(number).padStart(4, "0")}`;
 }
 
+function groupConnectionLabel(state) {
+  return ({connected: "已连接", pending: "连接中", failed: "连接失败", disabled: "已停用"})[state] || "状态未知";
+}
+
+function renderGroupChats(items) {
+  document.querySelector("#group-chat-list").innerHTML = items.map((group) => {
+    const runtime = group.runtime || {};
+    const switches = [
+      ["监听", group.listening_enabled],
+      ["游戏", group.games_enabled],
+      ["随机事件", group.random_events_enabled],
+      ["公告", group.announcements_enabled],
+    ].map(([label, enabled]) => `${label}：${enabled ? "开" : "关"}`).join(" · ");
+    return `<article class="data-row"><div><b>${escapeHtml(group.name)}</b><small>${statusBadge(groupConnectionLabel(runtime.connection_state), runtime.connection_state === "connected" ? "success" : runtime.connection_state === "failed" ? "warning" : "")}</small><small>群聊 ID：${escapeHtml(group.chatroom_id || "未识别")} · ${escapeHtml(switches)}</small><small>${escapeHtml(group.chat_url || "未配置链接")}</small><small>最近接收：${formatHeartbeat(runtime.last_inbound_at)} · 最近发送：${formatHeartbeat(runtime.last_outbound_at)}</small>${runtime.last_error_summary ? `<small class="form-error">${escapeHtml(runtime.last_error_summary)}</small>` : ""}</div><div class="command-actions"><button class="secondary" data-edit-group-chat="${group.id}" type="button">编辑</button><button class="danger-button" data-delete-group-chat="${group.id}" type="button" ${group.listening_enabled ? "disabled" : ""}>删除</button></div></article>`;
+  }).join("") || '<p class="muted">还没有可管理的群聊。</p>';
+}
+
+async function loadGroupChats() {
+  const response = await requestGame("/api/group-chats", {cache: "no-store"});
+  groupChats = response.items;
+  configurationVersion = response.version;
+  renderGroupChats(groupChats);
+  return groupChats;
+}
+
+function openGroupChatModal(group = null) {
+  groupChatModal.dataset.groupId = group?.id || "";
+  document.querySelector("#group-chat-modal-title").textContent = group ? `编辑群聊：${group.name}` : "新增群聊";
+  document.querySelector("#group-chat-name").value = group?.name || "";
+  document.querySelector("#group-chat-url").value = group?.chat_url || "";
+  document.querySelector("#group-chat-room-id").value = group?.chatroom_id || "";
+  document.querySelector("#group-chat-listening-enabled").checked = group?.listening_enabled ?? true;
+  document.querySelector("#group-chat-games-enabled").checked = group?.games_enabled ?? true;
+  document.querySelector("#group-chat-random-events-enabled").checked = group?.random_events_enabled ?? true;
+  document.querySelector("#group-chat-announcements-enabled").checked = group?.announcements_enabled ?? true;
+  groupChatModal.hidden = false;
+  document.querySelector("#group-chat-name").focus();
+}
+
+function closeGroupChatModal() {
+  groupChatModal.hidden = true;
+  groupChatModal.dataset.groupId = "";
+}
+
+async function loadEmployeeGroupMessages(page = employeeGroupMessagePage) {
+  const platformId = employeeGroupMessagesModal.dataset.platformId;
+  const groupId = document.querySelector("#employee-group-message-filter").value;
+  const params = new URLSearchParams({page: String(page), page_size: "20"});
+  if (groupId) params.set("group_chat_id", groupId);
+  const history = await requestGame(`/api/game/users/${platformId}/group-messages?${params}`);
+  employeeGroupMessagePage = history.page;
+  document.querySelector("#employee-group-messages-modal-title").textContent = `消息记录：${history.display_name}`;
+  document.querySelector("#employee-group-message-list").innerHTML = history.items.map((item) => `<article class="data-row"><div><b>${escapeHtml(item.group_name)}</b><small>${formatHeartbeat(item.received_at)}</small><p>${escapeHtml(item.content)}</p></div></article>`).join("") || '<p class="muted">该范围内暂无群聊消息。</p>';
+  renderPagination(document.querySelector("#employee-group-message-pagination"), history, "条消息", loadEmployeeGroupMessages);
+}
+
+async function openEmployeeGroupMessagesModal(platformId) {
+  if (!groupChats.length) await loadGroupChats();
+  employeeGroupMessagesModal.dataset.platformId = platformId;
+  const select = document.querySelector("#employee-group-message-filter");
+  select.innerHTML = '<option value="">全部群聊</option>' + groupChats.map((group) => `<option value="${group.id}">${escapeHtml(group.name)}</option>`).join("");
+  employeeGroupMessagePage = 1;
+  await loadEmployeeGroupMessages(1);
+  employeeGroupMessagesModal.hidden = false;
+}
+
 async function loadEmployees(page = employeePage) {
   const settings = gameSettings || await loadSettings();
   const employees = await requestGame(`/api/game/users?page=${page}&page_size=${pageSizeFor("employees")}`);
   employeePage = employees.page;
   const filtered = filterList("employees", employees.items, (employee) => `${employee.display_name} ${formatEmployeeNumber(employee.employee_number)} ${employee.employee_number} ${employee.rank_name || ""} ${employee.department_name || ""}`);
   document.querySelector("#employee-list").innerHTML = filtered.map((employee) => `
-    <article class="data-row"><div><b>${escapeHtml(employee.display_name)}</b><small>工号：${formatEmployeeNumber(employee.employee_number)} · ${escapeHtml(employee.rank_name || "职位未分配")}（${escapeHtml(employee.rank_level_label || "—")}）· ${escapeHtml(employee.department_name || "未分配部门")}</small><small>入职：${formatHeartbeat(employee.joined_at)}</small></div><div class="command-actions"><strong>${employee.balance} ${escapeHtml(settings.currency_name)}</strong><button class="secondary" data-balance-ledger="${escapeHtml(employee.platform_id)}" type="button">摸鱼币流水</button><button class="secondary" data-personal-profile="${escapeHtml(employee.platform_id)}" data-personal-profile-name="${escapeHtml(employee.display_name)}" type="button">档案</button><button class="secondary" data-ai-memory="${escapeHtml(employee.platform_id)}" data-ai-memory-name="${escapeHtml(employee.display_name)}" type="button">AI 记忆</button>${identity?.role === "super_admin" ? `<button class="secondary" data-board-member="${escapeHtml(employee.platform_id)}" data-board-active="${employee.rank_name === "核心董事会"}" type="button">${employee.rank_name === "核心董事会" ? "撤销董事会" : "授予董事会"}</button>` : ""}</div></article>`).join("") || "<p class=\"muted\">还没有员工入职。</p>";
+    <article class="data-row"><div><b>${escapeHtml(employee.display_name)}</b><small>工号：${formatEmployeeNumber(employee.employee_number)} · ${escapeHtml(employee.rank_name || "职位未分配")}（${escapeHtml(employee.rank_level_label || "—")}）· ${escapeHtml(employee.department_name || "未分配部门")}</small><small>入职：${formatHeartbeat(employee.joined_at)}</small></div><div class="command-actions"><strong>${employee.balance} ${escapeHtml(settings.currency_name)}</strong><button class="secondary" data-balance-ledger="${escapeHtml(employee.platform_id)}" type="button">摸鱼币流水</button><button class="secondary" data-employee-group-messages="${escapeHtml(employee.platform_id)}" type="button">群聊记录</button><button class="secondary" data-personal-profile="${escapeHtml(employee.platform_id)}" data-personal-profile-name="${escapeHtml(employee.display_name)}" type="button">档案</button><button class="secondary" data-ai-memory="${escapeHtml(employee.platform_id)}" data-ai-memory-name="${escapeHtml(employee.display_name)}" type="button">AI 记忆</button>${identity?.role === "super_admin" ? `<button class="secondary" data-board-member="${escapeHtml(employee.platform_id)}" data-board-active="${employee.rank_name === "核心董事会"}" type="button">${employee.rank_name === "核心董事会" ? "撤销董事会" : "授予董事会"}</button>` : ""}</div></article>`).join("") || "<p class=\"muted\">还没有员工入职。</p>";
   renderPagination(document.querySelector("#employee-pagination"), employees, "位员工", loadEmployees);
 }
 
@@ -1541,6 +1623,7 @@ async function loadGameView(view) {
       return;
     }
     if (view === "organization") return loadOrganization();
+    if (view === "group-chats") return loadGroupChats();
     if (view === "employees") {
       return loadEmployees();
     }
@@ -1814,6 +1897,65 @@ for (const button of document.querySelectorAll("button[data-action]")) {
 for (const button of document.querySelectorAll(".nav-item")) {
   button.addEventListener("click", () => void loadGameView(button.dataset.view));
 }
+document.querySelector("#create-group-chat").addEventListener("click", () => openGroupChatModal());
+groupChatModal.addEventListener("click", (event) => {
+  if (event.target.closest("[data-close-group-chat-modal]")) closeGroupChatModal();
+});
+document.querySelector("#save-group-chat").addEventListener("click", async (event) => {
+  const groupId = groupChatModal.dataset.groupId;
+  const payload = {
+    name: document.querySelector("#group-chat-name").value,
+    chat_url: document.querySelector("#group-chat-url").value,
+    listening_enabled: document.querySelector("#group-chat-listening-enabled").checked,
+    games_enabled: document.querySelector("#group-chat-games-enabled").checked,
+    random_events_enabled: document.querySelector("#group-chat-random-events-enabled").checked,
+    announcements_enabled: document.querySelector("#group-chat-announcements-enabled").checked,
+  };
+  try {
+    await runMutation(event.currentTarget, "保存中…", async () => {
+      const updated = await requestGame(groupId ? `/api/group-chats/${groupId}` : "/api/group-chats", {
+        method: groupId ? "PATCH" : "POST",
+        headers: {"Content-Type": "application/json", ...configurationHeaders()},
+        body: JSON.stringify(payload),
+      });
+      configurationVersion = updated.version;
+      closeGroupChatModal();
+      await loadGroupChats();
+    });
+    setResult(groupId ? "群聊配置已保存" : "群聊已新增", "success");
+  } catch (error) {
+    setResult(`保存失败（${error.message}）`, "error");
+  }
+});
+document.querySelector("#group-chat-list").addEventListener("click", async (event) => {
+  const edit = event.target.closest("button[data-edit-group-chat]");
+  if (edit) {
+    openGroupChatModal(groupChats.find((group) => group.id === edit.dataset.editGroupChat));
+    return;
+  }
+  const remove = event.target.closest("button[data-delete-group-chat]");
+  if (!remove || !window.confirm("确定删除这个已停用群聊？历史消息和业务记录会保留。")) return;
+  try {
+    await runMutation(remove, "删除中…", async () => {
+      const updated = await requestGame(`/api/group-chats/${remove.dataset.deleteGroupChat}`, {
+        method: "DELETE",
+        headers: configurationHeaders(),
+      });
+      configurationVersion = updated.version;
+      await loadGroupChats();
+    });
+    setResult("群聊已删除", "success");
+  } catch (error) {
+    setResult(`删除失败（${error.message}）`, "error");
+  }
+});
+employeeGroupMessagesModal.addEventListener("click", (event) => {
+  if (event.target.closest("[data-close-employee-group-messages-modal]")) employeeGroupMessagesModal.hidden = true;
+});
+document.querySelector("#employee-group-message-filter").addEventListener("change", () => {
+  employeeGroupMessagePage = 1;
+  void loadEmployeeGroupMessages(1).catch((error) => setResult(`读取群聊记录失败（${error.message}）`, "error"));
+});
 document.querySelector("#employee-list").addEventListener("click", async (event) => {
   const ledgerButton = event.target.closest("button[data-balance-ledger]");
   if (ledgerButton) {
@@ -1821,6 +1963,15 @@ document.querySelector("#employee-list").addEventListener("click", async (event)
       await openEmployeeBalanceLedgerModal(ledgerButton.dataset.balanceLedger);
     } catch (error) {
       setResult(`读取摸鱼币流水失败（${error.message}）`, "error");
+    }
+    return;
+  }
+  const groupMessagesButton = event.target.closest("button[data-employee-group-messages]");
+  if (groupMessagesButton) {
+    try {
+      await openEmployeeGroupMessagesModal(groupMessagesButton.dataset.employeeGroupMessages);
+    } catch (error) {
+      setResult(`读取群聊记录失败（${error.message}）`, "error");
     }
     return;
   }
@@ -2444,6 +2595,7 @@ randomEventAddModal.addEventListener("click", async (event) => {
       const created = await requestGame("/api/game/random-events/today", {
         method: "POST", headers: {"Content-Type": "application/json", ...configurationHeaders()},
         body: JSON.stringify({
+          group_chat_id: document.querySelector("#random-event-add-group").value,
           scene_id: document.querySelector("#random-event-add-scene").value,
           event_name: document.querySelector("#random-event-add-template").value,
           scheduled_at: `${scheduledAt}:00+08:00`,
@@ -3046,6 +3198,8 @@ document.querySelector("#hide-and-seek-scene-list").addEventListener("click", as
   }
 });
 document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !groupChatModal.hidden) closeGroupChatModal();
+  if (event.key === "Escape" && !employeeGroupMessagesModal.hidden) employeeGroupMessagesModal.hidden = true;
   if (event.key === "Escape" && !templateModal.hidden) closeTemplateModal();
   if (event.key === "Escape" && !settingsModal.hidden) closeSettingsModal();
   if (event.key === "Escape" && !profileSettingsModal.hidden) closeProfileSettingsModal();
