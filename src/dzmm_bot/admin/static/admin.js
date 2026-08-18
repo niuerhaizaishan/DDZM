@@ -12,6 +12,7 @@ let gameSettings = null;
 let profileSettings = null;
 let activitySettings = null;
 let numberBombSettings = null;
+let texasHoldemSettings = null;
 let redPacketSettings = null;
 let currentGameplay = null;
 let gameplayVersion = null;
@@ -58,6 +59,8 @@ const randomEventCommandOptions = [
   ["/谁是卧底", "/谁是卧底"], ["/开始投票", "/开始投票"], ["/投票", "/投票"],
   ["/退出谁是卧底", "/退出谁是卧底"], ["/结束游戏", "/结束游戏"],
   ["/甩锅游戏", "/甩锅游戏"], ["/甩锅", "/甩锅"], ["/退出甩锅", "/退出甩锅"],
+  ["/德州扑克", "/德州扑克"], ["/看牌", "/看牌"], ["/过牌", "/过牌"], ["/跟注", "/跟注"],
+  ["/加注", "/加注"], ["/全下", "/全下"], ["/弃牌", "/弃牌"],
   ["/部门", "/部门"], ["/加入部门", "/加入部门"], ["/切换部门", "/切换部门"],
   ["/部门申请列表", "/部门申请列表"], ["/同意部门", "/同意部门"], ["/全部同意部门", "/全部同意部门"],
   ["/拒绝部门", "/拒绝部门"], ["/全部拒绝部门", "/全部拒绝部门"], ["/职位", "/职位"],
@@ -71,6 +74,7 @@ const pageContext = {
   "memory-assessment": {crumb: "游戏运营 / 记忆考核", title: "记忆考核运营", description: "配置单人挑战与双人对战的难度、奖池和限制。"},
   undercover: {crumb: "游戏运营 / 谁是卧底", title: "谁是卧底运营", description: "查看公开对局进度，并维护多人推理局的基础规则。"},
   "blame-bomb": {crumb: "游戏运营 / 甩锅游戏", title: "甩锅游戏运营", description: "管理事故卡、逐人数时长规则和当前公开对局。"},
+  "texas-holdem": {crumb: "游戏运营 / 德州扑克", title: "德州扑克运营", description: "配置现金桌规则并查看不含底牌的公开牌局状态。"},
   "ai-assistant": {crumb: "机器人运营 / AI 总监事", title: "AI 总监事", description: "配置群内 AI 人设、系统提示词与各职位每日调用上限。"},
   settings: {crumb: "玩法与资源 / 玩法配置", title: "玩法配置", description: "集中维护经济、打卡、全勤和日活跃度规则。"},
   commands: {crumb: "玩法与资源 / 指令库", title: "指令库", description: "配置群内指令的启用状态与标准回复模板。"},
@@ -260,6 +264,7 @@ const activitySettingsModal = document.querySelector("#activity-settings-modal")
 const activityRuleInputs = document.querySelector("#activity-rule-inputs");
 const incomeReportTimeInputs = document.querySelector("#income-report-time-inputs");
 const numberBombSettingsModal = document.querySelector("#number-bomb-settings-modal");
+const texasHoldemSettingsModal = document.querySelector("#texas-holdem-settings-modal");
 const numberBombEnabled = document.querySelector("#number-bomb-enabled");
 const numberBombSignupMinutes = document.querySelector("#number-bomb-signup-minutes");
 const numberBombReminderSeconds = document.querySelector("#number-bomb-reminder-seconds");
@@ -411,6 +416,10 @@ function closeNumberBombSettingsModal() {
   numberBombSettingsModal.hidden = true;
 }
 
+function closeTexasHoldemSettingsModal() {
+  texasHoldemSettingsModal.hidden = true;
+}
+
 function closeRedPacketSettingsModal() {
   redPacketSettingsModal.hidden = true;
 }
@@ -465,6 +474,35 @@ function renderNumberBombSettings(settings) {
     <article><span>未报数提醒</span><strong>${settings.reminder_interval_seconds} 秒</strong><small>首次提醒后参与者可使用 /跳过</small></article>`;
 }
 
+function renderTexasHoldemSettings(settings) {
+  document.querySelector("#texas-holdem-settings-card").innerHTML = `
+    <article><span>游戏状态</span><strong>${settings.enabled ? "已启用" : "已停用"}</strong><small>停用只阻止创建新牌局</small></article>
+    <article><span>人数范围</span><strong>${settings.minimum_players}–${settings.maximum_players} 人</strong><small>单桌人数限制</small></article>
+    <article><span>带入范围</span><strong>${settings.minimum_buy_in}–${settings.maximum_buy_in}</strong><small>真实摸鱼币带入</small></article>
+    <article><span>报名 / 行动</span><strong>${settings.signup_timeout_seconds} / ${settings.action_timeout_seconds} 秒</strong><small>超时自动处理</small></article>
+    <article><span>盲注比例</span><strong>${settings.small_blind_percent}% / ${settings.big_blind_percent}%</strong><small>小盲 / 大盲，按带入金额计算</small></article>
+    <article><span>每日发起</span><strong>${settings.daily_start_limit} 次</strong><small>按发起人统计</small></article>`;
+}
+
+function renderTexasHoldemSession(gameplay) {
+  const card = document.querySelector("#texas-holdem-session-card");
+  const game = (gameplay.items || []).find((item) => item.game_type === "texas_holdem");
+  if (!game) {
+    card.innerHTML = '<p class="muted">当前没有进行中的德州牌局。</p>';
+    return;
+  }
+  const players = game.participants.map((player) => {
+    const seat = player.number == null ? "" : `${player.number}号 `;
+    return `${seat}${player.display_name}（${player.state || "等待"}，筹码 ${player.stack ?? 0}，本轮 ${player.street_contribution ?? 0}，累计 ${player.total_contribution ?? 0}）`;
+  }).join("、");
+  const board = game.board?.length ? game.board.join(" ") : "尚未发公共牌";
+  const deadline = game.action_deadline ? formatHeartbeat(game.action_deadline) : "无";
+  card.innerHTML = `<article><span>${escapeHtml(game.group_name)}</span><strong>${escapeHtml(game.state || "未知状态")}</strong><small>牌局 ${escapeHtml(game.game_id)}</small></article>
+    <article><span>公共牌</span><strong>${escapeHtml(board)}</strong><small>底池 ${game.pot ?? 0} · 当前需跟 ${game.to_call ?? 0}</small></article>
+    <article><span>行动位</span><strong>${game.current_seat == null ? "—" : `${game.current_seat} 号`}</strong><small>庄位 ${game.button_seat ?? "—"} 号 · 截止 ${escapeHtml(deadline)}</small></article>
+    <article><span>参与者</span><strong>${game.participants.length} 人</strong><small>${escapeHtml(players)}</small><button class="danger-button" type="button" data-force-end-game data-group-chat-id="${escapeHtml(game.group_chat_id)}" data-game-type="texas_holdem" data-game-id="${escapeHtml(game.game_id)}">强制结束</button></article>`;
+}
+
 function renderRedPacketSettings(settings) {
   document.querySelector("#red-packet-settings-card").innerHTML = `
     <article><span>红包过期</span><strong>${settings.expiry_minutes} 分钟</strong><small>到期退还尚未领取的金额</small></article>
@@ -474,6 +512,7 @@ function renderRedPacketSettings(settings) {
 function renderCurrentGameplay(gameplay) {
   currentGameplay = gameplay;
   gameplayVersion = gameplay.version;
+  renderTexasHoldemSession(gameplay);
   const card = document.querySelector("#gameplay-current-card");
   const items = gameplay.items || [];
   if (!items.length) {
@@ -483,7 +522,7 @@ function renderCurrentGameplay(gameplay) {
   }
   const names = {
     number_bomb: "蹦蹦数字炸弹", blame_bomb: "甩锅游戏", undercover: "谁是卧底",
-    memory_duel: "记忆考核对战", random_event: "随机事件", conflict: "玩法状态冲突",
+    memory_duel: "记忆考核对战", random_event: "随机事件", texas_holdem: "德州扑克", conflict: "玩法状态冲突",
   };
   const states = {
     signup: "报名中", collecting: "报数中", waiting_continue: "等待继续",
@@ -634,7 +673,7 @@ function renderAiKnowledgeCards() {
   const topicLabels = {
     economy: "金币与余额", departments: "部门", ranks: "职位与晋升", shop: "商店与物品",
     checkin_activity: "打卡与活跃度", random_events: "随机事件", hide_and_seek: "摸鱼躲猫猫",
-    memory_assessment: "记忆考核", undercover: "谁是卧底", blame_bomb: "甩锅游戏", number_bomb: "蹦蹦数字炸弹",
+    memory_assessment: "记忆考核", undercover: "谁是卧底", blame_bomb: "甩锅游戏", number_bomb: "蹦蹦数字炸弹", texas_holdem: "德州扑克",
     commands_help: "指令帮助", player_activity: "个人游戏经历",
   };
   document.querySelector("#ai-knowledge-card-list").innerHTML = aiKnowledgeCards.length
@@ -712,6 +751,7 @@ function activityTypeLabel(value) {
     undercover: "谁是卧底",
     blame_bomb: "甩锅游戏",
     number_bomb: "蹦蹦数字炸弹",
+    texas_holdem: "德州扑克",
   })[value] || value;
 }
 
@@ -1239,6 +1279,13 @@ async function loadNumberBombSettings() {
   return numberBombSettings;
 }
 
+async function loadTexasHoldemSettings() {
+  texasHoldemSettings = await requestGame("/api/game/texas-holdem/settings");
+  configurationVersion = texasHoldemSettings.version;
+  renderTexasHoldemSettings(texasHoldemSettings);
+  return texasHoldemSettings;
+}
+
 async function loadRedPacketSettings() {
   redPacketSettings = await requestGame("/api/game/red-packet/settings");
   configurationVersion = redPacketSettings.version;
@@ -1253,6 +1300,22 @@ async function openNumberBombSettingsModal() {
   numberBombReminderSeconds.value = settings.reminder_interval_seconds;
   numberBombSettingsModal.hidden = false;
   numberBombSignupMinutes.focus();
+}
+
+async function openTexasHoldemSettingsModal() {
+  const settings = texasHoldemSettings || await loadTexasHoldemSettings();
+  document.querySelector("#texas-holdem-enabled").checked = settings.enabled;
+  document.querySelector("#texas-holdem-minimum-players").value = settings.minimum_players;
+  document.querySelector("#texas-holdem-maximum-players").value = settings.maximum_players;
+  document.querySelector("#texas-holdem-minimum-buy-in").value = settings.minimum_buy_in;
+  document.querySelector("#texas-holdem-maximum-buy-in").value = settings.maximum_buy_in;
+  document.querySelector("#texas-holdem-daily-start-limit").value = settings.daily_start_limit;
+  document.querySelector("#texas-holdem-signup-timeout").value = settings.signup_timeout_seconds;
+  document.querySelector("#texas-holdem-action-timeout").value = settings.action_timeout_seconds;
+  document.querySelector("#texas-holdem-small-blind").value = settings.small_blind_percent;
+  document.querySelector("#texas-holdem-big-blind").value = settings.big_blind_percent;
+  texasHoldemSettingsModal.hidden = false;
+  document.querySelector("#texas-holdem-minimum-players").focus();
 }
 
 async function openRedPacketSettingsModal() {
@@ -1614,6 +1677,10 @@ async function loadGameView(view) {
     if (view === "memory-assessment") return loadMemoryAssessment();
     if (view === "undercover") return loadUndercover();
     if (view === "blame-bomb") return loadBlameBomb();
+    if (view === "texas-holdem") {
+      await Promise.all([loadTexasHoldemSettings(), loadCurrentGameplay()]);
+      return;
+    }
     if (view === "ai-assistant") return loadAiAssistant();
     if (view === "commands") {
       const commands = await requestGame("/api/game/commands");
@@ -1853,6 +1920,7 @@ document.querySelector("#edit-settings").addEventListener("click", () => void op
 document.querySelector("#edit-profile-settings").addEventListener("click", () => void openProfileSettingsModal());
 document.querySelector("#edit-activity-settings").addEventListener("click", () => void openActivitySettingsModal());
 document.querySelector("#edit-number-bomb-settings").addEventListener("click", () => void openNumberBombSettingsModal());
+document.querySelector("#edit-texas-holdem-settings").addEventListener("click", () => void openTexasHoldemSettingsModal());
 document.querySelector("#edit-red-packet-settings").addEventListener("click", () => void openRedPacketSettingsModal());
 document.querySelector("#edit-random-event-settings").addEventListener("click", () => void openRandomEventSettingsModal());
 document.querySelector("#create-random-event-scene").addEventListener("click", () => openRandomEventSceneModal());
@@ -2350,6 +2418,52 @@ numberBombSettingsModal.addEventListener("click", async (event) => {
     setResult(`保存失败（${error.message}）`, "error");
   }
 });
+texasHoldemSettingsModal.addEventListener("click", async (event) => {
+  if (event.target.closest("[data-close-texas-holdem-settings-modal]")) {
+    closeTexasHoldemSettingsModal();
+    return;
+  }
+  if (event.target.id !== "save-texas-holdem-settings") return;
+  const payload = {
+    enabled: document.querySelector("#texas-holdem-enabled").checked,
+    minimum_players: Number(document.querySelector("#texas-holdem-minimum-players").value),
+    maximum_players: Number(document.querySelector("#texas-holdem-maximum-players").value),
+    minimum_buy_in: Number(document.querySelector("#texas-holdem-minimum-buy-in").value),
+    maximum_buy_in: Number(document.querySelector("#texas-holdem-maximum-buy-in").value),
+    daily_start_limit: Number(document.querySelector("#texas-holdem-daily-start-limit").value),
+    signup_timeout_seconds: Number(document.querySelector("#texas-holdem-signup-timeout").value),
+    action_timeout_seconds: Number(document.querySelector("#texas-holdem-action-timeout").value),
+    small_blind_percent: Number(document.querySelector("#texas-holdem-small-blind").value),
+    big_blind_percent: Number(document.querySelector("#texas-holdem-big-blind").value),
+  };
+  const valid = Object.entries(payload).every(([key, value]) => key === "enabled" || Number.isInteger(value))
+    && payload.minimum_players >= 2 && payload.maximum_players <= 9 && payload.minimum_players <= payload.maximum_players
+    && payload.minimum_buy_in >= 1 && payload.minimum_buy_in <= payload.maximum_buy_in && payload.maximum_buy_in <= 99999
+    && payload.daily_start_limit >= 1 && payload.daily_start_limit <= 100
+    && payload.signup_timeout_seconds >= 10 && payload.signup_timeout_seconds <= 3600
+    && payload.action_timeout_seconds >= 10 && payload.action_timeout_seconds <= 3600
+    && payload.small_blind_percent >= 1 && payload.small_blind_percent < payload.big_blind_percent && payload.big_blind_percent <= 100;
+  if (!valid) {
+    setResult("德州扑克设置范围无效，请检查人数、带入、时限与盲注比例", "error");
+    return;
+  }
+  const button = event.target;
+  try {
+    await runMutation(button, "保存中…", async () => {
+      texasHoldemSettings = await requestGame("/api/game/texas-holdem/settings", {
+        method: "PATCH",
+        headers: {"Content-Type": "application/json", ...configurationHeaders()},
+        body: JSON.stringify(payload),
+      });
+      configurationVersion = texasHoldemSettings.version;
+      renderTexasHoldemSettings(texasHoldemSettings);
+      closeTexasHoldemSettingsModal();
+    });
+    setResult("德州扑克设置已保存", "success");
+  } catch (error) {
+    setResult(`保存失败（${error.message}）`, "error");
+  }
+});
 redPacketSettingsModal.addEventListener("click", async (event) => {
   if (event.target.closest("[data-close-red-packet-settings-modal]")) {
     closeRedPacketSettingsModal();
@@ -2383,11 +2497,12 @@ redPacketSettingsModal.addEventListener("click", async (event) => {
     setResult(`保存失败（${error.message}）`, "error");
   }
 });
-document.querySelector("#gameplay-current-card").addEventListener("click", async (event) => {
+for (const gameplayCard of document.querySelectorAll("#gameplay-current-card, #texas-holdem-session-card")) gameplayCard.addEventListener("click", async (event) => {
   const button = event.target.closest("[data-force-end-game]");
   if (!button) return;
   const {groupChatId, gameType, gameId} = button.dataset;
-  if (!window.confirm(`确认强制结束${gameType === "number_bomb" ? "蹦蹦数字炸弹" : "当前游戏"}？`)) return;
+  const gameName = gameType === "number_bomb" ? "蹦蹦数字炸弹" : gameType === "texas_holdem" ? "德州扑克" : "当前游戏";
+  if (!window.confirm(`确认强制结束${gameName}？`)) return;
   try {
     await runMutation(button, "结束中…", async () => {
       const ended = await requestGame(
@@ -3207,6 +3322,7 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !randomEventDetailsModal.hidden) randomEventDetailsModal.hidden = true;
   if (event.key === "Escape" && !activitySettingsModal.hidden) closeActivitySettingsModal();
   if (event.key === "Escape" && !numberBombSettingsModal.hidden) closeNumberBombSettingsModal();
+  if (event.key === "Escape" && !texasHoldemSettingsModal.hidden) closeTexasHoldemSettingsModal();
   if (event.key === "Escape" && !randomEventSettingsModal.hidden) closeRandomEventSettingsModal();
   if (event.key === "Escape" && !randomEventSceneModal.hidden) closeRandomEventSceneModal();
   if (event.key === "Escape" && !randomEventTimeModal.hidden) closeRandomEventTimeModal();

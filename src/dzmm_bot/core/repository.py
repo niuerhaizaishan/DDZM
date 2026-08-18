@@ -848,6 +848,11 @@ class TexasHoldemResult:
     public_message: str | None = None
     private_message: str | None = None
     candidates: tuple["PrivateGameCandidate", ...] = ()
+    actor_seat: int | None = None
+    committed_amount: int = 0
+    remaining_stack: int = 0
+    next_seat: int | None = None
+    total_pot: int = 0
 
 
 @dataclass(frozen=True)
@@ -893,6 +898,10 @@ class GameplayAdminParticipant:
     number: int | None
     display_name: str
     reported: bool | None = None
+    state: str | None = None
+    stack: int | None = None
+    street_contribution: int | None = None
+    total_contribution: int | None = None
 
 
 @dataclass(frozen=True)
@@ -908,6 +917,13 @@ class GameplayAdminSummary:
     tipping_deadline: datetime | None = None
     tip_total: int = 0
     skip_enabled: bool = False
+    button_seat: int | None = None
+    current_seat: int | None = None
+    board: tuple[str, ...] = ()
+    pot: int = 0
+    action_deadline: datetime | None = None
+    to_call: int = 0
+    legal_actions: tuple[str, ...] = ()
 
 
 def blame_settlement_template_values(
@@ -5680,18 +5696,21 @@ class CoreRepository:
 
                 deck = list(build_deck())
                 self._texas_holdem_random.shuffle(deck)
+                self._texas_holdem_random.shuffle(rows)
                 layout = deal_layout(deck, len(rows))
                 game.deck = [self._texas_card_payload(card) for card in deck]
                 game.board = []
                 game.state = "dealing"
                 game.street = "preflop"
-                game.button_seat = 1
                 seats = tuple(range(1, len(rows) + 1))
+                game.button_seat = self._texas_holdem_random.randrange(len(seats)) + 1
+                next_seat = lambda seat: seats[(seats.index(seat) + 1) % len(seats)]
                 if len(seats) == 2:
-                    game.small_blind_seat, game.big_blind_seat = seats
+                    game.small_blind_seat = game.button_seat
+                    game.big_blind_seat = next_seat(game.button_seat)
                 else:
-                    game.small_blind_seat = 2
-                    game.big_blind_seat = 3
+                    game.small_blind_seat = next_seat(game.button_seat)
+                    game.big_blind_seat = next_seat(game.small_blind_seat)
                 game.small_blind_amount = max(
                     1, (game.buy_in * settings.small_blind_percent + 99) // 100
                 )
@@ -5783,6 +5802,34 @@ class CoreRepository:
         game.state = "preflop"
         game.current_seat = preflop_first_seat(seats, game.button_seat or 1)
         game.action_deadline = now + timedelta(seconds=settings.action_timeout_seconds)
+        rows = self._texas_players(session, game.id)
+        current_name = next(
+            user.display_name
+            for record, user in rows
+            if record.seat_number == game.current_seat
+        )
+        group = session.get(GroupChatRecord, game.group_chat_id)
+        if group is not None and group.chatroom_id is not None:
+            roster = "、".join(
+                f"{record.seat_number}号 {user.display_name}"
+                for record, user in rows
+            )
+            session.add(
+                OutboundRecord(
+                    group_chat_id=game.group_chat_id,
+                    destination_chatroom_id=group.chatroom_id,
+                    delivery_key=group.chatroom_id,
+                    delivery_kind="group",
+                    text=(
+                        "【德州扑克】底牌已全部送达，进入翻牌前。\n"
+                        f"座位：{roster}\n"
+                        f"小盲 {game.small_blind_amount}，大盲 {game.big_blind_amount}；"
+                        f"当前由 {game.current_seat}号 {current_name} 行动。"
+                    ),
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
 
     def _texas_betting_round(
         self,
@@ -6039,14 +6086,33 @@ class CoreRepository:
                 created_at=now,
             )
         )
+        action_values = {
+            "actor_seat": player.seat_number,
+            "committed_amount": result.committed,
+            "remaining_stack": player.stack,
+            "total_pot": sum(record.total_contribution for record, _ in rows),
+        }
         remaining = [record for record, _ in rows if record.state != "folded"]
         if len(remaining) == 1:
-            return self._settle_texas_holdem(session, game, rows, now, reason="last_player")
+            settled = self._settle_texas_holdem(
+                session, game, rows, now, reason="last_player"
+            )
+            return replace(settled, **action_values)
         if result.round_complete:
-            return self._advance_texas_street(session, game, rows, now)
+            advanced = self._advance_texas_street(session, game, rows, now)
+            return replace(advanced, next_seat=game.current_seat, **action_values)
         settings = self.get_texas_holdem_settings()
         game.action_deadline = now + timedelta(seconds=settings.action_timeout_seconds)
-        return TexasHoldemResult("acted", game.id, len(rows))
+        return TexasHoldemResult(
+            "acted",
+            game.id,
+            len(rows),
+            actor_seat=player.seat_number,
+            committed_amount=result.committed,
+            remaining_stack=player.stack,
+            next_seat=game.current_seat,
+            total_pot=action_values["total_pot"],
+        )
 
     def act_texas_holdem(
         self,
@@ -6140,6 +6206,40 @@ class CoreRepository:
             with self._session() as session:
                 game = self._active_texas_holdem_game(session, group_chat_id)
                 if game is None:
+                    return []
+                if game.state == "dealing":
+                    failed_players = list(
+                        session.scalars(
+                            select(TexasHoldemPlayerRecord)
+                            .where(
+                                TexasHoldemPlayerRecord.game_id == game.id,
+                                TexasHoldemPlayerRecord.private_delivery_state
+                                == "failed",
+                            )
+                            .with_for_update()
+                        )
+                    )
+                    for player in failed_players:
+                        previous = session.get(
+                            OutboundRecord, player.private_outbound_id
+                        )
+                        if previous is None or previous.status != "failed":
+                            continue
+                        retry = OutboundRecord(
+                            group_chat_id=None,
+                            inbound_message_id=None,
+                            destination_chatroom_id=previous.destination_chatroom_id,
+                            delivery_key=previous.delivery_key,
+                            delivery_kind="texas_holdem_card",
+                            text=previous.text,
+                            reply_index=previous.reply_index,
+                            created_at=now,
+                            updated_at=now,
+                        )
+                        session.add(retry)
+                        session.flush()
+                        player.private_outbound_id = retry.id
+                        player.private_delivery_state = "pending"
                     return []
                 if game.state == "signup" and now >= game.signup_deadline:
                     self._refund_texas_signup(session, game, now)
@@ -6397,14 +6497,17 @@ class CoreRepository:
                     role = "participant"
                 elif texas_game.state == "dealing":
                     commands = ("私聊 /看牌",)
-                    role = "participant"
+                    role = (
+                        f"参与者（座位 {actor.seat_number}号，"
+                        f"筹码 {actor.stack}）"
+                    )
                 else:
                     commands = ("/退出", "私聊 /看牌")
+                    to_call = max(
+                        0,
+                        texas_game.current_bet - actor.street_contribution,
+                    )
                     if actor.seat_number == texas_game.current_seat:
-                        to_call = max(
-                            0,
-                            texas_game.current_bet - actor.street_contribution,
-                        )
                         commands = (
                             *(("/过牌",) if to_call == 0 else ("/跟注",)),
                             "/加注 金额",
@@ -6412,7 +6515,10 @@ class CoreRepository:
                             "/弃牌",
                             "私聊 /看牌",
                         )
-                    role = "participant"
+                    role = (
+                        f"参与者（座位 {actor.seat_number}号，"
+                        f"筹码 {actor.stack}，当前需跟 {to_call}）"
+                    )
                 active.append(
                     ActiveGameplaySummary(
                         "texas_holdem",
@@ -6725,6 +6831,34 @@ class CoreRepository:
         summary = self.active_gameplay_summary("", now, group_chat_id)
         if summary.game_type is None:
             return GameplayAdminSummary(group_chat_id, group_name)
+        if summary.game_type == "texas_holdem":
+            texas = self.texas_holdem_summary(now, group_chat_id)
+            return GameplayAdminSummary(
+                group_chat_id=group_chat_id,
+                group_name=group_name,
+                game_type="texas_holdem",
+                game_id=texas.game_id,
+                state=texas.state,
+                participants=tuple(
+                    GameplayAdminParticipant(
+                        player.seat_number,
+                        player.display_name,
+                        state=player.state,
+                        stack=player.stack,
+                        street_contribution=player.street_contribution,
+                        total_contribution=player.total_contribution,
+                    )
+                    for player in texas.players
+                ),
+                signup_deadline=summary.signup_deadline,
+                button_seat=texas.button_seat,
+                current_seat=texas.current_seat,
+                board=texas.board,
+                pot=texas.total_pot,
+                action_deadline=texas.action_deadline,
+                to_call=texas.to_call,
+                legal_actions=texas.legal_actions,
+            )
         if summary.game_type != "number_bomb":
             return GameplayAdminSummary(
                 group_chat_id=group_chat_id,
@@ -13347,6 +13481,14 @@ class CoreRepository:
                             group_chat_id
                         ),
                     )
+                for message in self.run_texas_holdem_jobs(now, group_chat_id):
+                    self.enqueue_system_outbound(
+                        message,
+                        group_chat_id=group_chat_id,
+                        destination_chatroom_id=self.group_chat_destination(
+                            group_chat_id
+                        ),
+                    )
             self.run_random_event_jobs(now)
         if should_backfill:
             self._current_day_history_backfilled = now.date()
@@ -15869,6 +16011,18 @@ class CoreRepository:
                             self._record_undercover_card_delivery(
                                 session, session_record, game, player, False, now
                             )
+            elif record.delivery_kind == "texas_holdem_card":
+                player = session.scalar(
+                    select(TexasHoldemPlayerRecord)
+                    .where(TexasHoldemPlayerRecord.private_outbound_id == record.id)
+                    .with_for_update()
+                )
+                if player is not None:
+                    game = session.get(
+                        TexasHoldemGameRecord, player.game_id, with_for_update=True
+                    )
+                    if game is not None and game.state == "dealing":
+                        player.private_delivery_state = "failed"
             return True
 
     def release_outbound(

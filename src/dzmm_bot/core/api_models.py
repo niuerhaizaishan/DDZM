@@ -574,7 +574,7 @@ AIImpressionCategory = Literal[
 AIKnowledgeTopic = Literal[
     "economy", "departments", "ranks", "shop", "checkin_activity",
     "random_events", "hide_and_seek", "memory_assessment", "undercover",
-    "blame_bomb", "number_bomb", "commands_help", "player_activity",
+    "blame_bomb", "number_bomb", "texas_holdem", "commands_help", "player_activity",
 ]
 
 
@@ -772,6 +772,42 @@ class SetNumberBombSettingsRequest(ApiModel):
     reminder_interval_seconds: int = Field(ge=5, le=300)
 
 
+class TexasHoldemSettingsResponse(ApiModel):
+    enabled: bool
+    minimum_players: int
+    maximum_players: int
+    minimum_buy_in: int
+    maximum_buy_in: int
+    daily_start_limit: int
+    signup_timeout_seconds: int
+    action_timeout_seconds: int
+    small_blind_percent: int
+    big_blind_percent: int
+
+
+class SetTexasHoldemSettingsRequest(ApiModel):
+    enabled: bool
+    minimum_players: int = Field(ge=2, le=9)
+    maximum_players: int = Field(ge=2, le=9)
+    minimum_buy_in: int = Field(ge=1, le=99999)
+    maximum_buy_in: int = Field(ge=1, le=99999)
+    daily_start_limit: int = Field(ge=1, le=100)
+    signup_timeout_seconds: int = Field(ge=10, le=3600)
+    action_timeout_seconds: int = Field(ge=10, le=3600)
+    small_blind_percent: int = Field(ge=1, le=99)
+    big_blind_percent: int = Field(ge=2, le=100)
+
+    @model_validator(mode="after")
+    def validate_ranges(self):
+        if self.minimum_players > self.maximum_players:
+            raise ValueError("minimum_players must not exceed maximum_players")
+        if self.minimum_buy_in > self.maximum_buy_in:
+            raise ValueError("minimum_buy_in must not exceed maximum_buy_in")
+        if self.small_blind_percent >= self.big_blind_percent:
+            raise ValueError("small blind must be below big blind")
+        return self
+
+
 class RedPacketSettingsResponse(ApiModel):
     expiry_minutes: int
     empty_probability_percent: int
@@ -786,6 +822,10 @@ class GameplayParticipantResponse(ApiModel):
     number: int | None = None
     display_name: str
     reported: bool | None = None
+    state: str | None = None
+    stack: int | None = None
+    street_contribution: int | None = None
+    total_contribution: int | None = None
 
 
 class GameplaySummaryResponse(ApiModel):
@@ -800,6 +840,13 @@ class GameplaySummaryResponse(ApiModel):
     tipping_deadline: AwareDatetime | None = None
     tip_total: int = 0
     skip_enabled: bool = False
+    button_seat: int | None = None
+    current_seat: int | None = None
+    board: list[str] = Field(default_factory=list)
+    pot: int = 0
+    action_deadline: AwareDatetime | None = None
+    to_call: int = 0
+    legal_actions: list[str] = Field(default_factory=list)
 
 
 class GameplaySummariesResponse(ApiModel):

@@ -162,6 +162,45 @@ def test_texas_holdem_group_commands_create_join_start_and_deal_privately():
         "direct-command-1", "direct-command-2"
     }
     assert all(message.group_chat_id is None for message in card_messages)
+    for index, delivery_key in enumerate(
+        ("direct-command-1", "direct-command-2"), start=1
+    ):
+        claimed = repository.claim_outbound(
+            "texas-command-worker", now, 30, required_delivery_key=delivery_key
+        )
+        assert claimed is not None
+        assert repository.confirm_sent(
+            claimed.id,
+            "texas-command-worker",
+            claimed.lease_token,
+            f"texas-command-card-{index}",
+            now,
+        )
+    summary = repository.texas_holdem_summary(now, group.id)
+    actor = next(
+        player for player in summary.players
+        if player.seat_number == summary.current_seat
+    )
+    current = _group_receive(
+        service,
+        "texas-current",
+        actor.platform_id,
+        "/当前游戏",
+        now,
+        group.chatroom_id,
+    )
+    current_reply = "".join(_replies_for(factory, current.message_id))
+    assert f"座位 {actor.seat_number}号" in current_reply
+    assert "筹码 19" in current_reply
+    assert "当前需跟 1" in current_reply
+    acted = _group_receive(
+        service, "texas-call", actor.platform_id, "/跟注", now, group.chatroom_id
+    )
+    action_reply = "".join(_replies_for(factory, acted.message_id))
+    assert f"{actor.seat_number}号 {actor.display_name} 跟注 1" in action_reply
+    assert "剩余筹码 18" in action_reply
+    assert "当前底池 4 摸鱼币" in action_reply
+    assert "下一位" in action_reply
 
 
 def test_texas_holdem_look_cards_is_private_only():

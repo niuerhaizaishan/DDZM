@@ -267,6 +267,44 @@ def test_number_bomb_settings_core_api_validates_bounds(client, headers):
         ).status_code == 422
 
 
+def test_texas_holdem_settings_core_api_round_trip_and_validates_ranges(client, headers):
+    assert client.get("/internal/game/texas-holdem/settings").status_code == 401
+    initial = client.get(
+        "/internal/game/texas-holdem/settings", headers=headers
+    )
+    assert initial.json() == {
+        "enabled": True,
+        "minimum_players": 2,
+        "maximum_players": 9,
+        "minimum_buy_in": 20,
+        "maximum_buy_in": 200,
+        "daily_start_limit": 1,
+        "signup_timeout_seconds": 120,
+        "action_timeout_seconds": 120,
+        "small_blind_percent": 5,
+        "big_blind_percent": 10,
+    }
+    payload = {
+        "enabled": False,
+        "minimum_players": 3,
+        "maximum_players": 8,
+        "minimum_buy_in": 30,
+        "maximum_buy_in": 300,
+        "daily_start_limit": 2,
+        "signup_timeout_seconds": 180,
+        "action_timeout_seconds": 90,
+        "small_blind_percent": 4,
+        "big_blind_percent": 8,
+    }
+    assert client.patch(
+        "/internal/game/texas-holdem/settings", headers=headers, json=payload
+    ).json() == payload
+    invalid = {**payload, "minimum_players": 9, "maximum_players": 2}
+    assert client.patch(
+        "/internal/game/texas-holdem/settings", headers=headers, json=invalid
+    ).status_code == 422
+
+
 def test_red_packet_settings_core_api_validates_bounds(client, headers):
     assert client.get("/internal/game/red-packet/settings").status_code == 401
     initial = client.get(
@@ -368,6 +406,54 @@ def test_gameplay_current_hides_numbers_and_force_end_requires_exact_identity(
     assert game.finish_reason == "admin_forced"
     assert outbounds == ["【蹦蹦数字炸弹】管理员已强制结束当前游戏。"]
     assert activity_events == []
+
+
+def test_gameplay_current_exposes_only_public_texas_holdem_state(
+    app_context, headers
+):
+    repository = app_context.repository
+    repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=texas-admin", NOW
+    )
+    for index in range(1, 3):
+        repository.create_user(
+            f"texas-admin-p{index}", f"德州管理玩家{index}", NOW, 100
+        )
+    repository.upsert_direct_chats(
+        [
+            (f"texas-admin-p{index}", f"direct-texas-admin-p{index}")
+            for index in range(1, 3)
+        ],
+        NOW,
+    )
+    created = repository.start_texas_holdem_signup(
+        "texas-admin-p1",
+        20,
+        NOW,
+        UUID("00000000-0000-0000-0000-000000000001"),
+    )
+    repository.join_texas_holdem(
+        "texas-admin-p2",
+        NOW,
+        UUID("00000000-0000-0000-0000-000000000001"),
+    )
+    repository.start_texas_holdem_hand(
+        "texas-admin-p1",
+        NOW,
+        UUID("00000000-0000-0000-0000-000000000001"),
+    )
+
+    response = app_context.client.get("/internal/gameplay/current", headers=headers)
+    payload = response.json()
+    game = next(item for item in payload["items"] if item["game_type"] == "texas_holdem")
+
+    assert response.status_code == 200
+    assert game["game_id"] == str(created.game_id)
+    assert game["state"] == "dealing"
+    assert game["board"] == []
+    assert [player["stack"] for player in game["participants"]] == [19, 18]
+    assert [player["total_contribution"] for player in game["participants"]] == [1, 2]
+    assert "hole_cards" not in repr(payload)
 
 
 def test_admin_can_force_end_single_memory_assessment(app_context, headers):
@@ -900,7 +986,7 @@ def test_game_management_lists_commands_employees_and_shop_items(client, headers
 
     assert commands.status_code == 200
     assert {record["command"] for record in commands.json()} == {
-            "/入职", "/我的物品", "/打卡", "/余额", "/修改名称", "/编辑档案", "/编辑档案形象", "/我的档案", "/发奖金", "/发红包", "/抢红包", "/打赏", "/我", "/商店", "/帮助", "/当前游戏", "/加入", "/退出", "/开始", "/跳过", "/摸鱼躲猫猫", "/记忆考核", "/继续", "/收手", "/投降", "/谁是卧底", "/开始投票", "/投票", "/退出谁是卧底", "/结束游戏", "/甩锅游戏", "/甩锅", "/退出甩锅", "/蹦蹦数字炸弹", "/报数", "/部门", "/部门人数", "/我的部门人数", "/加入部门", "/切换部门", "/部门申请列表", "/同意部门", "/全部同意部门", "/拒绝部门", "/全部拒绝部门", "/职位", "/晋升", "/晋升申请列表", "/同意", "/全部同意", "/拒绝", "/全部拒绝", "/投稿", "/我的投稿", "/撤回投稿", "/上一步", "/取消投稿", "/确认取消投稿", "/确认投稿", "/继续添加", "/事件完成", "/修改身份", "/删除身份", "/修改事件", "/删除事件"
+            "/入职", "/我的物品", "/打卡", "/余额", "/修改名称", "/编辑档案", "/编辑档案形象", "/我的档案", "/发奖金", "/发红包", "/抢红包", "/打赏", "/我", "/商店", "/帮助", "/当前游戏", "/加入", "/退出", "/开始", "/跳过", "/摸鱼躲猫猫", "/记忆考核", "/继续", "/收手", "/投降", "/谁是卧底", "/开始投票", "/投票", "/退出谁是卧底", "/结束游戏", "/甩锅游戏", "/甩锅", "/退出甩锅", "/蹦蹦数字炸弹", "/报数", "/德州扑克", "/看牌", "/过牌", "/跟注", "/加注", "/全下", "/弃牌", "/部门", "/部门人数", "/我的部门人数", "/加入部门", "/切换部门", "/部门申请列表", "/同意部门", "/全部同意部门", "/拒绝部门", "/全部拒绝部门", "/职位", "/晋升", "/晋升申请列表", "/同意", "/全部同意", "/拒绝", "/全部拒绝", "/投稿", "/我的投稿", "/撤回投稿", "/上一步", "/取消投稿", "/确认取消投稿", "/确认投稿", "/继续添加", "/事件完成", "/修改身份", "/删除身份", "/修改事件", "/删除事件"
             }
     command_records = {record["command"]: record for record in commands.json()}
     for command in ("/部门人数", "/我的部门人数"):

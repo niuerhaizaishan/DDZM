@@ -939,6 +939,77 @@ def create_app(
             "version": repository.config_version(),
         }
 
+    @app.get("/api/game/texas-holdem/settings")
+    def texas_holdem_settings(
+        _: Annotated[None, Depends(authorize)],
+    ) -> dict:
+        return {
+            **_relay_core(core.get_texas_holdem_settings),
+            "version": repository.config_version(),
+        }
+
+    @app.patch("/api/game/texas-holdem/settings")
+    def set_texas_holdem_settings(
+        request: dict,
+        identity: Annotated[AdminIdentity, Depends(authorize)],
+        idempotency_key: Annotated[
+            str | None, Header(alias="Idempotency-Key")
+        ] = None,
+        if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+    ) -> JSONResponse:
+        required = {
+            "enabled",
+            "minimum_players",
+            "maximum_players",
+            "minimum_buy_in",
+            "maximum_buy_in",
+            "daily_start_limit",
+            "signup_timeout_seconds",
+            "action_timeout_seconds",
+            "small_blind_percent",
+            "big_blind_percent",
+        }
+        if set(request) != required:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid settings"
+            )
+        integer_fields = required - {"enabled"}
+        if not isinstance(request["enabled"], bool) or any(
+            not isinstance(request[key], int) or isinstance(request[key], bool)
+            for key in integer_fields
+        ):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid settings"
+            )
+        if not (
+            2 <= request["minimum_players"] <= request["maximum_players"] <= 9
+            and 1
+            <= request["minimum_buy_in"]
+            <= request["maximum_buy_in"]
+            <= 99999
+            and 1 <= request["daily_start_limit"] <= 100
+            and 10 <= request["signup_timeout_seconds"] <= 3600
+            and 10 <= request["action_timeout_seconds"] <= 3600
+            and 1
+            <= request["small_blind_percent"]
+            < request["big_blind_percent"]
+            <= 100
+        ):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid settings"
+            )
+        return versioned_configuration_response(
+            identity,
+            idempotency_key,
+            if_match,
+            lambda: _relay_core(
+                lambda: core.set_texas_holdem_settings(
+                    {key: request[key] for key in required}
+                )
+            ),
+            scope="texas-holdem-settings",
+        )
+
     @app.patch("/api/game/red-packet/settings")
     def set_red_packet_settings(
         request: dict,

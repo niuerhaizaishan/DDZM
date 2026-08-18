@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
+import json
 from pathlib import Path
 
 import httpx
@@ -95,6 +96,20 @@ class FakeCore:
             "enabled": True,
             "signup_timeout_minutes": 2,
             "reminder_interval_seconds": 15,
+        }
+    )
+    texas_holdem_settings: dict = field(
+        default_factory=lambda: {
+            "enabled": True,
+            "minimum_players": 2,
+            "maximum_players": 9,
+            "minimum_buy_in": 20,
+            "maximum_buy_in": 200,
+            "daily_start_limit": 1,
+            "signup_timeout_seconds": 120,
+            "action_timeout_seconds": 120,
+            "small_blind_percent": 5,
+            "big_blind_percent": 10,
         }
     )
     red_packet_settings: dict = field(
@@ -596,6 +611,13 @@ class FakeCore:
     def set_number_bomb_settings(self, settings):
         self.number_bomb_settings = settings
         return self.number_bomb_settings
+
+    def get_texas_holdem_settings(self):
+        return self.texas_holdem_settings
+
+    def set_texas_holdem_settings(self, settings):
+        self.texas_holdem_settings = settings
+        return self.texas_holdem_settings
 
     def get_red_packet_settings(self):
         return self.red_packet_settings
@@ -1992,6 +2014,43 @@ def test_concrete_core_client_requests_employee_balance_ledger_page():
     assert result == {"items": [], "total": 0}
 
 
+def test_concrete_core_client_gets_and_sets_texas_holdem_settings():
+    from dzmm_bot.admin.core_client import CoreClient
+
+    settings = {
+        "enabled": True,
+        "minimum_players": 2,
+        "maximum_players": 9,
+        "minimum_buy_in": 20,
+        "maximum_buy_in": 200,
+        "daily_start_limit": 1,
+        "signup_timeout_seconds": 120,
+        "action_timeout_seconds": 120,
+        "small_blind_percent": 5,
+        "big_blind_percent": 10,
+    }
+    methods = []
+
+    def handle(request):
+        assert request.headers["X-Core-Token"] == "core-secret"
+        assert request.url.path == "/internal/game/texas-holdem/settings"
+        methods.append(request.method)
+        if request.method == "PATCH":
+            assert json.loads(request.content) == settings
+        return httpx.Response(200, json=settings)
+
+    http_client = httpx.Client(
+        base_url="http://127.0.0.1:18120",
+        headers={"X-Core-Token": "core-secret"},
+        transport=httpx.MockTransport(handle),
+    )
+    core = CoreClient("unused", "unused", client=http_client)
+
+    assert core.get_texas_holdem_settings() == settings
+    assert core.set_texas_holdem_settings(settings) == settings
+    assert methods == ["GET", "PATCH"]
+
+
 def test_novnc_websocket_connector_targets_only_loopback():
     from dzmm_bot.admin.core_client import NoVNCWebSocketConnector
 
@@ -2675,6 +2734,49 @@ def test_admin_proxies_versioned_number_bomb_settings(client, headers, core):
     }
 
 
+def test_admin_proxies_versioned_texas_holdem_settings(client, headers, core):
+    initial = client.get("/api/game/texas-holdem/settings", headers=headers)
+    payload = {
+        **core.texas_holdem_settings,
+        "enabled": False,
+        "signup_timeout_seconds": 180,
+        "action_timeout_seconds": 90,
+    }
+    updated = client.patch(
+        "/api/game/texas-holdem/settings",
+        headers={
+            **headers,
+            "If-Match": str(initial.json()["version"]),
+            "Idempotency-Key": "texas-holdem-settings-1",
+        },
+        json=payload,
+    )
+
+    assert updated.status_code == 200
+    assert updated.json()["enabled"] is False
+    assert updated.json()["action_timeout_seconds"] == 90
+    assert core.texas_holdem_settings == payload
+
+
+def test_admin_rejects_invalid_texas_holdem_settings_before_relay(client, headers, core):
+    initial = client.get("/api/game/texas-holdem/settings", headers=headers)
+    original = dict(core.texas_holdem_settings)
+    invalid = {**original, "minimum_players": 8, "maximum_players": 3}
+
+    response = client.patch(
+        "/api/game/texas-holdem/settings",
+        headers={
+            **headers,
+            "If-Match": str(initial.json()["version"]),
+            "Idempotency-Key": "texas-holdem-settings-invalid",
+        },
+        json=invalid,
+    )
+
+    assert response.status_code == 422
+    assert core.texas_holdem_settings == original
+
+
 def test_admin_proxies_versioned_red_packet_settings_idempotently(
     client, headers, core
 ):
@@ -2764,6 +2866,23 @@ def test_number_bomb_settings_surface_has_new_controls_and_gameplay_card():
     assert 'id="undercover-signup-timeout"' in page
     assert "/api/game/number-bomb/settings" in script
     assert "/api/gameplay/current" in script
+
+
+def test_texas_holdem_admin_surface_has_settings_and_public_table_state():
+    root = Path(__file__).resolve().parents[2]
+    page = (root / "src/dzmm_bot/admin/templates/index.html").read_text()
+    script = (root / "src/dzmm_bot/admin/static/admin.js").read_text()
+
+    assert 'data-view="texas-holdem"' in page
+    assert 'id="texas-holdem-settings-card"' in page
+    assert 'id="texas-holdem-session-card"' in page
+    assert 'id="edit-texas-holdem-settings"' in page
+    assert 'id="texas-holdem-enabled"' in page
+    assert 'id="save-texas-holdem-settings"' in page
+    assert "底牌不会出现在管理端" in page
+    assert "/api/game/texas-holdem/settings" in script
+    assert 'game_type === "texas_holdem"' in script
+    assert "hole_cards" not in script
 
 
 def test_admin_relays_current_gameplay_and_versioned_force_end(client, headers, core):

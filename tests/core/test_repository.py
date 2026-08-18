@@ -21,6 +21,7 @@ from dzmm_bot.core.schema import (
     NumberBombGameRecord,
     NumberBombRoundPlayerRecord,
     NumberBombRoundRecord,
+    OutboundRecord,
     PRIMARY_GROUP_CHAT_ID,
     RandomEventSubmissionRecord,
     TexasHoldemGameRecord,
@@ -369,8 +370,38 @@ def test_texas_holdem_signup_debits_buy_in_and_waiting_exit_refunds(
     assert texas_repository.texas_holdem_summary(now, PRIMARY_GROUP_CHAT_ID).state is None
 
 
+def test_daily_jobs_cancel_expired_texas_holdem_signup_and_notify_group(
+    texas_repository, session_factory, now
+):
+    _prepare_texas_users(texas_repository, now, "texas-p1")
+    texas_repository.start_texas_holdem_signup(
+        "texas-p1", 20, now, PRIMARY_GROUP_CHAT_ID
+    )
+    deadline = now + timedelta(seconds=120)
+
+    texas_repository.run_daily_jobs(deadline)
+
+    assert texas_repository.texas_holdem_summary(
+        deadline, PRIMARY_GROUP_CHAT_ID
+    ).state is None
+    assert texas_repository.find_user("texas-p1").balance == 100
+    with session_factory() as session:
+        outbounds = list(
+            session.scalars(
+                select(OutboundRecord).where(
+                    OutboundRecord.group_chat_id == PRIMARY_GROUP_CHAT_ID
+                )
+            )
+        )
+    assert [
+        outbound.text
+        for outbound in outbounds
+        if outbound.text.startswith("德州扑克报名超时")
+    ] == ["德州扑克报名超时，牌局已取消并退还全部带入。"]
+
+
 def test_texas_holdem_hand_starts_only_after_all_private_cards_are_delivered(
-    texas_repository, now
+    texas_repository, session_factory, now
 ):
     _prepare_texas_users(texas_repository, now, "texas-p1", "texas-p2")
     texas_repository.start_texas_holdem_signup(
@@ -392,6 +423,102 @@ def test_texas_holdem_hand_starts_only_after_all_private_cards_are_delivered(
     summary = texas_repository.texas_holdem_summary(now, PRIMARY_GROUP_CHAT_ID)
     assert summary.state == "preflop"
     assert summary.current_seat == summary.button_seat
+    with session_factory() as session:
+        announcements = list(
+            session.scalars(
+                select(OutboundRecord.text).where(
+                    OutboundRecord.group_chat_id == PRIMARY_GROUP_CHAT_ID,
+                    OutboundRecord.delivery_kind == "group",
+                )
+            )
+        )
+    assert len(announcements) == 1
+    assert "底牌已全部送达" in announcements[0]
+    assert f"{summary.current_seat}号" in announcements[0]
+
+
+def test_texas_holdem_randomizes_player_seats_and_button(session_factory, now):
+    from dzmm_bot.core.repository import CoreRepository
+
+    class FixedTexasRandom:
+        def shuffle(self, values):
+            values.reverse()
+
+        def randrange(self, stop):
+            return stop - 1
+
+    repository = CoreRepository(
+        session_factory, texas_holdem_random=FixedTexasRandom()
+    )
+    _prepare_texas_users(repository, now, "texas-p1", "texas-p2", "texas-p3")
+    repository.start_texas_holdem_signup(
+        "texas-p1", 20, now, PRIMARY_GROUP_CHAT_ID
+    )
+    repository.join_texas_holdem("texas-p2", now, PRIMARY_GROUP_CHAT_ID)
+    repository.join_texas_holdem("texas-p3", now, PRIMARY_GROUP_CHAT_ID)
+
+    repository.start_texas_holdem_hand("texas-p1", now, PRIMARY_GROUP_CHAT_ID)
+    summary = repository.texas_holdem_summary(now, PRIMARY_GROUP_CHAT_ID)
+
+    assert summary.players[-1].platform_id == "texas-p1"
+    assert {player.platform_id for player in summary.players[:-1]} == {
+        "texas-p2", "texas-p3"
+    }
+    assert summary.button_seat == 3
+    assert [player.total_contribution for player in summary.players] == [1, 2, 0]
+
+
+def test_texas_holdem_failed_private_card_delivery_retries_same_cards(
+    texas_repository, session_factory, now
+):
+    _prepare_texas_users(texas_repository, now, "texas-p1", "texas-p2")
+    texas_repository.start_texas_holdem_signup(
+        "texas-p1", 20, now, PRIMARY_GROUP_CHAT_ID
+    )
+    texas_repository.join_texas_holdem("texas-p2", now, PRIMARY_GROUP_CHAT_ID)
+    started = texas_repository.start_texas_holdem_hand(
+        "texas-p1", now, PRIMARY_GROUP_CHAT_ID
+    )
+    failed = texas_repository.claim_outbound(
+        "texas-worker", now, 30, required_delivery_key="direct-texas-p1"
+    )
+    assert failed is not None
+    original_text = failed.text
+    assert texas_repository.mark_outbound_failed(
+        failed.id, "texas-worker", failed.lease_token, now
+    )
+
+    texas_repository.run_texas_holdem_jobs(now, PRIMARY_GROUP_CHAT_ID)
+
+    retried = texas_repository.claim_outbound(
+        "texas-worker", now, 30, required_delivery_key="direct-texas-p1"
+    )
+    assert retried is not None
+    assert retried.id != failed.id
+    assert retried.text == original_text
+    assert retried.delivery_kind == "texas_holdem_card"
+    with session_factory() as session:
+        player = session.scalar(
+            select(TexasHoldemPlayerRecord).where(
+                TexasHoldemPlayerRecord.game_id == started.game_id,
+                TexasHoldemPlayerRecord.private_outbound_id == retried.id,
+            )
+        )
+        game = session.get(TexasHoldemGameRecord, started.game_id)
+    assert player is not None
+    assert player.private_delivery_state == "pending"
+    assert game.state == "dealing"
+    assert texas_repository.confirm_sent(
+        retried.id,
+        "texas-worker",
+        retried.lease_token,
+        "texas-retry-sent",
+        now,
+    )
+    _confirm_outbound(texas_repository, "direct-texas-p2", now, 2)
+    assert texas_repository.texas_holdem_summary(
+        now, PRIMARY_GROUP_CHAT_ID
+    ).state == "preflop"
 
 
 def test_texas_holdem_private_cards_are_persisted_only_on_player_rows(
@@ -443,16 +570,37 @@ def _texas_act(repository, platform_id, action, now, amount=None):
     )
 
 
+def _texas_current_player(repository, now):
+    summary = repository.texas_holdem_summary(now, PRIMARY_GROUP_CHAT_ID)
+    return next(
+        player for player in summary.players
+        if player.seat_number == summary.current_seat
+    )
+
+
 def test_texas_holdem_check_call_flow_reaches_showdown_and_conserves_money(
     texas_repository, now
 ):
     _start_two_player_texas_hand(texas_repository, now)
+    first = _texas_current_player(texas_repository, now).platform_id
+    second = next(
+        player.platform_id
+        for player in texas_repository.texas_holdem_summary(
+            now, PRIMARY_GROUP_CHAT_ID
+        ).players
+        if player.platform_id != first
+    )
 
-    assert _texas_act(texas_repository, "texas-p1", "call", now).status == "acted"
-    assert _texas_act(texas_repository, "texas-p2", "check", now).status == "street_advanced"
+    called = _texas_act(texas_repository, first, "call", now)
+    assert called.status == "acted"
+    assert called.committed_amount == 1
+    assert called.remaining_stack == 18
+    assert called.actor_seat is not None
+    assert called.next_seat is not None
+    assert _texas_act(texas_repository, second, "check", now).status == "street_advanced"
     for expected_street in ("turn", "river", "settled"):
-        assert _texas_act(texas_repository, "texas-p2", "check", now).status == "acted"
-        result = _texas_act(texas_repository, "texas-p1", "check", now)
+        assert _texas_act(texas_repository, second, "check", now).status == "acted"
+        result = _texas_act(texas_repository, first, "check", now)
         if expected_street == "settled":
             assert result.status == "settled"
         else:
@@ -473,13 +621,15 @@ def test_texas_holdem_last_unfolded_player_wins_without_public_hole_cards(
     texas_repository, now
 ):
     started = _start_two_player_texas_hand(texas_repository, now)
+    folding = _texas_current_player(texas_repository, now).platform_id
+    winner = "texas-p2" if folding == "texas-p1" else "texas-p1"
 
-    result = _texas_act(texas_repository, "texas-p1", "fold", now)
+    result = _texas_act(texas_repository, folding, "fold", now)
 
     assert result.status == "settled"
     assert "底牌" not in result.public_message
-    assert texas_repository.find_user("texas-p1").balance == 99
-    assert texas_repository.find_user("texas-p2").balance == 101
+    assert texas_repository.find_user(folding).balance == 99
+    assert texas_repository.find_user(winner).balance == 101
     with texas_repository._session() as session:
         game = session.get(TexasHoldemGameRecord, started.game_id)
         assert game.state == "settled"
@@ -502,7 +652,12 @@ def test_texas_holdem_timeout_folds_when_facing_blind(texas_repository, now):
 
 def test_texas_holdem_board_abort_restores_original_buy_ins(texas_repository, now):
     started = _start_two_player_texas_hand(texas_repository, now)
-    _texas_act(texas_repository, "texas-p1", "call", now)
+    _texas_act(
+        texas_repository,
+        _texas_current_player(texas_repository, now).platform_id,
+        "call",
+        now,
+    )
 
     assert texas_repository.abort_texas_holdem(
         started.game_id, now, PRIMARY_GROUP_CHAT_ID
@@ -540,16 +695,22 @@ def test_texas_holdem_exit_folds_immediately_even_out_of_turn(texas_repository, 
     for index, platform_id in enumerate(("texas-p1", "texas-p2", "texas-p3"), 1):
         _confirm_outbound(texas_repository, f"direct-{platform_id}", now, index)
     before = texas_repository.texas_holdem_summary(now, PRIMARY_GROUP_CHAT_ID)
-    assert before.current_seat == 1
+    leaving = next(
+        player for player in before.players
+        if player.seat_number != before.current_seat
+    )
 
     result = texas_repository.leave_texas_holdem(
-        "texas-p2", now, PRIMARY_GROUP_CHAT_ID
+        leaving.platform_id, now, PRIMARY_GROUP_CHAT_ID
     )
 
     assert result.status == "acted"
     after = texas_repository.texas_holdem_summary(now, PRIMARY_GROUP_CHAT_ID)
-    assert after.current_seat == 1
-    assert next(player for player in after.players if player.platform_id == "texas-p2").state == "folded"
+    assert after.current_seat == before.current_seat
+    assert next(
+        player for player in after.players
+        if player.platform_id == leaving.platform_id
+    ).state == "folded"
 
 
 def test_bootstrap_primary_group_normalizes_env_url_once(repository, now):

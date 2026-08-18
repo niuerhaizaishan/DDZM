@@ -71,6 +71,7 @@ from .api_models import (
     OutboundClaimResponse,
     OutboundRecallClaimResponse,
     NumberBombSettingsResponse,
+    TexasHoldemSettingsResponse,
     RedPacketSettingsResponse,
     GameplayParticipantResponse,
     GameplaySummariesResponse,
@@ -82,6 +83,7 @@ from .api_models import (
     SetCommandTemplateRequest,
     SetActivitySettingsRequest,
     SetNumberBombSettingsRequest,
+    SetTexasHoldemSettingsRequest,
     SetRedPacketSettingsRequest,
     SetAIAssistantSettingsRequest,
     SetAIKnowledgeCardRequest,
@@ -1481,6 +1483,30 @@ def create_app(
             reminder_interval_seconds=settings.reminder_interval_seconds,
         )
 
+    @app.get(
+        "/internal/game/texas-holdem/settings",
+        response_model=TexasHoldemSettingsResponse,
+    )
+    def texas_holdem_settings(
+        _: Annotated[None, Depends(authorize)],
+    ) -> TexasHoldemSettingsResponse:
+        return TexasHoldemSettingsResponse(
+            **repository.get_texas_holdem_settings().__dict__
+        )
+
+    @app.patch(
+        "/internal/game/texas-holdem/settings",
+        response_model=TexasHoldemSettingsResponse,
+    )
+    def set_texas_holdem_settings(
+        request: SetTexasHoldemSettingsRequest,
+        _: Annotated[None, Depends(authorize)],
+    ) -> TexasHoldemSettingsResponse:
+        settings = repository.set_texas_holdem_settings(
+            **request.model_dump()
+        )
+        return TexasHoldemSettingsResponse(**settings.__dict__)
+
     @app.patch(
         "/internal/game/number-bomb/settings",
         response_model=NumberBombSettingsResponse,
@@ -1533,37 +1559,55 @@ def create_app(
     @app.get(
         "/internal/gameplay/current",
         response_model=GameplaySummariesResponse,
+        response_model_exclude_unset=True,
     )
     def current_gameplay(
         _: Annotated[None, Depends(authorize)],
     ) -> GameplaySummariesResponse:
-        return GameplaySummariesResponse(
-            items=[
-                GameplaySummaryResponse(
-                    group_chat_id=summary.group_chat_id,
-                    group_name=summary.group_name,
-                    game_type=summary.game_type,
-                    game_id=summary.game_id,
-                    state=summary.state,
-                    participants=[
-                        GameplayParticipantResponse(
-                            number=participant.number,
-                            display_name=participant.display_name,
-                            reported=participant.reported,
-                        )
-                        for participant in summary.participants
-                    ],
-                    signup_deadline=summary.signup_deadline,
-                    next_reminder_at=summary.next_reminder_at,
-                    tipping_deadline=summary.tipping_deadline,
-                    tip_total=summary.tip_total,
-                    skip_enabled=summary.skip_enabled,
+        items: list[GameplaySummaryResponse] = []
+        for summary in repository.current_gameplay_admin_summaries(clock()):
+            if summary.group_chat_id is None or summary.group_name is None:
+                continue
+            participants = []
+            for participant in summary.participants:
+                participant_values = {
+                    "number": participant.number,
+                    "display_name": participant.display_name,
+                    "reported": participant.reported,
+                }
+                if summary.game_type == "texas_holdem":
+                    participant_values.update(
+                        state=participant.state,
+                        stack=participant.stack,
+                        street_contribution=participant.street_contribution,
+                        total_contribution=participant.total_contribution,
+                    )
+                participants.append(GameplayParticipantResponse(**participant_values))
+            values = {
+                "group_chat_id": summary.group_chat_id,
+                "group_name": summary.group_name,
+                "game_type": summary.game_type,
+                "game_id": summary.game_id,
+                "state": summary.state,
+                "participants": participants,
+                "signup_deadline": summary.signup_deadline,
+                "next_reminder_at": summary.next_reminder_at,
+                "tipping_deadline": summary.tipping_deadline,
+                "tip_total": summary.tip_total,
+                "skip_enabled": summary.skip_enabled,
+            }
+            if summary.game_type == "texas_holdem":
+                values.update(
+                    button_seat=summary.button_seat,
+                    current_seat=summary.current_seat,
+                    board=list(summary.board),
+                    pot=summary.pot,
+                    action_deadline=summary.action_deadline,
+                    to_call=summary.to_call,
+                    legal_actions=list(summary.legal_actions),
                 )
-                for summary in repository.current_gameplay_admin_summaries(clock())
-                if summary.group_chat_id is not None
-                and summary.group_name is not None
-            ]
-        )
+            items.append(GameplaySummaryResponse(**values))
+        return GameplaySummariesResponse(items=items)
 
     @app.post(
         "/internal/gameplay/{group_chat_id}/{game_type}/{game_id}/force-end",

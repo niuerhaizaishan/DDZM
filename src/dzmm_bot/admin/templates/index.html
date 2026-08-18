@@ -67,6 +67,7 @@
                   <button id="nav-memory-assessment" class="nav-item" data-view="memory-assessment" type="button">记忆考核</button>
                   <button id="nav-undercover" class="nav-item" data-view="undercover" type="button">谁是卧底</button>
                   <button id="nav-blame-bomb" class="nav-item" data-view="blame-bomb" type="button">甩锅游戏</button>
+                  <button id="nav-texas-holdem" class="nav-item" data-view="texas-holdem" type="button">德州扑克</button>
                   <button id="nav-ai-assistant" class="nav-item" data-view="ai-assistant" type="button">AI 总监事</button>
                 </div>
                 <div class="nav-group">
@@ -159,6 +160,15 @@
               </div>
             </aside>
           </section>
+              </section>
+
+              <section id="texas-holdem-view" class="dashboard-view panel" hidden>
+                <p class="eyebrow">多人现金桌</p>
+                <div class="panel-heading"><div><h2>德州扑克</h2><p class="muted">系统只负责发牌与裁判，不参赌、不抽成；底牌不会出现在管理端。</p></div><button id="edit-texas-holdem-settings" class="primary" type="button">编辑德州规则</button></div>
+                <div id="texas-holdem-settings-card" class="settings-card" aria-live="polite"></div>
+                <hr>
+                <div class="panel-heading"><div><h2>当前公开牌局</h2><p class="muted">仅展示公共牌、底池、行动位和公开筹码。</p></div></div>
+                <div id="texas-holdem-session-card" class="settings-card" aria-live="polite"><p class="muted">正在读取当前牌局。</p></div>
               </section>
 
               <section id="settings-view" class="dashboard-view panel" hidden>
@@ -380,6 +390,25 @@
         <div class="template-modal-actions"><button class="secondary" data-close-number-bomb-settings-modal type="button">取消</button><button id="save-number-bomb-settings" class="primary" type="button">保存设置</button></div>
       </section>
     </div>
+    <div id="texas-holdem-settings-modal" class="template-modal" role="dialog" aria-modal="true" aria-labelledby="texas-holdem-settings-modal-title" hidden>
+      <div class="template-modal-backdrop" data-close-texas-holdem-settings-modal></div>
+      <section class="template-modal-card">
+        <div class="template-modal-heading"><div><p class="eyebrow">多人现金桌</p><h2 id="texas-holdem-settings-modal-title">编辑德州扑克</h2><p class="muted">盲注按带入金额计算；修改仅影响之后创建的新牌局。</p></div><button class="text-button" data-close-texas-holdem-settings-modal type="button">关闭</button></div>
+        <label><input id="texas-holdem-enabled" type="checkbox"> 启用德州扑克</label>
+        <div class="event-input-grid">
+          <label>最少人数<input id="texas-holdem-minimum-players" type="number" min="2" max="9" required></label>
+          <label>最多人数<input id="texas-holdem-maximum-players" type="number" min="2" max="9" required></label>
+          <label>最低带入<input id="texas-holdem-minimum-buy-in" type="number" min="1" max="99999" required></label>
+          <label>最高带入<input id="texas-holdem-maximum-buy-in" type="number" min="1" max="99999" required></label>
+          <label>每日发起次数<input id="texas-holdem-daily-start-limit" type="number" min="1" max="100" required></label>
+          <label>报名时限（秒）<input id="texas-holdem-signup-timeout" type="number" min="10" max="3600" required></label>
+          <label>行动时限（秒）<input id="texas-holdem-action-timeout" type="number" min="10" max="3600" required></label>
+          <label>小盲（带入 %）<input id="texas-holdem-small-blind" type="number" min="1" max="99" required></label>
+          <label>大盲（带入 %）<input id="texas-holdem-big-blind" type="number" min="2" max="100" required></label>
+        </div>
+        <div class="template-modal-actions"><button class="secondary" data-close-texas-holdem-settings-modal type="button">取消</button><button id="save-texas-holdem-settings" class="primary" type="button">保存设置</button></div>
+      </section>
+    </div>
     <div id="red-packet-settings-modal" class="template-modal" role="dialog" aria-modal="true" aria-labelledby="red-packet-settings-modal-title" hidden>
       <div class="template-modal-backdrop" data-close-red-packet-settings-modal></div>
       <section class="template-modal-card">
@@ -553,7 +582,7 @@
     <div id="ai-knowledge-card-modal" class="template-modal" role="dialog" aria-modal="true" aria-labelledby="ai-knowledge-card-modal-title" hidden>
       <div class="template-modal-backdrop" data-close-ai-knowledge-card-modal></div>
       <section class="template-modal-card ai-knowledge-card-modal-card"><div class="template-modal-heading"><div><p class="eyebrow">AI 权威知识</p><h2 id="ai-knowledge-card-modal-title">新增知识卡</h2><p class="muted">知识卡不能覆盖实时系统事实或安全边界。</p></div><button class="text-button" data-close-ai-knowledge-card-modal type="button">关闭</button></div>
-        <label>主题<select id="ai-knowledge-card-topic"><option value="economy">金币与余额</option><option value="departments">部门</option><option value="ranks">职位与晋升</option><option value="shop">商店与物品</option><option value="checkin_activity">打卡与活跃度</option><option value="random_events">随机事件</option><option value="hide_and_seek">摸鱼躲猫猫</option><option value="memory_assessment">记忆考核</option><option value="undercover">谁是卧底</option><option value="blame_bomb">甩锅游戏</option><option value="number_bomb">蹦蹦数字炸弹</option><option value="commands_help">指令帮助</option><option value="player_activity">个人游戏经历</option></select></label>
+        <label>主题<select id="ai-knowledge-card-topic"><option value="economy">金币与余额</option><option value="departments">部门</option><option value="ranks">职位与晋升</option><option value="shop">商店与物品</option><option value="checkin_activity">打卡与活跃度</option><option value="random_events">随机事件</option><option value="hide_and_seek">摸鱼躲猫猫</option><option value="memory_assessment">记忆考核</option><option value="undercover">谁是卧底</option><option value="blame_bomb">甩锅游戏</option><option value="number_bomb">蹦蹦数字炸弹</option><option value="texas_holdem">德州扑克</option><option value="commands_help">指令帮助</option><option value="player_activity">个人游戏经历</option></select></label>
         <label>标题<input id="ai-knowledge-card-title" maxlength="128"></label>
         <label>关键词（每行一个）<textarea id="ai-knowledge-card-keywords" rows="5" maxlength="2000"></textarea></label>
         <label>稳定规则内容<textarea id="ai-knowledge-card-content" rows="8" maxlength="12000"></textarea></label>
