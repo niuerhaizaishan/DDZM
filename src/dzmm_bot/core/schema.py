@@ -712,6 +712,124 @@ class NumberBombRoundPlayerRecord(Base):
     skipped_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
 
 
+class TexasHoldemSettingsRecord(Base):
+    __tablename__ = "texas_holdem_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    minimum_players: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
+    maximum_players: Mapped[int] = mapped_column(Integer, default=9, nullable=False)
+    minimum_buy_in: Mapped[int] = mapped_column(Integer, default=20, nullable=False)
+    maximum_buy_in: Mapped[int] = mapped_column(Integer, default=200, nullable=False)
+    daily_start_limit: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    signup_timeout_seconds: Mapped[int] = mapped_column(Integer, default=120, nullable=False)
+    action_timeout_seconds: Mapped[int] = mapped_column(Integer, default=120, nullable=False)
+    small_blind_percent: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
+    big_blind_percent: Mapped[int] = mapped_column(Integer, default=10, nullable=False)
+
+
+class TexasHoldemGameRecord(Base):
+    __tablename__ = "texas_holdem_games"
+    __table_args__ = (
+        Index(
+            "ux_texas_holdem_one_active",
+            "group_chat_id",
+            unique=True,
+            sqlite_where=text("active_key IS NOT NULL"),
+            postgresql_where=text("active_key IS NOT NULL"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    group_chat_id: Mapped[UUID] = mapped_column(
+        ForeignKey("group_chats.id"), default=PRIMARY_GROUP_CHAT_ID, nullable=False
+    )
+    creator_user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    state: Mapped[str] = mapped_column(String(16), nullable=False)
+    street: Mapped[str | None] = mapped_column(String(16))
+    active_key: Mapped[str | None] = mapped_column(String(32))
+    buy_in: Mapped[int] = mapped_column(Integer, nullable=False)
+    deck: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON)
+    board: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
+    button_seat: Mapped[int | None] = mapped_column(Integer)
+    small_blind_seat: Mapped[int | None] = mapped_column(Integer)
+    big_blind_seat: Mapped[int | None] = mapped_column(Integer)
+    current_seat: Mapped[int | None] = mapped_column(Integer)
+    small_blind_amount: Mapped[int | None] = mapped_column(Integer)
+    big_blind_amount: Mapped[int | None] = mapped_column(Integer)
+    current_bet: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_full_raise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    signup_deadline: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    action_deadline: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    settlement_complete: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    finish_reason: Mapped[str | None] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    finished_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+
+
+class TexasHoldemPlayerRecord(Base):
+    __tablename__ = "texas_holdem_players"
+    __table_args__ = (
+        UniqueConstraint("game_id", "user_id"),
+        UniqueConstraint("game_id", "seat_number"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    game_id: Mapped[UUID] = mapped_column(ForeignKey("texas_holdem_games.id"), nullable=False)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    seat_number: Mapped[int | None] = mapped_column(Integer)
+    hole_cards: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON)
+    original_buy_in: Mapped[int] = mapped_column(Integer, nullable=False)
+    stack: Mapped[int] = mapped_column(Integer, nullable=False)
+    street_contribution: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_contribution: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    state: Mapped[str] = mapped_column(String(16), nullable=False)
+    acted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    raise_open: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    private_outbound_id: Mapped[UUID | None] = mapped_column(ForeignKey("outbound_messages.id"))
+    private_delivery_state: Mapped[str | None] = mapped_column(String(16))
+    joined_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    left_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+
+
+class TexasHoldemActionRecord(Base):
+    __tablename__ = "texas_holdem_actions"
+    __table_args__ = (UniqueConstraint("inbound_message_id"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    game_id: Mapped[UUID] = mapped_column(ForeignKey("texas_holdem_games.id"), nullable=False)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    inbound_message_id: Mapped[UUID | None] = mapped_column(ForeignKey("inbound_messages.id"))
+    street: Mapped[str] = mapped_column(String(16), nullable=False)
+    action: Mapped[str] = mapped_column(String(16), nullable=False)
+    requested_amount: Mapped[int | None] = mapped_column(Integer)
+    committed_amount: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+
+
+class TexasHoldemPotRecord(Base):
+    __tablename__ = "texas_holdem_pots"
+    __table_args__ = (UniqueConstraint("game_id", "pot_number"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    game_id: Mapped[UUID] = mapped_column(ForeignKey("texas_holdem_games.id"), nullable=False)
+    pot_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    amount: Mapped[int] = mapped_column(Integer, nullable=False)
+    eligible_seats: Mapped[list[int]] = mapped_column(JSON, nullable=False)
+    winner_seats: Mapped[list[int] | None] = mapped_column(JSON)
+
+
+class TexasHoldemDailyStartRecord(Base):
+    __tablename__ = "texas_holdem_daily_starts"
+    __table_args__ = (UniqueConstraint("user_id", "play_date"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    play_date: Mapped[date] = mapped_column(Date, nullable=False)
+    count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
 class HideAndSeekDailyPlayRecord(Base):
     __tablename__ = "hide_and_seek_daily_plays"
     __table_args__ = (UniqueConstraint("user_id", "play_date"),)
