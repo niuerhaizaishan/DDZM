@@ -56,6 +56,20 @@ from .number_bomb import (
     render_number_bomb_result,
 )
 from .red_packet import RandomSource, generate_red_packet_allocation
+from .texas_holdem import (
+    BettingPlayer,
+    BettingRound,
+    Card,
+    TexasHoldemRuleError,
+    apply_betting_action,
+    build_deck,
+    build_side_pots,
+    deal_layout,
+    evaluate_best,
+    format_card,
+    postflop_first_seat,
+    preflop_first_seat,
+)
 from .reply_templates import (
     TEMPLATE_DEFINITIONS,
     render_template,
@@ -116,6 +130,12 @@ from .schema import (
     NumberBombRoundPlayerRecord,
     NumberBombRoundRecord,
     NumberBombSettingsRecord,
+    TexasHoldemActionRecord,
+    TexasHoldemDailyStartRecord,
+    TexasHoldemGameRecord,
+    TexasHoldemPlayerRecord,
+    TexasHoldemPotRecord,
+    TexasHoldemSettingsRecord,
     ProfileImageUploadRecord,
     OutboundRecord,
     UndercoverGamePlayerRecord,
@@ -795,6 +815,58 @@ class NumberBombGameResult:
 
 
 @dataclass(frozen=True)
+class TexasHoldemSettings:
+    enabled: bool
+    minimum_players: int
+    maximum_players: int
+    minimum_buy_in: int
+    maximum_buy_in: int
+    daily_start_limit: int
+    signup_timeout_seconds: int
+    action_timeout_seconds: int
+    small_blind_percent: int
+    big_blind_percent: int
+
+
+@dataclass(frozen=True)
+class TexasHoldemPlayerView:
+    platform_id: str
+    display_name: str
+    seat_number: int | None
+    state: str
+    stack: int
+    street_contribution: int
+    total_contribution: int
+
+
+@dataclass(frozen=True)
+class TexasHoldemResult:
+    status: str
+    game_id: UUID | None = None
+    player_count: int = 0
+    card_outbound_ids: tuple[UUID, ...] = ()
+    public_message: str | None = None
+    private_message: str | None = None
+    candidates: tuple["PrivateGameCandidate", ...] = ()
+
+
+@dataclass(frozen=True)
+class TexasHoldemSummary:
+    state: str | None
+    game_id: UUID | None = None
+    group_chat_id: UUID | None = None
+    buy_in: int = 0
+    button_seat: int | None = None
+    current_seat: int | None = None
+    board: tuple[str, ...] = ()
+    total_pot: int = 0
+    action_deadline: datetime | None = None
+    to_call: int = 0
+    legal_actions: tuple[str, ...] = ()
+    players: tuple[TexasHoldemPlayerView, ...] = ()
+
+
+@dataclass(frozen=True)
 class PrivateGameCandidate:
     index: int
     group_chat_id: UUID
@@ -1431,11 +1503,13 @@ class CoreRepository:
         preserve_long_group_messages: bool = False,
         red_packet_random: RandomSource | None = None,
         number_bomb_random: RandomSource | None = None,
+        texas_holdem_random: RandomSource | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._preserve_long_group_messages = preserve_long_group_messages
         self._red_packet_random = red_packet_random or SystemRandom()
         self._number_bomb_random = number_bomb_random or SystemRandom()
+        self._texas_holdem_random = texas_holdem_random or SystemRandom()
         self._active_session: ContextVar[Session | None] = ContextVar(
             f"core_repository_session_{id(self)}", default=None
         )
@@ -5247,6 +5321,942 @@ class CoreRepository:
                     message,
                 )
 
+    def get_texas_holdem_settings(self) -> TexasHoldemSettings:
+        with self._session() as session:
+            record = session.get(TexasHoldemSettingsRecord, 1)
+            if record is None:
+                record = TexasHoldemSettingsRecord(id=1)
+                session.add(record)
+                session.flush()
+            return TexasHoldemSettings(
+                enabled=record.enabled,
+                minimum_players=record.minimum_players,
+                maximum_players=record.maximum_players,
+                minimum_buy_in=record.minimum_buy_in,
+                maximum_buy_in=record.maximum_buy_in,
+                daily_start_limit=record.daily_start_limit,
+                signup_timeout_seconds=record.signup_timeout_seconds,
+                action_timeout_seconds=record.action_timeout_seconds,
+                small_blind_percent=record.small_blind_percent,
+                big_blind_percent=record.big_blind_percent,
+            )
+
+    def set_texas_holdem_settings(
+        self,
+        *,
+        enabled: bool,
+        minimum_players: int,
+        maximum_players: int,
+        minimum_buy_in: int,
+        maximum_buy_in: int,
+        daily_start_limit: int,
+        signup_timeout_seconds: int,
+        action_timeout_seconds: int,
+        small_blind_percent: int,
+        big_blind_percent: int,
+    ) -> TexasHoldemSettings:
+        if not isinstance(enabled, bool):
+            raise ValueError("启用状态必须是布尔值")
+        if not 2 <= minimum_players <= maximum_players <= 9:
+            raise ValueError("玩家人数必须在 2 至 9 人之间")
+        if not 1 <= minimum_buy_in <= maximum_buy_in:
+            raise ValueError("带入范围无效")
+        if not 1 <= daily_start_limit <= 100:
+            raise ValueError("每日发起次数无效")
+        if not 10 <= signup_timeout_seconds <= 3600:
+            raise ValueError("报名时限无效")
+        if not 10 <= action_timeout_seconds <= 3600:
+            raise ValueError("行动时限无效")
+        if not 1 <= small_blind_percent < big_blind_percent <= 100:
+            raise ValueError("盲注比例无效")
+        self.get_texas_holdem_settings()
+        with self._session() as session:
+            record = session.get(TexasHoldemSettingsRecord, 1)
+            if record is None:
+                raise RuntimeError("德州扑克设置消失")
+            record.enabled = enabled
+            record.minimum_players = minimum_players
+            record.maximum_players = maximum_players
+            record.minimum_buy_in = minimum_buy_in
+            record.maximum_buy_in = maximum_buy_in
+            record.daily_start_limit = daily_start_limit
+            record.signup_timeout_seconds = signup_timeout_seconds
+            record.action_timeout_seconds = action_timeout_seconds
+            record.small_blind_percent = small_blind_percent
+            record.big_blind_percent = big_blind_percent
+            session.flush()
+        return self.get_texas_holdem_settings()
+
+    @staticmethod
+    def _texas_card_payload(card: Card) -> dict[str, object]:
+        return {"suit": card.suit, "rank": card.rank}
+
+    @staticmethod
+    def _texas_card_from_payload(payload: dict[str, object]) -> Card:
+        return Card(str(payload["suit"]), int(payload["rank"]))
+
+    def _active_texas_holdem_game(
+        self, session: Session, group_chat_id: UUID
+    ) -> TexasHoldemGameRecord | None:
+        return session.scalar(
+            select(TexasHoldemGameRecord)
+            .where(
+                TexasHoldemGameRecord.group_chat_id == group_chat_id,
+                TexasHoldemGameRecord.active_key == "global",
+            )
+            .with_for_update()
+        )
+
+    def _texas_players(
+        self, session: Session, game_id: UUID, *, lock: bool = False
+    ) -> list[tuple[TexasHoldemPlayerRecord, UserRecord]]:
+        statement = (
+            select(TexasHoldemPlayerRecord, UserRecord)
+            .join(UserRecord, UserRecord.id == TexasHoldemPlayerRecord.user_id)
+            .where(
+                TexasHoldemPlayerRecord.game_id == game_id,
+                TexasHoldemPlayerRecord.state != "left",
+            )
+            .order_by(
+                TexasHoldemPlayerRecord.seat_number,
+                TexasHoldemPlayerRecord.joined_at,
+                TexasHoldemPlayerRecord.id,
+            )
+        )
+        if lock:
+            statement = statement.with_for_update(of=TexasHoldemPlayerRecord)
+        return list(session.execute(statement))
+
+    def start_texas_holdem_signup(
+        self,
+        platform_id: str,
+        buy_in: int,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> TexasHoldemResult:
+        now = now.astimezone(BEIJING)
+        settings = self.get_texas_holdem_settings()
+        with self.transaction():
+            with self._session() as session:
+                self._lock_gameplay_gate(session)
+                if self._active_texas_holdem_game(session, group_chat_id) is not None:
+                    return TexasHoldemResult("already_active")
+                user = session.scalar(
+                    select(UserRecord)
+                    .where(UserRecord.platform_id == platform_id)
+                    .with_for_update()
+                )
+                if user is None:
+                    return TexasHoldemResult("not_joined")
+                group = session.get(GroupChatRecord, group_chat_id)
+                if not settings.enabled or (group is not None and not group.games_enabled):
+                    return TexasHoldemResult("disabled")
+                if isinstance(buy_in, bool) or not isinstance(buy_in, int) or not (
+                    settings.minimum_buy_in <= buy_in <= settings.maximum_buy_in
+                ):
+                    return TexasHoldemResult("invalid_buy_in")
+                if not self._has_direct_chat(session, platform_id):
+                    return TexasHoldemResult("direct_chat_required")
+                if self._active_random_event(session, group_chat_id) is not None or self._has_active_game(
+                    session, group_chat_id
+                ):
+                    return TexasHoldemResult("multiplayer_active")
+                daily_count = session.scalar(
+                    select(TexasHoldemDailyStartRecord.count).where(
+                        TexasHoldemDailyStartRecord.user_id == user.id,
+                        TexasHoldemDailyStartRecord.play_date == now.date(),
+                    )
+                )
+                if int(daily_count or 0) >= settings.daily_start_limit:
+                    return TexasHoldemResult("daily_limit")
+                if user.balance < buy_in:
+                    return TexasHoldemResult("insufficient_balance")
+                game = TexasHoldemGameRecord(
+                    group_chat_id=group_chat_id,
+                    creator_user_id=user.id,
+                    state="signup",
+                    active_key="global",
+                    buy_in=buy_in,
+                    board=[],
+                    current_bet=0,
+                    last_full_raise=0,
+                    signup_deadline=now + timedelta(seconds=settings.signup_timeout_seconds),
+                    settlement_complete=False,
+                    created_at=now,
+                )
+                session.add(game)
+                session.flush()
+                self._apply_balance_change(user, -buy_in, "texas_holdem_buy_in", now)
+                session.add(
+                    TexasHoldemPlayerRecord(
+                        game_id=game.id,
+                        user_id=user.id,
+                        original_buy_in=buy_in,
+                        stack=buy_in,
+                        state="joined",
+                        joined_at=now,
+                    )
+                )
+                return TexasHoldemResult("created", game.id, 1)
+
+    def join_texas_holdem(
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> TexasHoldemResult:
+        now = now.astimezone(BEIJING)
+        settings = self.get_texas_holdem_settings()
+        with self.transaction():
+            with self._session() as session:
+                game = self._active_texas_holdem_game(session, group_chat_id)
+                if game is None or game.state != "signup":
+                    return TexasHoldemResult("no_game")
+                user = session.scalar(
+                    select(UserRecord)
+                    .where(UserRecord.platform_id == platform_id)
+                    .with_for_update()
+                )
+                if user is None:
+                    return TexasHoldemResult("not_joined", game.id)
+                existing = session.scalar(
+                    select(TexasHoldemPlayerRecord).where(
+                        TexasHoldemPlayerRecord.game_id == game.id,
+                        TexasHoldemPlayerRecord.user_id == user.id,
+                        TexasHoldemPlayerRecord.state != "left",
+                    )
+                )
+                if existing is not None:
+                    return TexasHoldemResult("already_joined", game.id)
+                count = int(
+                    session.scalar(
+                        select(func.count(TexasHoldemPlayerRecord.id)).where(
+                            TexasHoldemPlayerRecord.game_id == game.id,
+                            TexasHoldemPlayerRecord.state != "left",
+                        )
+                    )
+                    or 0
+                )
+                if count >= settings.maximum_players:
+                    return TexasHoldemResult("full", game.id, count)
+                if not self._has_direct_chat(session, platform_id):
+                    return TexasHoldemResult("direct_chat_required", game.id, count)
+                if user.balance < game.buy_in:
+                    return TexasHoldemResult("insufficient_balance", game.id, count)
+                self._apply_balance_change(user, -game.buy_in, "texas_holdem_buy_in", now)
+                session.add(
+                    TexasHoldemPlayerRecord(
+                        game_id=game.id,
+                        user_id=user.id,
+                        original_buy_in=game.buy_in,
+                        stack=game.buy_in,
+                        state="joined",
+                        joined_at=now,
+                    )
+                )
+                return TexasHoldemResult("joined", game.id, count + 1)
+
+    def _refund_texas_signup(
+        self,
+        session: Session,
+        game: TexasHoldemGameRecord,
+        now: datetime,
+        source: str = "texas_holdem_refund",
+    ) -> None:
+        for player, user in self._texas_players(session, game.id, lock=True):
+            self._apply_balance_change(user, player.original_buy_in, source, now)
+            player.state = "left"
+            player.left_at = now
+        game.state = "cancelled"
+        game.active_key = None
+        game.finish_reason = "cancelled"
+        game.finished_at = now
+
+    def leave_texas_holdem(
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> TexasHoldemResult:
+        now = now.astimezone(BEIJING)
+        with self.transaction():
+            with self._session() as session:
+                game = self._active_texas_holdem_game(session, group_chat_id)
+                if game is None:
+                    return TexasHoldemResult("no_game")
+                row = session.execute(
+                    select(TexasHoldemPlayerRecord, UserRecord)
+                    .join(UserRecord, UserRecord.id == TexasHoldemPlayerRecord.user_id)
+                    .where(
+                        TexasHoldemPlayerRecord.game_id == game.id,
+                        TexasHoldemPlayerRecord.state != "left",
+                        UserRecord.platform_id == platform_id,
+                    )
+                    .with_for_update(of=TexasHoldemPlayerRecord)
+                ).first()
+                if row is None:
+                    return TexasHoldemResult("not_participant", game.id)
+                player, user = row
+                if game.state != "signup":
+                    return self._act_texas_holdem_locked(
+                        session, game, player, user, "fold", None, None, now
+                    )
+                if game.creator_user_id == user.id:
+                    self._refund_texas_signup(session, game, now)
+                    return TexasHoldemResult("signup_left", game.id)
+                self._apply_balance_change(user, player.original_buy_in, "texas_holdem_refund", now)
+                player.state = "left"
+                player.left_at = now
+                count = len(self._texas_players(session, game.id))
+                return TexasHoldemResult("signup_left", game.id, count)
+
+    def start_texas_holdem_hand(
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> TexasHoldemResult:
+        now = now.astimezone(BEIJING)
+        settings = self.get_texas_holdem_settings()
+        with self.transaction():
+            with self._session() as session:
+                game = self._active_texas_holdem_game(session, group_chat_id)
+                if game is None or game.state != "signup":
+                    return TexasHoldemResult("cannot_start")
+                rows = self._texas_players(session, game.id, lock=True)
+                rows.sort(
+                    key=lambda row: (
+                        row[0].user_id != game.creator_user_id,
+                        row[0].joined_at,
+                        str(row[0].id),
+                    )
+                )
+                if not any(user.platform_id == platform_id for _, user in rows):
+                    return TexasHoldemResult("not_participant", game.id, len(rows))
+                if len(rows) < settings.minimum_players:
+                    return TexasHoldemResult("insufficient_players", game.id, len(rows))
+                if now >= game.signup_deadline:
+                    self._refund_texas_signup(session, game, now)
+                    return TexasHoldemResult("signup_expired", game.id)
+                direct_rooms = {
+                    user.platform_id: session.scalar(
+                        select(DirectChatRecord.chatroom_id).where(
+                            DirectChatRecord.platform_user_id == user.platform_id
+                        )
+                    )
+                    for _, user in rows
+                }
+                if any(room is None for room in direct_rooms.values()):
+                    return TexasHoldemResult("missing_direct_chats", game.id, len(rows))
+                creator_start = session.scalar(
+                    select(TexasHoldemDailyStartRecord)
+                    .where(
+                        TexasHoldemDailyStartRecord.user_id == game.creator_user_id,
+                        TexasHoldemDailyStartRecord.play_date == now.date(),
+                    )
+                    .with_for_update()
+                )
+                if creator_start is not None and creator_start.count >= settings.daily_start_limit:
+                    return TexasHoldemResult("daily_limit", game.id, len(rows))
+
+                deck = list(build_deck())
+                self._texas_holdem_random.shuffle(deck)
+                layout = deal_layout(deck, len(rows))
+                game.deck = [self._texas_card_payload(card) for card in deck]
+                game.board = []
+                game.state = "dealing"
+                game.street = "preflop"
+                game.button_seat = 1
+                seats = tuple(range(1, len(rows) + 1))
+                if len(seats) == 2:
+                    game.small_blind_seat, game.big_blind_seat = seats
+                else:
+                    game.small_blind_seat = 2
+                    game.big_blind_seat = 3
+                game.small_blind_amount = max(
+                    1, (game.buy_in * settings.small_blind_percent + 99) // 100
+                )
+                game.big_blind_amount = max(
+                    2, (game.buy_in * settings.big_blind_percent + 99) // 100
+                )
+                game.current_bet = game.big_blind_amount
+                game.last_full_raise = game.big_blind_amount
+                game.started_at = now
+                outbound_ids: list[UUID] = []
+                for seat, ((player, user), hole_cards) in enumerate(
+                    zip(rows, layout.hole_cards, strict=True), start=1
+                ):
+                    player.seat_number = seat
+                    player.hole_cards = [
+                        self._texas_card_payload(card) for card in hole_cards
+                    ]
+                    player.state = "active"
+                    player.private_delivery_state = "pending"
+                    blind = (
+                        game.small_blind_amount
+                        if seat == game.small_blind_seat
+                        else game.big_blind_amount
+                        if seat == game.big_blind_seat
+                        else 0
+                    )
+                    blind = min(blind, player.stack)
+                    player.stack -= blind
+                    player.street_contribution = blind
+                    player.total_contribution = blind
+                    if player.stack == 0:
+                        player.state = "all_in"
+                    outbound = self.enqueue_system_outbound(
+                        "【德州扑克】你的底牌："
+                        + " ".join(format_card(card) for card in hole_cards)
+                        + "。可在私聊发送 /看牌 再次查看。",
+                        destination_chatroom_id=direct_rooms[user.platform_id],
+                        delivery_kind="texas_holdem_card",
+                    )
+                    player.private_outbound_id = outbound.id
+                    outbound_ids.append(outbound.id)
+                if creator_start is None:
+                    session.add(
+                        TexasHoldemDailyStartRecord(
+                            user_id=game.creator_user_id,
+                            play_date=now.date(),
+                            count=1,
+                        )
+                    )
+                else:
+                    creator_start.count += 1
+                return TexasHoldemResult(
+                    "dealing", game.id, len(rows), tuple(outbound_ids)
+                )
+
+    def _record_texas_card_delivery(
+        self,
+        session: Session,
+        player: TexasHoldemPlayerRecord,
+        now: datetime,
+    ) -> None:
+        game = session.get(TexasHoldemGameRecord, player.game_id, with_for_update=True)
+        if game is None or game.state != "dealing":
+            return
+        player.private_delivery_state = "sent"
+        pending = session.scalar(
+            select(func.count(TexasHoldemPlayerRecord.id)).where(
+                TexasHoldemPlayerRecord.game_id == game.id,
+                TexasHoldemPlayerRecord.state != "left",
+                TexasHoldemPlayerRecord.private_delivery_state != "sent",
+            )
+        )
+        if int(pending or 0) != 0:
+            return
+        settings = self.get_texas_holdem_settings()
+        seats = tuple(
+            seat
+            for seat in session.scalars(
+                select(TexasHoldemPlayerRecord.seat_number)
+                .where(
+                    TexasHoldemPlayerRecord.game_id == game.id,
+                    TexasHoldemPlayerRecord.state.in_(("active", "all_in")),
+                )
+                .order_by(TexasHoldemPlayerRecord.seat_number)
+            )
+            if seat is not None
+        )
+        game.state = "preflop"
+        game.current_seat = preflop_first_seat(seats, game.button_seat or 1)
+        game.action_deadline = now + timedelta(seconds=settings.action_timeout_seconds)
+
+    def _texas_betting_round(
+        self,
+        game: TexasHoldemGameRecord,
+        rows: list[tuple[TexasHoldemPlayerRecord, UserRecord]],
+    ) -> BettingRound:
+        return BettingRound(
+            players=tuple(
+                BettingPlayer(
+                    seat=player.seat_number or 0,
+                    stack=player.stack,
+                    street_bet=player.street_contribution,
+                    folded=player.state == "folded",
+                    all_in=player.state == "all_in",
+                )
+                for player, _ in rows
+            ),
+            current_bet=game.current_bet,
+            last_full_raise=game.last_full_raise,
+            current_seat=game.current_seat,
+            acted_seats=frozenset(
+                player.seat_number
+                for player, _ in rows
+                if player.acted and player.seat_number is not None
+            ),
+            raise_open_seats=frozenset(
+                player.seat_number
+                for player, _ in rows
+                if player.raise_open and player.seat_number is not None
+            ),
+        )
+
+    def _texas_layout_for_game(
+        self,
+        game: TexasHoldemGameRecord,
+        player_count: int,
+    ):
+        if game.deck is None:
+            raise RuntimeError("德州牌堆缺失")
+        return deal_layout(
+            tuple(self._texas_card_from_payload(card) for card in game.deck),
+            player_count,
+        )
+
+    def _settle_texas_holdem(
+        self,
+        session: Session,
+        game: TexasHoldemGameRecord,
+        rows: list[tuple[TexasHoldemPlayerRecord, UserRecord]],
+        now: datetime,
+        *,
+        reason: str,
+    ) -> TexasHoldemResult:
+        if game.settlement_complete:
+            return TexasHoldemResult("settled", game.id)
+        contributions = {
+            player.seat_number or 0: player.total_contribution for player, _ in rows
+        }
+        folded = {
+            player.seat_number or 0
+            for player, _ in rows
+            if player.state == "folded"
+        }
+        pots = build_side_pots(contributions, folded)
+        winnings = {player.seat_number or 0: 0 for player, _ in rows}
+        active_rows = [row for row in rows if row[0].state != "folded"]
+        showdown = len(active_rows) > 1
+        ranks: dict[int, object] = {}
+        if showdown:
+            layout = self._texas_layout_for_game(game, len(rows))
+            board = layout.board
+            game.board = [self._texas_card_payload(card) for card in board]
+            for player, _ in active_rows:
+                if player.hole_cards is None or player.seat_number is None:
+                    raise RuntimeError("德州底牌缺失")
+                hole = tuple(
+                    self._texas_card_from_payload(card) for card in player.hole_cards
+                )
+                ranks[player.seat_number] = evaluate_best((*hole, *board))
+        for index, pot in enumerate(pots, start=1):
+            if showdown:
+                best = max(ranks[seat] for seat in pot.eligible_seats)
+                winners = tuple(
+                    seat for seat in pot.eligible_seats if ranks[seat] == best
+                )
+            else:
+                winners = (active_rows[0][0].seat_number or 0,)
+            share, remainder = divmod(pot.amount, len(winners))
+            for seat in winners:
+                winnings[seat] += share
+            clockwise = sorted(winners, key=lambda seat: ((seat - (game.button_seat or 1) - 1) % len(rows)))
+            for seat in clockwise[:remainder]:
+                winnings[seat] += 1
+            session.add(
+                TexasHoldemPotRecord(
+                    game_id=game.id,
+                    pot_number=index,
+                    amount=pot.amount,
+                    eligible_seats=list(pot.eligible_seats),
+                    winner_seats=list(winners),
+                )
+            )
+        if sum(player.stack for player, _ in rows) + sum(contributions.values()) != sum(
+            player.original_buy_in for player, _ in rows
+        ):
+            raise RuntimeError("德州扑克筹码不守恒")
+        winner_names: list[str] = []
+        for player, user in rows:
+            seat = player.seat_number or 0
+            payout = player.stack + winnings[seat]
+            self._apply_balance_change(user, payout, "texas_holdem_settlement", now)
+            if winnings[seat] > 0:
+                winner_names.append(user.display_name)
+            player.stack = payout
+            if player.state != "folded":
+                player.state = "finished"
+        game.state = "settled"
+        game.active_key = None
+        game.current_seat = None
+        game.action_deadline = None
+        game.settlement_complete = True
+        game.finish_reason = reason
+        game.finished_at = now
+        if showdown:
+            details = []
+            for player, user in active_rows:
+                cards = " ".join(
+                    format_card(self._texas_card_from_payload(card))
+                    for card in player.hole_cards or []
+                )
+                rank = ranks[player.seat_number or 0]
+                details.append(f"{user.display_name}：{cards}（{rank.category_name}）")
+            message = (
+                "德州扑克摊牌结算。\n公共牌："
+                + " ".join(format_card(card) for card in self._texas_layout_for_game(game, len(rows)).board)
+                + "\n"
+                + "\n".join(details)
+                + f"\n获胜：{'、'.join(winner_names)}。"
+            )
+        else:
+            message = f"德州扑克结算：{'、'.join(winner_names)}成为最后未弃牌玩家并赢得底池。"
+        return TexasHoldemResult("settled", game.id, len(rows), public_message=message)
+
+    def _advance_texas_street(
+        self,
+        session: Session,
+        game: TexasHoldemGameRecord,
+        rows: list[tuple[TexasHoldemPlayerRecord, UserRecord]],
+        now: datetime,
+    ) -> TexasHoldemResult:
+        streets = ("preflop", "flop", "turn", "river")
+        current_index = streets.index(game.state)
+        if current_index == len(streets) - 1:
+            return self._settle_texas_holdem(session, game, rows, now, reason="showdown")
+        next_street = streets[current_index + 1]
+        layout = self._texas_layout_for_game(game, len(rows))
+        reveal_count = {"flop": 3, "turn": 4, "river": 5}[next_street]
+        game.board = [
+            self._texas_card_payload(card) for card in layout.board[:reveal_count]
+        ]
+        game.state = next_street
+        game.street = next_street
+        game.current_bet = 0
+        game.last_full_raise = game.big_blind_amount or 2
+        for player, _ in rows:
+            player.street_contribution = 0
+            player.acted = False
+            player.raise_open = player.state == "active" and player.stack > 0
+        actionable = tuple(
+            player.seat_number
+            for player, _ in rows
+            if player.state == "active" and player.stack > 0 and player.seat_number is not None
+        )
+        if len(actionable) <= 1:
+            return self._advance_texas_street(session, game, rows, now)
+        active_seats = tuple(
+            player.seat_number
+            for player, _ in rows
+            if player.state != "folded" and player.seat_number is not None
+        )
+        first = postflop_first_seat(active_seats, game.button_seat or 1)
+        while first not in actionable:
+            ordered = sorted(active_seats)
+            first = ordered[(ordered.index(first) + 1) % len(ordered)]
+        game.current_seat = first
+        settings = self.get_texas_holdem_settings()
+        game.action_deadline = now + timedelta(seconds=settings.action_timeout_seconds)
+        return TexasHoldemResult(
+            "street_advanced",
+            game.id,
+            len(rows),
+            public_message=(
+                f"进入{ {'flop': '翻牌', 'turn': '转牌', 'river': '河牌'}[next_street] }："
+                + " ".join(format_card(card) for card in layout.board[:reveal_count])
+            ),
+        )
+
+    def _act_texas_holdem_locked(
+        self,
+        session: Session,
+        game: TexasHoldemGameRecord,
+        player: TexasHoldemPlayerRecord,
+        user: UserRecord,
+        action: str,
+        amount: int | None,
+        inbound_message_id: UUID | None,
+        now: datetime,
+    ) -> TexasHoldemResult:
+        if game.state not in {"preflop", "flop", "turn", "river"}:
+            return TexasHoldemResult("cannot_act", game.id)
+        if game.action_deadline is not None and now > game.action_deadline:
+            return TexasHoldemResult("action_expired", game.id)
+        if inbound_message_id is not None and session.scalar(
+            select(TexasHoldemActionRecord.id).where(
+                TexasHoldemActionRecord.inbound_message_id == inbound_message_id
+            )
+        ) is not None:
+            return TexasHoldemResult("duplicate", game.id)
+        rows = self._texas_players(session, game.id, lock=True)
+        try:
+            result = apply_betting_action(
+                self._texas_betting_round(game, rows),
+                player.seat_number or 0,
+                action,
+                amount,
+            )
+        except TexasHoldemRuleError as exc:
+            return TexasHoldemResult(exc.code, game.id)
+        by_seat = {updated.seat: updated for updated in result.state.players}
+        for record, _ in rows:
+            updated = by_seat[record.seat_number or 0]
+            committed = record.stack - updated.stack
+            record.stack = updated.stack
+            record.street_contribution = updated.street_bet
+            record.total_contribution += committed
+            record.acted = (record.seat_number or 0) in result.state.acted_seats
+            record.raise_open = (record.seat_number or 0) in result.state.raise_open_seats
+            if updated.folded:
+                record.state = "folded"
+            elif updated.all_in:
+                record.state = "all_in"
+        game.current_bet = result.state.current_bet
+        game.last_full_raise = result.state.last_full_raise
+        game.current_seat = result.state.current_seat
+        session.add(
+            TexasHoldemActionRecord(
+                game_id=game.id,
+                user_id=user.id,
+                inbound_message_id=inbound_message_id,
+                street=game.street or game.state,
+                action=action,
+                requested_amount=amount,
+                committed_amount=result.committed,
+                created_at=now,
+            )
+        )
+        remaining = [record for record, _ in rows if record.state != "folded"]
+        if len(remaining) == 1:
+            return self._settle_texas_holdem(session, game, rows, now, reason="last_player")
+        if result.round_complete:
+            return self._advance_texas_street(session, game, rows, now)
+        settings = self.get_texas_holdem_settings()
+        game.action_deadline = now + timedelta(seconds=settings.action_timeout_seconds)
+        return TexasHoldemResult("acted", game.id, len(rows))
+
+    def act_texas_holdem(
+        self,
+        platform_id: str,
+        action: str,
+        amount: int | None,
+        inbound_message_id: UUID,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> TexasHoldemResult:
+        now = now.astimezone(BEIJING)
+        with self.transaction():
+            with self._session() as session:
+                game = self._active_texas_holdem_game(session, group_chat_id)
+                if game is None:
+                    return TexasHoldemResult("no_game")
+                row = session.execute(
+                    select(TexasHoldemPlayerRecord, UserRecord)
+                    .join(UserRecord, UserRecord.id == TexasHoldemPlayerRecord.user_id)
+                    .where(
+                        TexasHoldemPlayerRecord.game_id == game.id,
+                        UserRecord.platform_id == platform_id,
+                    )
+                    .with_for_update(of=TexasHoldemPlayerRecord)
+                ).first()
+                if row is None:
+                    return TexasHoldemResult("not_participant", game.id)
+                return self._act_texas_holdem_locked(
+                    session, game, row[0], row[1], action, amount,
+                    inbound_message_id, now,
+                )
+
+    def abort_texas_holdem(
+        self,
+        game_id: UUID,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> bool:
+        now = now.astimezone(BEIJING)
+        with self.transaction():
+            with self._session() as session:
+                game = session.scalar(
+                    select(TexasHoldemGameRecord)
+                    .where(
+                        TexasHoldemGameRecord.id == game_id,
+                        TexasHoldemGameRecord.group_chat_id == group_chat_id,
+                        TexasHoldemGameRecord.active_key == "global",
+                    )
+                    .with_for_update()
+                )
+                if game is None:
+                    return False
+                for player, user in self._texas_players(session, game.id, lock=True):
+                    self._apply_balance_change(
+                        user, player.original_buy_in, "texas_holdem_abort_refund", now
+                    )
+                    player.state = "cancelled"
+                    if player.private_outbound_id is not None:
+                        outbound = session.get(OutboundRecord, player.private_outbound_id)
+                        if outbound is not None and outbound.status in {"pending", "leased"}:
+                            outbound.status = "cancelled"
+                            outbound.lease_worker_id = None
+                            outbound.lease_token = None
+                            outbound.lease_expires_at = None
+                if game.started_at is not None:
+                    counter = session.scalar(
+                        select(TexasHoldemDailyStartRecord)
+                        .where(
+                            TexasHoldemDailyStartRecord.user_id == game.creator_user_id,
+                            TexasHoldemDailyStartRecord.play_date == game.started_at.date(),
+                        )
+                        .with_for_update()
+                    )
+                    if counter is not None and counter.count > 0:
+                        counter.count -= 1
+                game.state = "aborted"
+                game.active_key = None
+                game.current_seat = None
+                game.action_deadline = None
+                game.finish_reason = "admin_abort"
+                game.finished_at = now
+                return True
+
+    def run_texas_holdem_jobs(
+        self,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> list[str]:
+        now = now.astimezone(BEIJING)
+        with self.transaction():
+            with self._session() as session:
+                game = self._active_texas_holdem_game(session, group_chat_id)
+                if game is None:
+                    return []
+                if game.state == "signup" and now >= game.signup_deadline:
+                    self._refund_texas_signup(session, game, now)
+                    return ["德州扑克报名超时，牌局已取消并退还全部带入。"]
+                if (
+                    game.state not in {"preflop", "flop", "turn", "river"}
+                    or game.action_deadline is None
+                    or now < game.action_deadline
+                    or game.current_seat is None
+                ):
+                    return []
+                row = session.execute(
+                    select(TexasHoldemPlayerRecord, UserRecord)
+                    .join(UserRecord, UserRecord.id == TexasHoldemPlayerRecord.user_id)
+                    .where(
+                        TexasHoldemPlayerRecord.game_id == game.id,
+                        TexasHoldemPlayerRecord.seat_number == game.current_seat,
+                    )
+                    .with_for_update(of=TexasHoldemPlayerRecord)
+                ).one()
+                player, user = row
+                action = (
+                    "check"
+                    if player.street_contribution >= game.current_bet
+                    else "fold"
+                )
+                result = self._act_texas_holdem_locked(
+                    session, game, player, user, action, None, None, now
+                )
+                label = "超时自动过牌" if action == "check" else "超时弃牌"
+                messages = [f"{user.display_name}{label}。"]
+                if result.public_message:
+                    messages.append(result.public_message)
+                return messages
+
+    def get_texas_holdem_private_cards(
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID | None = None,
+    ) -> TexasHoldemResult:
+        del now
+        with self._session() as session:
+            statement = (
+                select(TexasHoldemGameRecord, TexasHoldemPlayerRecord, GroupChatRecord)
+                .join(
+                    TexasHoldemPlayerRecord,
+                    TexasHoldemPlayerRecord.game_id == TexasHoldemGameRecord.id,
+                )
+                .join(UserRecord, UserRecord.id == TexasHoldemPlayerRecord.user_id)
+                .join(GroupChatRecord, GroupChatRecord.id == TexasHoldemGameRecord.group_chat_id)
+                .where(
+                    TexasHoldemGameRecord.active_key == "global",
+                    UserRecord.platform_id == platform_id,
+                    TexasHoldemPlayerRecord.hole_cards.is_not(None),
+                )
+                .order_by(GroupChatRecord.name, TexasHoldemGameRecord.id)
+            )
+            if group_chat_id is not None:
+                statement = statement.where(TexasHoldemGameRecord.group_chat_id == group_chat_id)
+            rows = list(session.execute(statement))
+            if not rows:
+                return TexasHoldemResult("no_cards")
+            if group_chat_id is None and len(rows) > 1:
+                return TexasHoldemResult(
+                    "choose_group",
+                    candidates=tuple(
+                        PrivateGameCandidate(index, game.group_chat_id, group.name, game.id)
+                        for index, (game, _, group) in enumerate(rows, start=1)
+                    ),
+                )
+            game, player, _ = rows[0]
+            cards = " ".join(
+                format_card(self._texas_card_from_payload(card))
+                for card in player.hole_cards or []
+            )
+            return TexasHoldemResult(
+                "shown", game.id, private_message=f"你的德州扑克底牌：{cards}"
+            )
+
+    def texas_holdem_summary(
+        self,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> TexasHoldemSummary:
+        del now
+        with self._session() as session:
+            game = self._active_texas_holdem_game(session, group_chat_id)
+            if game is None:
+                return TexasHoldemSummary(None)
+            rows = self._texas_players(session, game.id)
+            players = tuple(
+                TexasHoldemPlayerView(
+                    user.platform_id,
+                    user.display_name,
+                    player.seat_number,
+                    player.state,
+                    player.stack,
+                    player.street_contribution,
+                    player.total_contribution,
+                )
+                for player, user in rows
+            )
+            current = next(
+                (player for player, _ in rows if player.seat_number == game.current_seat),
+                None,
+            )
+            to_call = (
+                0
+                if current is None
+                else max(0, game.current_bet - current.street_contribution)
+            )
+            legal: tuple[str, ...] = ()
+            if current is not None and game.state not in {"signup", "dealing"}:
+                legal = (
+                    ("check", "raise", "all_in", "fold")
+                    if to_call == 0
+                    else ("call", "raise", "all_in", "fold")
+                )
+            return TexasHoldemSummary(
+                state=game.state,
+                game_id=game.id,
+                group_chat_id=game.group_chat_id,
+                buy_in=game.buy_in,
+                button_seat=game.button_seat,
+                current_seat=game.current_seat,
+                board=tuple(
+                    format_card(self._texas_card_from_payload(card))
+                    for card in game.board
+                ),
+                total_pot=sum(player.total_contribution for player, _ in rows),
+                action_deadline=game.action_deadline,
+                to_call=to_call,
+                legal_actions=legal,
+                players=players,
+            )
+
     def get_number_bomb_settings(self) -> NumberBombSettings:
         with self._session() as session:
             record = session.get(NumberBombSettingsRecord, 1)
@@ -7681,6 +8691,16 @@ class CoreRepository:
                         NumberBombGameRecord.active_key == "global",
                         *(() if group_chat_id is None else (
                             NumberBombGameRecord.group_chat_id == group_chat_id,
+                        )),
+                    )
+                )
+            )
+            or session.scalar(
+                select(
+                    exists().where(
+                        TexasHoldemGameRecord.active_key == "global",
+                        *(() if group_chat_id is None else (
+                            TexasHoldemGameRecord.group_chat_id == group_chat_id,
                         )),
                     )
                 )
@@ -14721,6 +15741,14 @@ class CoreRepository:
                             self._record_undercover_card_delivery(
                                 session, session_record, game, player, True, now
                             )
+            elif record.delivery_kind == "texas_holdem_card":
+                player = session.scalar(
+                    select(TexasHoldemPlayerRecord)
+                    .where(TexasHoldemPlayerRecord.private_outbound_id == record.id)
+                    .with_for_update()
+                )
+                if player is not None:
+                    self._record_texas_card_delivery(session, player, now)
             return True
 
     def mark_outbound_failed(
