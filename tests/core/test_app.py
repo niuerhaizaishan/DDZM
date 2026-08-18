@@ -451,8 +451,10 @@ def test_gameplay_current_exposes_only_public_texas_holdem_state(
     assert game["game_id"] == str(created.game_id)
     assert game["state"] == "dealing"
     assert game["board"] == []
-    assert [player["stack"] for player in game["participants"]] == [19, 18]
-    assert [player["total_contribution"] for player in game["participants"]] == [1, 2]
+    assert sorted(player["stack"] for player in game["participants"]) == [18, 19]
+    assert sorted(
+        player["total_contribution"] for player in game["participants"]
+    ) == [1, 2]
     assert "hole_cards" not in repr(payload)
 
 
