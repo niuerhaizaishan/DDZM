@@ -19,6 +19,7 @@ from dzmm_bot.core.schema import (
     BEIJING,
     DirectChatRecord,
     NumberBombGameRecord,
+    NumberBombMemberRecord,
     NumberBombRoundPlayerRecord,
     NumberBombRoundRecord,
     OutboundRecord,
@@ -69,6 +70,16 @@ def test_ai_knowledge_schema_and_command_syntax_contract():
     assert AIKnowledgeCardRecord.__table__.c.keywords.nullable is False
     assert AIKnowledgeCardRecord.__table__.c.enabled.default.arg is True
     assert CommandDefinitionRecord.__table__.c.syntax.nullable is False
+
+
+def test_number_bomb_points_tournament_schema_defaults():
+    assert NumberBombGameRecord.__table__.c.mode.default.arg == "standard"
+    assert NumberBombGameRecord.__table__.c.maximum_rounds.default.arg == 0
+    assert NumberBombMemberRecord.__table__.c.total_points.default.arg == 0
+    assert NumberBombMemberRecord.__table__.c.retired_at_round.nullable is True
+    assert NumberBombRoundPlayerRecord.__table__.c.competition_rank.nullable is True
+    assert NumberBombRoundPlayerRecord.__table__.c.round_points.default.arg == 0
+    assert NumberBombRoundPlayerRecord.__table__.c.result_reason.nullable is True
 
 
 def test_command_registry_exposes_exact_enabled_syntax(repository):

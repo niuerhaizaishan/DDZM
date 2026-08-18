@@ -630,6 +630,14 @@ class NumberBombGameRecord(Base):
             sqlite_where=text("active_key IS NOT NULL"),
             postgresql_where=text("active_key IS NOT NULL"),
         ),
+        CheckConstraint(
+            "mode IN ('standard', 'points_tournament')",
+            name="ck_number_bomb_game_mode",
+        ),
+        CheckConstraint(
+            "maximum_rounds IN (0, 12)",
+            name="ck_number_bomb_game_maximum_rounds",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
@@ -638,6 +646,12 @@ class NumberBombGameRecord(Base):
     )
     active_key: Mapped[str | None] = mapped_column(String(32))
     state: Mapped[str] = mapped_column(String(32), nullable=False)
+    mode: Mapped[str] = mapped_column(
+        String(32), default="standard", server_default="standard", nullable=False
+    )
+    maximum_rounds: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
     target_player_count: Mapped[int] = mapped_column(Integer, nullable=False)
     round_number: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     attempt_number: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -665,6 +679,10 @@ class NumberBombMemberRecord(Base):
     roster_order: Mapped[int] = mapped_column(Integer, nullable=False)
     state: Mapped[str] = mapped_column(String(32), nullable=False)
     queued_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    total_points: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    retired_at_round: Mapped[int | None] = mapped_column(Integer)
 
 
 class NumberBombRoundRecord(Base):
@@ -698,7 +716,13 @@ class NumberBombRoundRecord(Base):
 
 class NumberBombRoundPlayerRecord(Base):
     __tablename__ = "number_bomb_round_players"
-    __table_args__ = (UniqueConstraint("round_id", "user_id"),)
+    __table_args__ = (
+        UniqueConstraint("round_id", "user_id"),
+        CheckConstraint(
+            "result_reason IS NULL OR result_reason IN ('reported', 'skipped', 'retired')",
+            name="ck_number_bomb_round_player_result_reason",
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     round_id: Mapped[UUID] = mapped_column(
@@ -710,6 +734,11 @@ class NumberBombRoundPlayerRecord(Base):
     deviation_numerator: Mapped[int | None] = mapped_column(Integer)
     result: Mapped[str | None] = mapped_column(String(16))
     skipped_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    competition_rank: Mapped[int | None] = mapped_column(Integer)
+    round_points: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    result_reason: Mapped[str | None] = mapped_column(String(32))
 
 
 class TexasHoldemSettingsRecord(Base):
