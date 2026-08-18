@@ -486,21 +486,23 @@ function renderTexasHoldemSettings(settings) {
 
 function renderTexasHoldemSession(gameplay) {
   const card = document.querySelector("#texas-holdem-session-card");
-  const game = (gameplay.items || []).find((item) => item.game_type === "texas_holdem");
-  if (!game) {
+  const games = (gameplay.items || []).filter((item) => item.game_type === "texas_holdem");
+  if (!games.length) {
     card.innerHTML = '<p class="muted">当前没有进行中的德州牌局。</p>';
     return;
   }
-  const players = game.participants.map((player) => {
-    const seat = player.number == null ? "" : `${player.number}号 `;
-    return `${seat}${player.display_name}（${player.state || "等待"}，筹码 ${player.stack ?? 0}，本轮 ${player.street_contribution ?? 0}，累计 ${player.total_contribution ?? 0}）`;
-  }).join("、");
-  const board = game.board?.length ? game.board.join(" ") : "尚未发公共牌";
-  const deadline = game.action_deadline ? formatHeartbeat(game.action_deadline) : "无";
-  card.innerHTML = `<article><span>${escapeHtml(game.group_name)}</span><strong>${escapeHtml(game.state || "未知状态")}</strong><small>牌局 ${escapeHtml(game.game_id)}</small></article>
-    <article><span>公共牌</span><strong>${escapeHtml(board)}</strong><small>底池 ${game.pot ?? 0} · 当前需跟 ${game.to_call ?? 0}</small></article>
-    <article><span>行动位</span><strong>${game.current_seat == null ? "—" : `${game.current_seat} 号`}</strong><small>庄位 ${game.button_seat ?? "—"} 号 · 截止 ${escapeHtml(deadline)}</small></article>
-    <article><span>参与者</span><strong>${game.participants.length} 人</strong><small>${escapeHtml(players)}</small><button class="danger-button" type="button" data-force-end-game data-group-chat-id="${escapeHtml(game.group_chat_id)}" data-game-type="texas_holdem" data-game-id="${escapeHtml(game.game_id)}">强制结束</button></article>`;
+  card.innerHTML = games.map((game) => {
+    const players = game.participants.map((player) => {
+      const seat = player.number == null ? "" : `${player.number}号 `;
+      return `${seat}${player.display_name}（${player.state || "等待"}，筹码 ${player.stack ?? 0}，本轮 ${player.street_contribution ?? 0}，累计 ${player.total_contribution ?? 0}）`;
+    }).join("、");
+    const board = game.board?.length ? game.board.join(" ") : "尚未发公共牌";
+    const deadline = game.action_deadline ? formatHeartbeat(game.action_deadline) : "无";
+    return `<article><span>${escapeHtml(game.group_name)}</span><strong>${escapeHtml(game.state || "未知状态")}</strong><small>牌局 ${escapeHtml(game.game_id)}</small></article>
+      <article><span>公共牌</span><strong>${escapeHtml(board)}</strong><small>底池 ${game.pot ?? 0} · 当前需跟 ${game.to_call ?? 0}</small></article>
+      <article><span>行动位</span><strong>${game.current_seat == null ? "—" : `${game.current_seat} 号`}</strong><small>庄位 ${game.button_seat ?? "—"} 号 · 截止 ${escapeHtml(deadline)}</small></article>
+      <article><span>参与者</span><strong>${game.participants.length} 人</strong><small>${escapeHtml(players)}</small><button class="danger-button" type="button" data-force-end-game data-group-chat-id="${escapeHtml(game.group_chat_id)}" data-game-type="texas_holdem" data-game-id="${escapeHtml(game.game_id)}">强制结束</button></article>`;
+  }).join("");
 }
 
 function renderRedPacketSettings(settings) {

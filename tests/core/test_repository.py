@@ -370,6 +370,27 @@ def test_texas_holdem_signup_debits_buy_in_and_waiting_exit_refunds(
     assert texas_repository.texas_holdem_summary(now, PRIMARY_GROUP_CHAT_ID).state is None
 
 
+def test_texas_holdem_creator_exit_keeps_remaining_signup_open(
+    texas_repository, now
+):
+    _prepare_texas_users(texas_repository, now, "texas-p1", "texas-p2")
+    texas_repository.start_texas_holdem_signup(
+        "texas-p1", 20, now, PRIMARY_GROUP_CHAT_ID
+    )
+    texas_repository.join_texas_holdem("texas-p2", now, PRIMARY_GROUP_CHAT_ID)
+
+    result = texas_repository.leave_texas_holdem(
+        "texas-p1", now, PRIMARY_GROUP_CHAT_ID
+    )
+
+    assert result.status == "signup_left"
+    summary = texas_repository.texas_holdem_summary(now, PRIMARY_GROUP_CHAT_ID)
+    assert summary.state == "signup"
+    assert [player.platform_id for player in summary.players] == ["texas-p2"]
+    assert texas_repository.find_user("texas-p1").balance == 100
+    assert texas_repository.find_user("texas-p2").balance == 80
+
+
 def test_texas_holdem_signup_snapshots_limits_blinds_and_action_timeout(
     texas_repository, session_factory, now
 ):
@@ -550,7 +571,10 @@ def test_texas_holdem_failed_private_card_delivery_retries_same_cards(
         failed.id, "texas-worker", failed.lease_token, now
     )
 
-    texas_repository.run_texas_holdem_jobs(now, PRIMARY_GROUP_CHAT_ID)
+    messages = texas_repository.run_texas_holdem_jobs(now, PRIMARY_GROUP_CHAT_ID)
+
+    assert messages == ["德州玩家1的底牌私聊发送失败，牌局暂停发牌并正在重试。"]
+    assert not any(suit in messages[0] for suit in "♠♥♣♦")
 
     retried = texas_repository.claim_outbound(
         "texas-worker", now, 30, required_delivery_key="direct-texas-p1"
@@ -665,6 +689,7 @@ def test_texas_holdem_check_call_flow_reaches_showdown_and_conserves_money(
         result = _texas_act(texas_repository, first, "check", now)
         if expected_street == "settled":
             assert result.status == "settled"
+            assert "最佳五张" in result.public_message
         else:
             assert result.status == "street_advanced"
             assert texas_repository.texas_holdem_summary(
@@ -710,6 +735,80 @@ def test_texas_holdem_timeout_folds_when_facing_blind(texas_repository, now):
 
     assert any("超时弃牌" in message for message in messages)
     assert texas_repository.texas_holdem_summary(now, PRIMARY_GROUP_CHAT_ID).state is None
+
+
+def test_texas_holdem_late_timeout_job_still_releases_the_table(
+    texas_repository, session_factory, now
+):
+    from dzmm_bot.core.repository import CoreRepository
+
+    _start_two_player_texas_hand(texas_repository, now)
+    summary = texas_repository.texas_holdem_summary(
+        now, PRIMARY_GROUP_CHAT_ID
+    )
+    deadline = summary.action_deadline
+    current = next(
+        player
+        for player in summary.players
+        if player.seat_number == summary.current_seat
+    )
+    expired = texas_repository.act_texas_holdem(
+        current.platform_id,
+        "fold",
+        None,
+        uuid4(),
+        deadline + timedelta(seconds=1),
+        PRIMARY_GROUP_CHAT_ID,
+    )
+    assert expired.status == "action_expired"
+
+    restarted = CoreRepository(session_factory)
+
+    messages = restarted.run_texas_holdem_jobs(
+        deadline + timedelta(seconds=1), PRIMARY_GROUP_CHAT_ID
+    )
+
+    assert any("超时弃牌" in message for message in messages)
+    assert restarted.texas_holdem_summary(
+        now, PRIMARY_GROUP_CHAT_ID
+    ).state is None
+
+
+def test_texas_holdem_forced_all_in_blinds_run_out_and_settle(
+    texas_repository, now
+):
+    _prepare_texas_users(texas_repository, now, "texas-p1", "texas-p2")
+    texas_repository.set_texas_holdem_settings(
+        enabled=True,
+        minimum_players=2,
+        maximum_players=2,
+        minimum_buy_in=1,
+        maximum_buy_in=200,
+        daily_start_limit=1,
+        signup_timeout_seconds=120,
+        action_timeout_seconds=120,
+        small_blind_percent=99,
+        big_blind_percent=100,
+    )
+    texas_repository.start_texas_holdem_signup(
+        "texas-p1", 1, now, PRIMARY_GROUP_CHAT_ID
+    )
+    texas_repository.join_texas_holdem("texas-p2", now, PRIMARY_GROUP_CHAT_ID)
+    texas_repository.start_texas_holdem_hand(
+        "texas-p1", now, PRIMARY_GROUP_CHAT_ID
+    )
+
+    _confirm_outbound(texas_repository, "direct-texas-p1", now, 1)
+    _confirm_outbound(texas_repository, "direct-texas-p2", now, 2)
+
+    assert texas_repository.texas_holdem_summary(
+        now, PRIMARY_GROUP_CHAT_ID
+    ).state is None
+    assert (
+        texas_repository.find_user("texas-p1").balance
+        + texas_repository.find_user("texas-p2").balance
+        == 200
+    )
 
 
 def test_texas_holdem_board_abort_restores_original_buy_ins(texas_repository, now):
@@ -1162,6 +1261,21 @@ def test_balance_source_label_localizes_checkin_backfill():
     from dzmm_bot.core.repository import balance_source_label
 
     assert balance_source_label("checkin_backfill") == "每日打卡（补录）"
+
+
+@pytest.mark.parametrize(
+    ("source", "label"),
+    [
+        ("texas_holdem_buy_in", "德州扑克带入"),
+        ("texas_holdem_refund", "德州扑克退款"),
+        ("texas_holdem_settlement", "德州扑克结算"),
+        ("texas_holdem_abort_refund", "德州扑克作废退款"),
+    ],
+)
+def test_balance_source_label_localizes_texas_holdem(source, label):
+    from dzmm_bot.core.repository import balance_source_label
+
+    assert balance_source_label(source) == label
 
 
 def test_personal_profile_defaults_and_atomic_edit(repository, now):

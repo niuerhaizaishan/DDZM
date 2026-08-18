@@ -14,6 +14,7 @@ from dzmm_bot.core.texas_holdem import (
     build_side_pots,
     deal_layout,
     evaluate_best,
+    evaluate_best_five,
     format_card,
     postflop_first_seat,
     preflop_first_seat,
@@ -128,6 +129,18 @@ def test_short_all_in_raises_call_amount_without_reopening_raise_rights() -> Non
     assert state.current_bet == 25
     assert 1 not in state.raise_open_seats
     assert state.to_call(1) == 5
+
+    state = replace(state, current_seat=1)
+    with pytest.raises(TexasHoldemRuleError, match="raise_not_reopened"):
+        apply_betting_action(state, 1, "all_in")
+
+
+def test_best_five_cards_match_the_rank_used_for_showdown() -> None:
+    rank, cards = evaluate_best_five(_cards("SA HA CA SK HK H3 C4"))
+
+    assert rank.category_name == "葫芦"
+    assert {card.rank for card in cards} == {14, 13}
+    assert len(cards) == 5
 
 
 def test_full_raise_reopens_action_and_moves_to_next_player() -> None:

@@ -235,6 +235,73 @@ def test_texas_holdem_look_cards_is_private_only():
     assert any(suit in direct_reply for suit in "♠♥♣♦")
 
 
+def test_texas_holdem_private_look_accepts_group_number_for_multiple_tables():
+    service, repository, factory = _service(texas_holdem_random=Random(7))
+    now = datetime(2026, 8, 18, 10, 0, tzinfo=BEIJING)
+    primary = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=texas-look-main", now
+    )
+    second = repository.create_group_chat(
+        "第二牌桌",
+        "https://www.aikda.com/chat?c=texas-look-second",
+        True,
+        True,
+        True,
+        True,
+        now,
+    )
+    for platform_id, name in (
+        ("multi-look", "多桌玩家"),
+        ("main-opponent", "主群对手"),
+        ("second-opponent", "二群对手"),
+    ):
+        repository.create_user(platform_id, name, now, 100)
+    repository.upsert_direct_chats(
+        [
+            ("multi-look", "direct-multi-look"),
+            ("main-opponent", "direct-main-opponent"),
+            ("second-opponent", "direct-second-opponent"),
+        ],
+        now,
+    )
+    for group, creator, joiner, suffix in (
+        (primary, "multi-look", "main-opponent", "main"),
+        (second, "second-opponent", "multi-look", "second"),
+    ):
+        _group_receive(
+            service, f"multi-create-{suffix}", creator,
+            "/德州扑克 20", now, group.chatroom_id,
+        )
+        _group_receive(
+            service, f"multi-join-{suffix}", joiner,
+            "/加入", now, group.chatroom_id,
+        )
+        _group_receive(
+            service, f"multi-start-{suffix}", creator,
+            "/开始", now, group.chatroom_id,
+        )
+
+    choose = service.receive_inbound(
+        InboundMessage(
+            "multi-look-choose", "multi-look", "/看牌", now,
+            source_type="direct", chatroom_id="direct-multi-look",
+        )
+    )
+    choose_reply = "".join(_replies_for(factory, choose.message_id))
+    assert "1." in choose_reply
+    assert "2." in choose_reply
+    assert "第二牌桌" in choose_reply
+    selected = service.receive_inbound(
+        InboundMessage(
+            "multi-look-selected", "multi-look", "/看牌 2", now,
+            source_type="direct", chatroom_id="direct-multi-look",
+        )
+    )
+    selected_reply = "".join(_replies_for(factory, selected.message_id))
+    assert "你的德州扑克底牌" in selected_reply
+    assert any(suit in selected_reply for suit in "♠♥♣♦")
+
+
 def test_texas_holdem_help_lists_every_player_command():
     service, repository, factory = _service()
     now = datetime(2026, 8, 18, 10, 0, tzinfo=BEIJING)

@@ -192,9 +192,14 @@ def _five_card_rank(cards: Sequence[Card]) -> HandRank:
 
 
 def evaluate_best(cards: Sequence[Card]) -> HandRank:
+    return evaluate_best_five(cards)[0]
+
+
+def evaluate_best_five(cards: Sequence[Card]) -> tuple[HandRank, tuple[Card, ...]]:
     if not 5 <= len(cards) <= 7 or len(set(cards)) != len(cards):
         raise TexasHoldemRuleError("invalid_hand")
-    return max(_five_card_rank(hand) for hand in combinations(cards, 5))
+    best = max(combinations(cards, 5), key=_five_card_rank)
+    return _five_card_rank(best), best
 
 
 def build_side_pots(contributions: Mapping[int, int], folded_seats: set[int]) -> tuple[Pot, ...]:
@@ -313,6 +318,8 @@ def apply_betting_action(
         else:
             committed = player.stack
             target = player.street_bet + committed
+            if target > round_state.current_bet and seat not in raise_open:
+                raise TexasHoldemRuleError("raise_not_reopened")
         if committed <= 0:
             raise TexasHoldemRuleError("empty_all_in")
         if target <= round_state.current_bet:

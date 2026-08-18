@@ -65,7 +65,7 @@ from .texas_holdem import (
     build_deck,
     build_side_pots,
     deal_layout,
-    evaluate_best,
+    evaluate_best_five,
     format_card,
     postflop_first_seat,
     preflop_first_seat,
@@ -308,6 +308,10 @@ _BALANCE_SOURCE_LABELS = {
     "red_packet_fund": "发出红包",
     "red_packet_claim": "领取红包",
     "red_packet_refund": "红包退款",
+    "texas_holdem_buy_in": "德州扑克带入",
+    "texas_holdem_refund": "德州扑克退款",
+    "texas_holdem_settlement": "德州扑克结算",
+    "texas_holdem_abort_refund": "德州扑克作废退款",
 }
 _DEFAULT_RED_PACKET_EXPIRY_MINUTES = 10
 _DEFAULT_RED_PACKET_EMPTY_PROBABILITY_PERCENT = 5
@@ -1496,7 +1500,7 @@ _COMMAND_DEFINITIONS = (
     ("/报数", "/报数 数字（仅私聊）", "提交蹦蹦数字炸弹本轮 1–100 整数"),
     ("/跳过", "/跳过 编号 [编号...]", "排除蹦蹦数字炸弹中尚未报数的参与者"),
     ("/德州扑克", "/德州扑克 带入金额", "创建一局德州扑克现金桌报名"),
-    ("/看牌", "/看牌（仅私聊）", "私聊查看自己的德州扑克底牌"),
+    ("/看牌", "/看牌 [群序号]（仅私聊）", "私聊查看自己的德州扑克底牌"),
     ("/过牌", "/过牌", "德州扑克当前行动过牌"),
     ("/跟注", "/跟注", "德州扑克当前行动跟注"),
     ("/加注", "/加注 加到金额", "德州扑克加注到本轮总金额"),
@@ -5641,13 +5645,15 @@ class CoreRepository:
                     return self._act_texas_holdem_locked(
                         session, game, player, user, "fold", None, None, now
                     )
-                if game.creator_user_id == user.id:
-                    self._refund_texas_signup(session, game, now)
-                    return TexasHoldemResult("signup_left", game.id)
                 self._apply_balance_change(user, player.original_buy_in, "texas_holdem_refund", now)
                 player.state = "left"
                 player.left_at = now
                 count = len(self._texas_players(session, game.id))
+                if count == 0:
+                    game.state = "cancelled"
+                    game.active_key = None
+                    game.finish_reason = "cancelled"
+                    game.finished_at = now
                 return TexasHoldemResult("signup_left", game.id, count)
 
     def start_texas_holdem_hand(
@@ -5798,35 +5804,57 @@ class CoreRepository:
         )
         if int(pending or 0) != 0:
             return
+        rows = self._texas_players(session, game.id)
         seats = tuple(
-            seat
-            for seat in session.scalars(
-                select(TexasHoldemPlayerRecord.seat_number)
-                .where(
-                    TexasHoldemPlayerRecord.game_id == game.id,
-                    TexasHoldemPlayerRecord.state.in_(("active", "all_in")),
-                )
-                .order_by(TexasHoldemPlayerRecord.seat_number)
-            )
-            if seat is not None
+            record.seat_number
+            for record, _ in rows
+            if record.state in {"active", "all_in"}
+            and record.seat_number is not None
+        )
+        actionable = tuple(
+            record.seat_number
+            for record, _ in rows
+            if record.state == "active"
+            and record.stack > 0
+            and record.seat_number is not None
         )
         game.state = "preflop"
-        game.current_seat = preflop_first_seat(seats, game.button_seat or 1)
-        game.action_deadline = now + timedelta(
-            seconds=game.action_timeout_seconds_snapshot
+        can_run_out = not actionable or (
+            len(actionable) == 1
+            and next(
+                record.street_contribution
+                for record, _ in rows
+                if record.seat_number == actionable[0]
+            ) >= game.current_bet
         )
-        rows = self._texas_players(session, game.id)
-        current_name = next(
-            user.display_name
-            for record, user in rows
-            if record.seat_number == game.current_seat
-        )
+        result = None
+        if can_run_out:
+            result = self._advance_texas_street(session, game, rows, now)
+        else:
+            first = preflop_first_seat(seats, game.button_seat or 1)
+            while first not in actionable:
+                first = seats[(seats.index(first) + 1) % len(seats)]
+            game.current_seat = first
+            game.action_deadline = now + timedelta(
+                seconds=game.action_timeout_seconds_snapshot
+            )
         group = session.get(GroupChatRecord, game.group_chat_id)
         if group is not None and group.chatroom_id is not None:
             roster = "、".join(
                 f"{record.seat_number}号 {user.display_name}"
                 for record, user in rows
             )
+            if result is None:
+                current_name = next(
+                    user.display_name
+                    for record, user in rows
+                    if record.seat_number == game.current_seat
+                )
+                action_text = f"当前由 {game.current_seat}号 {current_name} 行动。"
+            else:
+                action_text = "所有可行动玩家均已全下，自动发完公共牌并结算。"
+                if result.public_message:
+                    action_text += "\n" + result.public_message
             session.add(
                 OutboundRecord(
                     group_chat_id=game.group_chat_id,
@@ -5837,7 +5865,7 @@ class CoreRepository:
                         "【德州扑克】底牌已全部送达，进入翻牌前。\n"
                         f"座位：{roster}\n"
                         f"小盲 {game.small_blind_amount}，大盲 {game.big_blind_amount}；"
-                        f"当前由 {game.current_seat}号 {current_name} 行动。"
+                        f"{action_text}"
                     ),
                     created_at=now,
                     updated_at=now,
@@ -5911,6 +5939,7 @@ class CoreRepository:
         active_rows = [row for row in rows if row[0].state != "folded"]
         showdown = len(active_rows) > 1
         ranks: dict[int, object] = {}
+        best_five: dict[int, tuple[Card, ...]] = {}
         if showdown:
             layout = self._texas_layout_for_game(game, len(rows))
             board = layout.board
@@ -5921,7 +5950,9 @@ class CoreRepository:
                 hole = tuple(
                     self._texas_card_from_payload(card) for card in player.hole_cards
                 )
-                ranks[player.seat_number] = evaluate_best((*hole, *board))
+                rank, cards = evaluate_best_five((*hole, *board))
+                ranks[player.seat_number] = rank
+                best_five[player.seat_number] = cards
         for index, pot in enumerate(pots, start=1):
             if showdown:
                 best = max(ranks[seat] for seat in pot.eligible_seats)
@@ -5974,7 +6005,14 @@ class CoreRepository:
                     for card in player.hole_cards or []
                 )
                 rank = ranks[player.seat_number or 0]
-                details.append(f"{user.display_name}：{cards}（{rank.category_name}）")
+                best_cards = " ".join(
+                    format_card(card)
+                    for card in best_five[player.seat_number or 0]
+                )
+                details.append(
+                    f"{user.display_name}：{cards}（{rank.category_name}；"
+                    f"最佳五张：{best_cards}）"
+                )
             message = (
                 "德州扑克摊牌结算。\n公共牌："
                 + " ".join(format_card(card) for card in self._texas_layout_for_game(game, len(rows)).board)
@@ -6051,10 +6089,16 @@ class CoreRepository:
         amount: int | None,
         inbound_message_id: UUID | None,
         now: datetime,
+        *,
+        allow_expired: bool = False,
     ) -> TexasHoldemResult:
         if game.state not in {"preflop", "flop", "turn", "river"}:
             return TexasHoldemResult("cannot_act", game.id)
-        if game.action_deadline is not None and now > game.action_deadline:
+        if (
+            not allow_expired
+            and game.action_deadline is not None
+            and now > game.action_deadline
+        ):
             return TexasHoldemResult("action_expired", game.id)
         if inbound_message_id is not None and session.scalar(
             select(TexasHoldemActionRecord.id).where(
@@ -6224,8 +6268,12 @@ class CoreRepository:
                     return []
                 if game.state == "dealing":
                     failed_players = list(
-                        session.scalars(
-                            select(TexasHoldemPlayerRecord)
+                        session.execute(
+                            select(TexasHoldemPlayerRecord, UserRecord)
+                            .join(
+                                UserRecord,
+                                UserRecord.id == TexasHoldemPlayerRecord.user_id,
+                            )
                             .where(
                                 TexasHoldemPlayerRecord.game_id == game.id,
                                 TexasHoldemPlayerRecord.private_delivery_state
@@ -6234,7 +6282,8 @@ class CoreRepository:
                             .with_for_update()
                         )
                     )
-                    for player in failed_players:
+                    messages: list[str] = []
+                    for player, user in failed_players:
                         previous = session.get(
                             OutboundRecord, player.private_outbound_id
                         )
@@ -6255,7 +6304,11 @@ class CoreRepository:
                         session.flush()
                         player.private_outbound_id = retry.id
                         player.private_delivery_state = "pending"
-                    return []
+                        messages.append(
+                            f"{user.display_name}的底牌私聊发送失败，"
+                            "牌局暂停发牌并正在重试。"
+                        )
+                    return messages
                 if game.state == "signup" and now >= game.signup_deadline:
                     self._refund_texas_signup(session, game, now)
                     return ["德州扑克报名超时，牌局已取消并退还全部带入。"]
@@ -6282,7 +6335,15 @@ class CoreRepository:
                     else "fold"
                 )
                 result = self._act_texas_holdem_locked(
-                    session, game, player, user, action, None, None, now
+                    session,
+                    game,
+                    player,
+                    user,
+                    action,
+                    None,
+                    None,
+                    now,
+                    allow_expired=True,
                 )
                 label = "超时自动过牌" if action == "check" else "超时弃牌"
                 messages = [f"{user.display_name}{label}。"]
@@ -15982,7 +16043,11 @@ class CoreRepository:
                     .with_for_update()
                 )
                 if player is not None:
-                    self._record_texas_card_delivery(session, player, now)
+                    active_token = self._active_session.set(session)
+                    try:
+                        self._record_texas_card_delivery(session, player, now)
+                    finally:
+                        self._active_session.reset(active_token)
             return True
 
     def mark_outbound_failed(

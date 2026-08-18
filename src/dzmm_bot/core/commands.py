@@ -99,16 +99,48 @@ class GroupCommandHandler:
         if command == "/看牌":
             if message.source_type != "direct":
                 return self._reply("/看牌", "group_only", received_at)
+            parts = content.split()
+            if len(parts) > 2:
+                return self._reply("/看牌", "usage", received_at)
             result = self._repository.get_texas_holdem_private_cards(
                 message.sender_platform_id, received_at
             )
+            if result.status == "choose_group":
+                group_list = "\n".join(
+                    f"{candidate.index}. {candidate.group_name}"
+                    for candidate in result.candidates
+                )
+                if len(parts) == 1:
+                    return self._reply(
+                        "/看牌",
+                        "choose_group",
+                        received_at,
+                        {"{群聊列表}": group_list},
+                    )
+                try:
+                    selected_index = int(parts[1])
+                    selected = next(
+                        candidate
+                        for candidate in result.candidates
+                        if candidate.index == selected_index
+                    )
+                except (ValueError, StopIteration):
+                    return self._reply(
+                        "/看牌",
+                        "invalid_group",
+                        received_at,
+                        {"{群聊列表}": group_list},
+                    )
+                result = self._repository.get_texas_holdem_private_cards(
+                    message.sender_platform_id,
+                    received_at,
+                    selected.group_chat_id,
+                )
+            elif len(parts) == 2:
+                return self._reply("/看牌", "usage", received_at)
             if result.status == "shown":
                 return result.private_message
-            return self._reply(
-                "/看牌",
-                "choose_group" if result.status == "choose_group" else "no_cards",
-                received_at,
-            )
+            return self._reply("/看牌", "no_cards", received_at)
         if command in {"/过牌", "/跟注", "/加注", "/全下", "/弃牌"}:
             return self._texas_holdem_action(
                 message.sender_platform_id,
