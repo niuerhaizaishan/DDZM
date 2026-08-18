@@ -2,7 +2,10 @@ import pytest
 
 from dzmm_bot.core.number_bomb import (
     NUMBER_BOMB_MULTIPLIER_TENTHS,
+    NumberBombCalculation,
     NumberBombEntry,
+    NumberBombStanding,
+    calculate_points_tournament_scores,
     calculate_number_bomb,
     render_number_bomb_result,
 )
@@ -13,6 +16,81 @@ def entries(*values):
         NumberBombEntry(f"p{index}", f"玩家{index}", number, index)
         for index, number in enumerate(values, 1)
     )
+
+
+def points_calculation(*deviations):
+    return NumberBombCalculation(
+        total=360,
+        player_count=len(deviations),
+        multiplier_tenths=10,
+        target_numerator=3600,
+        target_denominator=80,
+        standings=tuple(
+            NumberBombStanding(
+                NumberBombEntry(f"p{index}", f"玩家{index}", index * 10, index),
+                deviation,
+                None,
+            )
+            for index, deviation in enumerate(deviations, 1)
+        ),
+        valid=True,
+    )
+
+
+def test_points_tournament_uses_competition_ranking_for_ties():
+    result = calculate_points_tournament_scores(
+        points_calculation(1, 2, 2, 4, 5, 6, 7, 8), ()
+    )
+
+    assert [item.rank for item in result.players] == [1, 2, 2, 4, 5, 6, 7, 8]
+    assert [item.points for item in result.players] == [10, 5, 5, 0, 0, 0, -3, 2]
+    assert [item.absent for item in result.players] == [False] * 8
+
+
+def test_points_tournament_absent_players_do_not_occupy_ranks():
+    result = calculate_points_tournament_scores(
+        points_calculation(1, 2, 3, 4, 5, 6, 7), ("p8",)
+    )
+
+    assert [(item.platform_id, item.rank, item.points) for item in result.players] == [
+        ("p1", 1, 10),
+        ("p2", 2, 5),
+        ("p3", 3, 0),
+        ("p4", 4, 0),
+        ("p5", 5, 0),
+        ("p6", 6, 0),
+        ("p7", 7, -3),
+        ("p8", None, -3),
+    ]
+
+
+def test_points_tournament_tied_last_players_share_the_last_rank():
+    result = calculate_points_tournament_scores(
+        points_calculation(1, 2, 3, 4, 5, 6, 7, 7), ()
+    )
+
+    assert [item.rank for item in result.players] == [1, 2, 3, 4, 5, 6, 8, 8]
+    assert [item.points for item in result.players] == [10, 5, 0, 0, 0, 0, 2, 2]
+
+
+def test_points_tournament_tied_first_players_share_first_place():
+    result = calculate_points_tournament_scores(
+        points_calculation(1, 1, 3, 4, 5, 6, 7, 8), ()
+    )
+
+    assert [item.rank for item in result.players] == [1, 1, 3, 4, 5, 6, 7, 8]
+    assert [item.points for item in result.players] == [10, 10, 0, 0, 0, 0, -3, 2]
+
+
+def test_points_tournament_all_absent_players_each_lose_three_points():
+    calculation = points_calculation()
+
+    result = calculate_points_tournament_scores(calculation, ("p1", "p2"))
+
+    assert [(item.platform_id, item.rank, item.points) for item in result.players] == [
+        ("p1", None, -3),
+        ("p2", None, -3),
+    ]
 
 
 @pytest.mark.parametrize("multiplier_tenths", (8, 9, 10, 11, 12))

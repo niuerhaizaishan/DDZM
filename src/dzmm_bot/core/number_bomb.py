@@ -4,6 +4,7 @@ from decimal import Decimal, ROUND_HALF_UP
 
 
 NUMBER_BOMB_MULTIPLIER_TENTHS = (8, 9, 10, 11, 12)
+POINTS_TOURNAMENT_SCORES = {1: 10, 2: 5, 3: 0, 4: 0, 5: 0, 6: 0, 7: -3, 8: 2}
 
 
 @dataclass(frozen=True)
@@ -30,6 +31,19 @@ class NumberBombCalculation:
     target_denominator: int
     standings: tuple[NumberBombStanding, ...]
     valid: bool
+
+
+@dataclass(frozen=True)
+class NumberBombPointsPlayer:
+    platform_id: str
+    rank: int | None
+    points: int
+    absent: bool
+
+
+@dataclass(frozen=True)
+class NumberBombPointsResult:
+    players: tuple[NumberBombPointsPlayer, ...]
 
 
 def calculate_number_bomb(
@@ -88,6 +102,50 @@ def calculate_number_bomb(
         standings=standings,
         valid=valid,
     )
+
+
+def calculate_points_tournament_scores(
+    calculation: NumberBombCalculation,
+    absent_player_ids: Sequence[str],
+) -> NumberBombPointsResult:
+    reported = tuple(
+        sorted(
+            calculation.standings,
+            key=lambda standing: (
+                standing.deviation_numerator,
+                standing.entry.display_order,
+            ),
+        )
+    )
+    last_deviation = max(
+        (standing.deviation_numerator for standing in reported),
+        default=None,
+    )
+
+    def competition_rank(standing: NumberBombStanding) -> int:
+        if standing.deviation_numerator == last_deviation:
+            return len(reported)
+        return 1 + sum(
+            other.deviation_numerator < standing.deviation_numerator
+            for other in reported
+        )
+
+    players = []
+    for standing in reported:
+        rank = competition_rank(standing)
+        players.append(
+            NumberBombPointsPlayer(
+                platform_id=standing.entry.platform_id,
+                rank=rank,
+                points=POINTS_TOURNAMENT_SCORES.get(rank, 0),
+                absent=False,
+            )
+        )
+    players.extend(
+        NumberBombPointsPlayer(platform_id, None, -3, True)
+        for platform_id in absent_player_ids
+    )
+    return NumberBombPointsResult(tuple(players))
 
 
 def render_number_bomb_result(

@@ -15,7 +15,7 @@
 - 积分赛入口固定为 `/蹦蹦数字炸弹 积分赛`；普通 `/蹦蹦数字炸弹` 行为不变。
 - 积分赛固定 8 人、最多 12 轮；达到 8 人自动开始第 1 轮。
 - 积分表固定为第 1 名 `+10`、第 2 名 `+5`、第 3–6 名 `0`、第 7 名 `-3`、第 8 名 `+2`，不新增后台可编辑项。
-- 并列采用竞赛排名；缺席者固定 `-3` 且不占名次。
+- 并列第一都算第 1，并列最后都算本轮有效人数对应的最后名次，其他并列取更靠前名次；缺席者固定 `-3` 且不占名次。
 - 积分只在本场累计，不流动摸鱼币、不跨场继承。
 - 任一未退赛参与者可提前结束；未完整结算轮次整体作废。
 - 私聊数字在本轮结算前不得进入群消息、管理 API、AI 上下文或日志。
@@ -91,24 +91,22 @@ def calculate_points_tournament_scores(calculation, absent_player_ids):
             ),
         )
     )
+    last_deviation = max(
+        (standing.deviation_numerator for standing in reported),
+        default=None,
+    )
+    def player_rank(standing):
+        if standing.deviation_numerator == last_deviation:
+            return len(reported)
+        return 1 + sum(
+            other.deviation_numerator < standing.deviation_numerator
+            for other in reported
+        )
     ranked = tuple(
         NumberBombPointsPlayer(
             platform_id=standing.entry.platform_id,
-            rank=(
-                1
-                + sum(
-                    other.deviation_numerator < standing.deviation_numerator
-                    for other in reported
-                )
-            ),
-            points=POINTS_TOURNAMENT_SCORES.get(
-                1
-                + sum(
-                    other.deviation_numerator < standing.deviation_numerator
-                    for other in reported
-                ),
-                0,
-            ),
+            rank=player_rank(standing),
+            points=POINTS_TOURNAMENT_SCORES.get(player_rank(standing), 0),
             absent=False,
         )
         for standing in reported
@@ -124,7 +122,7 @@ def calculate_points_tournament_scores(calculation, absent_player_ids):
 
 - [ ] **Step 4: 补齐边界测试**
 
-覆盖并列第 1、第 7、第 8，一至七名有效报数、多人缺席和全员缺席；断言缺席者不占名次且当轮可能没有第 8 名。
+覆盖并列第 1、并列中间名次和并列最后，一至七名有效报数、多人缺席和全员缺席；断言 8 人时第 7、8 位并列均按第 8 名 `+2`，缺席者不占名次且当轮可能没有第 8 名。
 
 - [ ] **Step 5: 运行领域测试**
 
