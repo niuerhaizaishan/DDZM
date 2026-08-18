@@ -753,7 +753,10 @@ def test_number_bomb_group_commands_start_join_and_reject_group_reports():
     )
 
     _receive(service, "bad-start", "bomb-p1", "/蹦蹦数字炸弹 6", now)
-    assert _latest_reply(factory) == "请直接发送 /蹦蹦数字炸弹 创建报名局。"
+    assert _latest_reply(factory) == (
+        "请发送 /蹦蹦数字炸弹 创建普通局，或发送 /蹦蹦数字炸弹 积分赛 "
+        "创建固定8人、12轮积分赛。"
+    )
     _receive(service, "start", "bomb-p1", "/蹦蹦数字炸弹", now)
     assert "炸弹1 发起了报名，当前 1 人" in _latest_reply(factory)
     _receive(service, "add-2", "bomb-p2", "/加入", now)
@@ -774,6 +777,106 @@ def test_number_bomb_group_commands_start_join_and_reject_group_reports():
 
     _receive(service, "group-report", "bomb-p1", "/报数 29", now)
     assert _latest_reply(factory) == "请私聊总监事发送 /报数 1-100，群内报数不会生效。"
+
+
+def test_number_bomb_points_tournament_command_auto_starts_at_eight_players():
+    service, repository, factory = _service(number_bomb_random=Random(5))
+    now = datetime(2026, 8, 18, 12, 0, tzinfo=UTC)
+    for index in range(1, 9):
+        repository.create_user(
+            f"points-command-p{index}", f"积分玩家{index}", now, 0
+        )
+    repository.upsert_direct_chats(
+        [
+            (f"points-command-p{index}", f"direct-points-command-p{index}")
+            for index in range(1, 9)
+        ],
+        now,
+    )
+
+    _receive(
+        service,
+        "points-command-start",
+        "points-command-p1",
+        "/蹦蹦数字炸弹 积分赛",
+        now,
+    )
+    assert "固定 8 人" in _latest_reply(factory)
+    assert "当前 1/8 人" in _latest_reply(factory)
+    for index in range(2, 8):
+        _receive(
+            service,
+            f"points-command-join-{index}",
+            f"points-command-p{index}",
+            "/加入",
+            now,
+        )
+
+    _receive(
+        service,
+        "points-command-join-8",
+        "points-command-p8",
+        "/加入",
+        now,
+    )
+
+    reply = _latest_reply(factory)
+    assert "第 1 轮 - 真心话" in reply
+    assert "积分玩家1、积分玩家2、积分玩家3、积分玩家4" in reply
+    assert reply.count("请按这个格式报数给我 /报数 数字") == 8
+    assert repository.number_bomb_game_summary().state == "collecting"
+
+
+def test_number_bomb_points_tournament_exit_and_end_publish_tournament_result():
+    service, repository, factory = _service(number_bomb_random=Random(5))
+    now = datetime(2026, 8, 18, 12, 0, tzinfo=UTC)
+    for index in range(1, 9):
+        repository.create_user(
+            f"points-control-p{index}", f"控制玩家{index}", now, 0
+        )
+    repository.upsert_direct_chats(
+        [
+            (f"points-control-p{index}", f"direct-points-control-p{index}")
+            for index in range(1, 9)
+        ],
+        now,
+    )
+    repository.start_number_bomb_game(
+        "points-control-p1", now, mode="points_tournament"
+    )
+    for index in range(2, 9):
+        repository.join_number_bomb_game(f"points-control-p{index}", now)
+
+    _receive(
+        service,
+        "points-control-exit",
+        "points-control-p8",
+        "/退出",
+        now + timedelta(seconds=1),
+    )
+    assert "退出积分赛" in _latest_reply(factory)
+    assert "后续每轮 -3 分" in _latest_reply(factory)
+
+    _receive(
+        service,
+        "points-control-current",
+        "points-control-p1",
+        "/当前游戏",
+        now + timedelta(seconds=1),
+    )
+    assert "蹦蹦数字炸弹积分赛" in _latest_reply(factory)
+    assert "第 1/12 轮" in _latest_reply(factory)
+
+    _receive(
+        service,
+        "points-control-end",
+        "points-control-p8",
+        "/结束游戏",
+        now + timedelta(seconds=2),
+    )
+    reply = _latest_reply(factory)
+    assert "提前结束" in reply
+    assert "最终积分榜" in reply
 
 
 def test_current_game_reports_number_bomb_and_next_commands():

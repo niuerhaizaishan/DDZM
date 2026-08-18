@@ -826,6 +826,8 @@ class GameplayParticipantResponse(ApiModel):
     stack: int | None = None
     street_contribution: int | None = None
     total_contribution: int | None = None
+    total_points: int | None = None
+    retired_at_round: int | None = None
 
 
 class GameplaySummaryResponse(ApiModel):
@@ -847,6 +849,9 @@ class GameplaySummaryResponse(ApiModel):
     action_deadline: AwareDatetime | None = None
     to_call: int = 0
     legal_actions: list[str] = Field(default_factory=list)
+    mode: str | None = None
+    round_number: int = 0
+    maximum_rounds: int = 0
 
 
 class GameplaySummariesResponse(ApiModel):

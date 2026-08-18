@@ -2886,6 +2886,16 @@ def test_texas_holdem_admin_surface_has_settings_and_public_table_state():
     assert "hole_cards" not in script
 
 
+def test_number_bomb_admin_surface_shows_tournament_progress_points_and_retirement():
+    root = Path(__file__).resolve().parents[2]
+    script = (root / "src/dzmm_bot/admin/static/admin.js").read_text()
+
+    assert 'item.mode === "points_tournament"' in script
+    assert "participant.total_points" in script
+    assert 'participant.state === "retired"' in script
+    assert "item.maximum_rounds" in script
+
+
 def test_admin_relays_current_gameplay_and_versioned_force_end(client, headers, core):
     current = client.get("/api/gameplay/current", headers=headers)
     ended = client.post(

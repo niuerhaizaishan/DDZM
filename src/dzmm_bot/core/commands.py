@@ -532,6 +532,11 @@ class GroupCommandHandler:
             "memory_single": "记忆考核",
             "random_event": "随机事件",
         }[summary.game_type]
+        if (
+            summary.game_type == "number_bomb"
+            and summary.mode == "points_tournament"
+        ):
+            game_name = "蹦蹦数字炸弹积分赛"
         state_name = {
             "signup": "报名中",
             "waiting_opponent": "等待对手",
@@ -546,6 +551,13 @@ class GroupCommandHandler:
             "turn": "转牌圈",
             "river": "河牌圈",
         }.get(summary.state, "进行中")
+        if (
+            summary.game_type == "number_bomb"
+            and summary.mode == "points_tournament"
+        ):
+            state_name = (
+                f"{state_name}（第 {summary.round_number}/{summary.maximum_rounds} 轮）"
+            )
         role_name = {
             "participant": "参与者",
             "candidate": "下一轮候选",
@@ -1138,18 +1150,28 @@ class GroupCommandHandler:
     def _number_bomb_start(
         self, platform_id: str, content: str, received_at, group_chat_id=None
     ) -> str:
-        if content != "/蹦蹦数字炸弹":
+        modes = {
+            "/蹦蹦数字炸弹": "standard",
+            "/蹦蹦数字炸弹 积分赛": "points_tournament",
+        }
+        mode = modes.get(content)
+        if mode is None:
             return self._reply("/蹦蹦数字炸弹", "usage", received_at)
         result = self._repository.start_number_bomb_game(
             platform_id,
             received_at,
+            mode=mode,
             **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
         )
         if result.status == "signup_started":
             user = self._repository.find_user(platform_id)
             return self._reply(
                 "/蹦蹦数字炸弹",
-                "signup_started",
+                (
+                    "points_signup_started"
+                    if mode == "points_tournament"
+                    else "signup_started"
+                ),
                 received_at,
                 {
                     "{昵称}": user.display_name,
@@ -1364,12 +1386,16 @@ class GroupCommandHandler:
 
     def _number_bomb_join(
         self, platform_id: str, received_at, group_chat_id=None
-    ) -> str:
+    ) -> str | list[CommandReply]:
         result = self._repository.join_number_bomb_game(
             platform_id,
             received_at,
             **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
         )
+        if result.status == "started":
+            return self._number_bomb_round_started_replies(
+                "/加入", result, received_at
+            )
         if result.status == "joined":
             user = self._repository.find_user(platform_id)
             return self._reply(
@@ -1386,6 +1412,7 @@ class GroupCommandHandler:
             "already_joined": "number_bomb_already_joined",
             "not_joined": "number_bomb_not_joined",
             "direct_chat_required": "number_bomb_direct_chat_required",
+            "full": "number_bomb_next_round_full",
         }
         return self._reply(
             "/加入",
@@ -1401,10 +1428,13 @@ class GroupCommandHandler:
             received_at,
             **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
         )
+        if result.public_message:
+            return result.public_message
         scenarios = {
             "signup_left": "number_bomb_signup_left",
             "exit_queued": "number_bomb_exit_queued",
             "candidate_cancelled": "number_bomb_candidate_cancelled",
+            "retired": "number_bomb_retired",
         }
         return self._reply(
             "/退出",
@@ -1440,6 +1470,8 @@ class GroupCommandHandler:
             received_at,
             **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
         )
+        if result.public_message:
+            return result.public_message
         return self._reply(
             "/结束游戏",
             "number_bomb_ended"
@@ -1513,6 +1545,7 @@ class GroupCommandHandler:
         scenarios = {
             "submitted": "submitted",
             "settled": "submitted",
+            "tournament_finished": "submitted",
             "invalid_round": "submitted",
             "invalid_number": "invalid_number",
             "already_submitted": "duplicate",
@@ -1529,7 +1562,7 @@ class GroupCommandHandler:
                 delivery_kind="number_bomb_private",
             )
         ]
-        if result.status in {"settled", "invalid_round"}:
+        if result.status in {"settled", "invalid_round", "tournament_finished"}:
             replies.append(
                 CommandReply(
                     self._reply(
@@ -1559,7 +1592,10 @@ class GroupCommandHandler:
             received_at,
             **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
         )
-        if result.status in {"skipped", "settled", "ended_insufficient"}:
+        if result.status in {
+            "skipped", "settled", "points_skipped", "points_settled",
+            "ended_insufficient",
+        }:
             values = {
                 "{玩家列表}": "、".join(
                     f"{player.roster_order}号 {player.display_name}"
@@ -1567,6 +1603,11 @@ class GroupCommandHandler:
                 )
             }
             scenario = (
+                "points_settled"
+                if result.status == "points_settled"
+                else "points_skipped"
+                if result.status == "points_skipped"
+                else
                 "settled"
                 if result.status == "settled"
                 else "ended_insufficient"
@@ -1579,7 +1620,7 @@ class GroupCommandHandler:
                     force_group_destination=True,
                 )
             ]
-            if result.status == "settled":
+            if result.status in {"settled", "points_settled"}:
                 replies.append(
                     CommandReply(
                         self._reply(
@@ -2576,13 +2617,13 @@ class GroupCommandHandler:
             "蹦蹦数字炸弹": (
                 "【蹦蹦数字炸弹】",
                 (
-                    ("/蹦蹦数字炸弹", "/蹦蹦数字炸弹：创建报名局；至少3名玩家后手动开始"),
-                    ("/加入", "/加入：报名当前对局；游戏中加入会从下一轮生效"),
+                    ("/蹦蹦数字炸弹", "/蹦蹦数字炸弹：创建普通报名局；至少3名玩家后手动开始\n/蹦蹦数字炸弹 积分赛：创建固定8人、12轮积分赛，第8人加入后自动开始"),
+                    ("/加入", "/加入：报名当前对局；积分赛开局后不接受替补"),
                     ("/开始", "/开始：报名阶段由任一参与者开始第一轮"),
                     ("/报数", "私聊 /报数 数字：提交 1–100 的本轮整数"),
-                    ("/跳过", "/跳过 编号：首次未报数提醒后排除一名或多名未报数玩家"),
-                    ("/退出", "/退出：退出对局；游戏中退出会从下一轮生效"),
-                    ("/继续", "/继续：本轮结算后，由任一参与者开启下一轮"),
+                    ("/跳过", "/跳过 编号：首次未报数提醒后处理未报数玩家；积分赛中该玩家本轮 -3 分但下轮仍可参加"),
+                    ("/退出", "/退出：普通局从下一轮退出；积分赛立即退赛且后续每轮 -3 分"),
+                    ("/继续", "/继续：本轮结算后由任一未退赛参与者开启下一轮；积分赛第12轮自动结束"),
                     ("/结束游戏", "/结束游戏：任一参与者终止整场游戏"),
                 ),
             ),
@@ -2680,7 +2721,8 @@ class GroupCommandHandler:
             if "蹦蹦数字炸弹" in game_topics:
                 guide += (
                     "\n蹦蹦数字炸弹主要指令：/蹦蹦数字炸弹、/加入、/开始、"
-                    "私聊 /报数 数字、/跳过 编号、/继续、/结束游戏"
+                    "私聊 /报数 数字、/跳过 编号、/继续、/结束游戏；"
+                    "发送 /蹦蹦数字炸弹 积分赛 可开启固定8人、12轮积分赛"
                 )
         elif topic in guides:
             title, entries = guides[topic]

@@ -102,6 +102,9 @@ def test_command_registry_exposes_exact_enabled_syntax(repository):
     assert commands["/编辑档案"] == "/编辑档案 档案内容"
     assert commands["/编辑档案形象"] == "/编辑档案形象（回复一张图片）"
     assert commands["/我的档案"] == "/我的档案"
+    assert commands["/蹦蹦数字炸弹"] == (
+        "/蹦蹦数字炸弹；/蹦蹦数字炸弹 积分赛"
+    )
 
 
 def test_personal_profile_reply_templates_are_managed(repository):
@@ -301,7 +304,7 @@ def test_number_bomb_authoritative_context_has_public_rules_without_private_valu
     assert "15 秒" in context.live_facts_text
     assert "真心话、真心话、大冒险" in context.live_facts_text
     assert "当前状态：无对局" in context.live_facts_text
-    assert "/蹦蹦数字炸弹：" in context.commands_text
+    assert "/蹦蹦数字炸弹 积分赛" in context.commands_text
     assert "/开始" in context.commands_text
     assert "/报数 数字（仅私聊）" in context.commands_text
     assert "私聊" in context.live_facts_text
@@ -2460,6 +2463,9 @@ def test_number_bomb_points_tournament_starts_when_eighth_player_joins(
         platform_ids[0], now, mode="points_tournament"
     )
     assert created.status == "signup_started"
+    assert repository.start_number_bomb_round(
+        platform_ids[0], now
+    ).status == "cannot_start"
     for platform_id in platform_ids[1:7]:
         assert repository.join_number_bomb_game(platform_id, now).status == "joined"
     started = repository.join_number_bomb_game(platform_ids[7], now)
@@ -2574,7 +2580,7 @@ def test_number_bomb_points_tournament_skip_penalty_keeps_player_next_round(
         platform_ids[0], ("8",), now + timedelta(seconds=16)
     )
 
-    assert skipped.status == "settled"
+    assert skipped.status == "points_settled"
     with repository._session() as session:
         skipped_member = session.scalar(
             select(NumberBombMemberRecord)
@@ -2793,6 +2799,72 @@ def test_number_bomb_points_tournament_twelfth_round_auto_finishes_with_final_bo
     assert (game.state, game.active_key, game.finish_reason) == (
         "ended", None, "maximum_rounds_reached",
     )
+
+
+def test_number_bomb_points_tournament_participant_end_discards_open_round(
+    session_factory, now
+):
+    from dzmm_bot.core.repository import CoreRepository
+
+    repository = CoreRepository(
+        session_factory,
+        number_bomb_random=_ScriptedNumberBombRandom((10,)),
+    )
+    platform_ids = _start_number_bomb_points_tournament(
+        repository, now, "points-early-end"
+    )
+    repository.submit_number_bomb(platform_ids[0], 40, now)
+
+    result = repository.end_number_bomb_game(
+        platform_ids[3], now + timedelta(seconds=1)
+    )
+
+    assert result.status == "tournament_finished"
+    assert "已完成 0 轮" in result.public_message
+    assert "最终积分榜" in result.public_message
+    with repository._session() as session:
+        game = session.scalar(select(NumberBombGameRecord))
+        round_record = session.scalar(select(NumberBombRoundRecord))
+        totals = list(
+            session.scalars(
+                select(NumberBombMemberRecord.total_points).order_by(
+                    NumberBombMemberRecord.roster_order
+                )
+            )
+        )
+    assert (game.finish_reason, round_record.state) == (
+        "participant_ended", "abandoned",
+    )
+    assert totals == [0] * 8
+
+
+def test_number_bomb_points_tournament_retired_participant_can_end_between_rounds(
+    session_factory, now
+):
+    from dzmm_bot.core.repository import CoreRepository
+
+    repository = CoreRepository(
+        session_factory,
+        number_bomb_random=_ScriptedNumberBombRandom((10,)),
+    )
+    platform_ids = _start_number_bomb_points_tournament(
+        repository, now, "points-retired-end"
+    )
+    for platform_id, number in zip(
+        platform_ids, (1, 10, 20, 30, 40, 50, 70, 100), strict=True
+    ):
+        repository.submit_number_bomb(platform_id, number, now)
+    repository.leave_number_bomb_game(
+        platform_ids[7], now + timedelta(seconds=1)
+    )
+
+    result = repository.end_number_bomb_game(
+        platform_ids[7], now + timedelta(seconds=2)
+    )
+
+    assert result.status == "tournament_finished"
+    assert "已完成 1 轮" in result.public_message
+    assert repository.number_bomb_game_summary().state is None
 
 
 def test_number_bomb_requires_direct_chat_for_creation_join_and_start(repository, now):

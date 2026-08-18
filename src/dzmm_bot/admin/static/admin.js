@@ -535,13 +535,18 @@ function renderCurrentGameplay(gameplay) {
     const participants = item.participants.map((participant) => {
       const number = participant.number == null ? "" : `${participant.number}号 `;
       const progress = participant.reported == null ? "" : participant.reported ? "（已报数）" : "（未报数）";
-      return `${number}${participant.display_name}${progress}`;
+      const points = item.mode === "points_tournament" ? `（${participant.total_points ?? 0}分）` : "";
+      const retired = participant.state === "retired" ? `（已退赛，自第${participant.retired_at_round ?? "?"}轮起）` : "";
+      return `${number}${participant.display_name}${progress}${points}${retired}`;
     }).join("、") || "暂无";
     const deadline = item.tipping_deadline ? `打赏截止 ${formatHeartbeat(item.tipping_deadline)}` : item.signup_deadline ? `报名截止 ${formatHeartbeat(item.signup_deadline)}` : item.next_reminder_at ? `下次提醒 ${formatHeartbeat(item.next_reminder_at)}` : "当前无倒计时";
+    const numberBombProgress = item.game_type === "number_bomb"
+      ? `${item.mode === "points_tournament" ? "积分赛" : "普通局"} · 第 ${item.round_number ?? 0}/${item.maximum_rounds || "不限"} 轮 · `
+      : "";
     return `<article>
       <span>${escapeHtml(item.group_name)}</span>
       <strong>${escapeHtml(names[item.game_type] || item.game_type)}</strong>
-      <small>${escapeHtml(states[item.state] || item.state || "未知状态")} · ${escapeHtml(item.game_id)}</small>
+      <small>${escapeHtml(numberBombProgress)}${escapeHtml(states[item.state] || item.state || "未知状态")} · ${escapeHtml(item.game_id)}</small>
       <small>${item.participants.length} 人：${escapeHtml(participants)}</small>
       <small>${item.state === "tipping" ? `已打赏 ${item.tip_total} 摸鱼币 · ` : ""}${escapeHtml(deadline)}</small>
       <button class="danger-button" type="button" data-force-end-game data-group-chat-id="${escapeHtml(item.group_chat_id)}" data-game-type="${escapeHtml(item.game_type)}" data-game-id="${escapeHtml(item.game_id)}">强制结束</button>

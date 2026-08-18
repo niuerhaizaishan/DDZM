@@ -896,6 +896,9 @@ class ActiveGameplaySummary:
     next_reminder_at: datetime | None = None
     tipping_deadline: datetime | None = None
     tip_total: int = 0
+    mode: str | None = None
+    round_number: int = 0
+    maximum_rounds: int = 0
 
 
 @dataclass(frozen=True)
@@ -907,6 +910,8 @@ class GameplayAdminParticipant:
     stack: int | None = None
     street_contribution: int | None = None
     total_contribution: int | None = None
+    total_points: int | None = None
+    retired_at_round: int | None = None
 
 
 @dataclass(frozen=True)
@@ -929,6 +934,9 @@ class GameplayAdminSummary:
     action_deadline: datetime | None = None
     to_call: int = 0
     legal_actions: tuple[str, ...] = ()
+    mode: str | None = None
+    round_number: int = 0
+    maximum_rounds: int = 0
 
 
 def blame_settlement_template_values(
@@ -1497,7 +1505,7 @@ _COMMAND_DEFINITIONS = (
     ("/甩锅游戏", "/甩锅游戏 人数", "创建 2 至 10 人甩锅炸弹报名局"),
     ("/甩锅", "/甩锅 玩家编号 甩锅理由", "按玩家编号和理由转移甩锅炸弹"),
     ("/退出甩锅", "/退出甩锅", "退出当前甩锅游戏"),
-    ("/蹦蹦数字炸弹", "/蹦蹦数字炸弹", "创建蹦蹦数字炸弹报名局，至少3人后发送 /开始"),
+    ("/蹦蹦数字炸弹", "/蹦蹦数字炸弹；/蹦蹦数字炸弹 积分赛", "创建普通报名局，或创建固定8人、12轮积分赛"),
     ("/报数", "/报数 数字（仅私聊）", "提交蹦蹦数字炸弹本轮 1–100 整数"),
     ("/跳过", "/跳过 编号 [编号...]", "排除蹦蹦数字炸弹中尚未报数的参与者"),
     ("/德州扑克", "/德州扑克 带入金额", "创建一局德州扑克现金桌报名"),
@@ -3426,7 +3434,10 @@ class CoreRepository:
             settings = self.get_number_bomb_settings()
             summary = self.number_bomb_game_summary()
             lines.append(
-                "蹦蹦数字炸弹：至少 3 人，无人数上限；报名后由任一参与者发送 /开始；"
+                "蹦蹦数字炸弹普通局：至少 3 人，无人数上限；报名后由任一参与者发送 /开始。"
+                "积分赛：发送 /蹦蹦数字炸弹 积分赛，固定 8 人，第 8 人加入后自动开始，共 12 轮；"
+                "每轮按接近最终数从近到远排名，第1名 +10、第2名 +5、第3至6名 0、"
+                "第7名 -3、第8名 +2；未报数和退赛后的每轮均 -3；"
                 "每轮每人私聊发送 /报数 1–100；"
                 f"每 {settings.reminder_interval_seconds} 秒通报尚未报数玩家；"
                 "惩罚循环为真心话、真心话、大冒险；"
@@ -6645,6 +6656,13 @@ class CoreRepository:
                     commands = ("/退出",)
                 elif role == "nonparticipant":
                     commands = ("/加入",)
+                elif actor is not None and actor.state == "retired":
+                    commands = ("/结束游戏",)
+                elif (
+                    number_game.mode == "points_tournament"
+                    and number_game.state == "signup"
+                ):
+                    commands = ("/退出", "/结束游戏")
                 elif number_game.state == "signup":
                     commands = ("/退出", "/开始", "/结束游戏")
                 elif number_game.state == "waiting_continue":
@@ -6657,14 +6675,13 @@ class CoreRepository:
                         number_game.id,
                         number_game.state,
                         role,
-                        tuple(
-                            user.display_name
-                            for member, user in rows
-                            if member.state in {"current", "pending_exit"}
-                        ),
+                        tuple(user.display_name for _, user in rows),
                         commands,
                         number_game.signup_deadline,
                         number_game.next_reminder_at,
+                        mode=number_game.mode,
+                        round_number=number_game.round_number,
+                        maximum_rounds=number_game.maximum_rounds,
                     )
                 )
 
@@ -7004,12 +7021,18 @@ class CoreRepository:
                         user.id in reported_user_ids
                         if game.state == "collecting" and member.state == "current"
                         else None,
+                        state=member.state,
+                        total_points=member.total_points,
+                        retired_at_round=member.retired_at_round,
                     )
                     for member, user in rows
                 ),
                 signup_deadline=game.signup_deadline,
                 next_reminder_at=game.next_reminder_at,
                 skip_enabled=game.skip_enabled,
+                mode=game.mode,
+                round_number=game.round_number,
+                maximum_rounds=game.maximum_rounds,
             )
 
     def current_gameplay_admin_summaries(
@@ -7337,6 +7360,8 @@ class CoreRepository:
                 game = self._active_number_bomb_game(session, group_chat_id)
                 if game is None or game.state != "signup":
                     return NumberBombGameResult("cannot_start")
+                if game.mode == "points_tournament":
+                    return NumberBombGameResult("cannot_start", game_id=game.id)
                 actor = session.scalar(
                     select(NumberBombMemberRecord)
                     .join(UserRecord, UserRecord.id == NumberBombMemberRecord.user_id)
@@ -7751,9 +7776,21 @@ class CoreRepository:
                     settled = self._settle_number_bomb_round(
                         session, game, round_record, now
                     )
-                    return replace(settled, players=skipped_players)
+                    return replace(
+                        settled,
+                        status=(
+                            "points_settled"
+                            if game.mode == "points_tournament"
+                            else settled.status
+                        ),
+                        players=skipped_players,
+                    )
                 return NumberBombGameResult(
-                    "skipped",
+                    (
+                        "points_skipped"
+                        if game.mode == "points_tournament"
+                        else "skipped"
+                    ),
                     game_id=game.id,
                     player_count=len(remaining),
                     round_number=round_record.round_number,
@@ -8257,11 +8294,46 @@ class CoreRepository:
                     .where(
                         NumberBombMemberRecord.game_id == game.id,
                         UserRecord.platform_id == platform_id,
-                        NumberBombMemberRecord.state.in_(("current", "pending_exit")),
+                        NumberBombMemberRecord.state.in_(
+                            ("current", "retired")
+                            if game.mode == "points_tournament"
+                            else ("current", "pending_exit")
+                        ),
                     )
                 )
                 if member is None:
                     return NumberBombGameResult("cannot_end", game_id=game.id)
+                if game.mode == "points_tournament":
+                    completed_rounds = int(
+                        session.scalar(
+                            select(func.count(NumberBombRoundRecord.id)).where(
+                                NumberBombRoundRecord.game_id == game.id,
+                                NumberBombRoundRecord.state == "settled",
+                            )
+                        )
+                        or 0
+                    )
+                    self._finish_number_bomb_game(
+                        session,
+                        game,
+                        "participant_ended",
+                        now,
+                        status="tournament_finished",
+                    )
+                    return NumberBombGameResult(
+                        "tournament_finished",
+                        game_id=game.id,
+                        player_count=game.target_player_count,
+                        target_player_count=game.target_player_count,
+                        round_number=completed_rounds or None,
+                        public_message=(
+                            f"积分赛已由参与者提前结束，已完成 {completed_rounds} 轮；"
+                            "当前未完成轮次不计分。\n"
+                            + self._render_number_bomb_points_board(
+                                session, game.id, final=True
+                            )
+                        ),
+                    )
                 return self._finish_number_bomb_game(
                     session, game, "participant_ended", now, status="ended"
                 )

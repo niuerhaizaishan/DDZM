@@ -365,9 +365,9 @@ def test_gameplay_current_hides_numbers_and_force_end_requires_exact_identity(
         "game_id": str(created.game_id),
         "state": "collecting",
         "participants": [
-            {"number": 1, "display_name": "管理玩家1", "reported": True},
-            {"number": 2, "display_name": "管理玩家2", "reported": False},
-            {"number": 3, "display_name": "管理玩家3", "reported": False},
+            {"number": 1, "display_name": "管理玩家1", "reported": True, "state": "current", "total_points": 0, "retired_at_round": None},
+            {"number": 2, "display_name": "管理玩家2", "reported": False, "state": "current", "total_points": 0, "retired_at_round": None},
+            {"number": 3, "display_name": "管理玩家3", "reported": False, "state": "current", "total_points": 0, "retired_at_round": None},
         ],
         "signup_deadline": None,
         "next_reminder_at": (
@@ -376,6 +376,9 @@ def test_gameplay_current_hides_numbers_and_force_end_requires_exact_identity(
         "tipping_deadline": None,
         "tip_total": 0,
         "skip_enabled": False,
+        "mode": "standard",
+        "round_number": 1,
+        "maximum_rounds": 0,
     }]}
     assert all(
         "submitted_number" not in participant
@@ -406,6 +409,56 @@ def test_gameplay_current_hides_numbers_and_force_end_requires_exact_identity(
     assert game.finish_reason == "admin_forced"
     assert outbounds == ["【蹦蹦数字炸弹】管理员已强制结束当前游戏。"]
     assert activity_events == []
+
+
+def test_gameplay_current_exposes_number_bomb_tournament_progress_and_points(
+    app_context, headers
+):
+    repository = app_context.repository
+    for index in range(1, 9):
+        repository.create_user(
+            f"admin-points-p{index}", f"积分管理玩家{index}", NOW, 0
+        )
+    repository.upsert_direct_chats(
+        [
+            (f"admin-points-p{index}", f"direct-admin-points-p{index}")
+            for index in range(1, 9)
+        ],
+        NOW,
+    )
+    repository.start_number_bomb_game(
+        "admin-points-p1", NOW, mode="points_tournament"
+    )
+    for index in range(2, 9):
+        repository.join_number_bomb_game(f"admin-points-p{index}", NOW)
+    repository.leave_number_bomb_game(
+        "admin-points-p8", NOW + timedelta(seconds=1)
+    )
+    repository.submit_number_bomb("admin-points-p1", 73, NOW)
+
+    current = app_context.client.get("/internal/gameplay/current", headers=headers)
+
+    assert current.status_code == 200
+    item = current.json()["items"][0]
+    assert (
+        item["mode"], item["round_number"], item["maximum_rounds"]
+    ) == ("points_tournament", 1, 12)
+    assert item["participants"][0] == {
+        "number": 1,
+        "display_name": "积分管理玩家1",
+        "reported": True,
+        "state": "current",
+        "total_points": 0,
+        "retired_at_round": None,
+    }
+    assert item["participants"][7] == {
+        "number": 8,
+        "display_name": "积分管理玩家8",
+        "reported": None,
+        "state": "retired",
+        "total_points": 0,
+        "retired_at_round": 2,
+    }
 
 
 def test_gameplay_current_exposes_only_public_texas_holdem_state(

@@ -1582,6 +1582,12 @@ def create_app(
                         street_contribution=participant.street_contribution,
                         total_contribution=participant.total_contribution,
                     )
+                elif summary.game_type == "number_bomb":
+                    participant_values.update(
+                        state=participant.state,
+                        total_points=participant.total_points,
+                        retired_at_round=participant.retired_at_round,
+                    )
                 participants.append(GameplayParticipantResponse(**participant_values))
             values = {
                 "group_chat_id": summary.group_chat_id,
@@ -1595,6 +1601,9 @@ def create_app(
                 "tipping_deadline": summary.tipping_deadline,
                 "tip_total": summary.tip_total,
                 "skip_enabled": summary.skip_enabled,
+                "mode": summary.mode,
+                "round_number": summary.round_number,
+                "maximum_rounds": summary.maximum_rounds,
             }
             if summary.game_type == "texas_holdem":
                 values.update(
