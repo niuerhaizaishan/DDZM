@@ -7165,7 +7165,11 @@ class CoreRepository:
         platform_id: str,
         now: datetime,
         group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+        *,
+        mode: str = "standard",
     ) -> NumberBombGameResult:
+        if mode not in {"standard", "points_tournament"}:
+            raise ValueError("蹦蹦数字炸弹赛制无效")
         now = now.astimezone(BEIJING)
         settings = self.get_number_bomb_settings()
         with self.transaction():
@@ -7193,7 +7197,9 @@ class CoreRepository:
                     group_chat_id=group_chat_id,
                     active_key="global",
                     state="signup",
-                    target_player_count=0,
+                    target_player_count=8 if mode == "points_tournament" else 0,
+                    mode=mode,
+                    maximum_rounds=12 if mode == "points_tournament" else 0,
                     round_number=0,
                     attempt_number=0,
                     last_activity_at=now,
@@ -7255,6 +7261,8 @@ class CoreRepository:
                 )
                 if member is not None and member.state != "left":
                     return NumberBombGameResult("already_joined", game_id=game.id)
+                if game.mode == "points_tournament" and game.state != "signup":
+                    return NumberBombGameResult("full", game_id=game.id)
                 maximum_order = int(
                     session.scalar(
                         select(func.coalesce(func.max(NumberBombMemberRecord.roster_order), 0))
@@ -7276,16 +7284,25 @@ class CoreRepository:
                         member.roster_order = maximum_order + 1
                         member.state = "current"
                         member.queued_at = now
+                        member.total_points = 0
+                        member.retired_at_round = None
                     game.last_activity_at = now
                     session.flush()
                     current_count = self._number_bomb_member_count(
                         session, game.id, ("current",)
                     )
+                    if game.mode == "points_tournament":
+                        if current_count > game.target_player_count:
+                            raise RuntimeError("蹦蹦数字炸弹积分赛报名人数超限")
+                        if current_count == game.target_player_count:
+                            return self._start_number_bomb_round(
+                                session, game, 1, 1, now
+                            )
                     return NumberBombGameResult(
                         "joined",
                         game_id=game.id,
                         player_count=current_count,
-                        target_player_count=0,
+                        target_player_count=game.target_player_count,
                     )
                 if game.state not in {"collecting", "waiting_continue"}:
                     return NumberBombGameResult("no_game")

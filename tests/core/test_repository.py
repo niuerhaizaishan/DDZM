@@ -2449,6 +2449,46 @@ def test_number_bomb_signup_requires_manual_start_and_has_no_player_cap(
     assert [snapshot.display_order for snapshot in snapshots] == list(range(1, 13))
 
 
+def test_number_bomb_points_tournament_starts_when_eighth_player_joins(
+    repository, now
+):
+    platform_ids = _prepare_number_bomb_players(
+        repository, now, "points-signup", 9
+    )
+
+    created = repository.start_number_bomb_game(
+        platform_ids[0], now, mode="points_tournament"
+    )
+    assert created.status == "signup_started"
+    for platform_id in platform_ids[1:7]:
+        assert repository.join_number_bomb_game(platform_id, now).status == "joined"
+    started = repository.join_number_bomb_game(platform_ids[7], now)
+
+    assert (started.status, started.round_number, started.player_count) == (
+        "started", 1, 8,
+    )
+    assert len(started.players) == 8
+    assert repository.join_number_bomb_game(platform_ids[8], now).status == "full"
+    with repository._session() as session:
+        game = session.scalar(select(NumberBombGameRecord))
+        rounds = list(session.scalars(select(NumberBombRoundRecord)))
+    assert (game.mode, game.maximum_rounds, game.target_player_count) == (
+        "points_tournament", 12, 8,
+    )
+    assert [(record.round_number, record.attempt_number) for record in rounds] == [
+        (1, 1)
+    ]
+
+
+def test_number_bomb_rejects_unknown_game_mode(repository, now):
+    platform_id = _prepare_number_bomb_players(
+        repository, now, "bad-points-mode", 1
+    )[0]
+
+    with pytest.raises(ValueError, match="赛制"):
+        repository.start_number_bomb_game(platform_id, now, mode="ranked")
+
+
 def test_number_bomb_requires_direct_chat_for_creation_join_and_start(repository, now):
     repository.create_user("missing-direct", "无私聊", now, 20)
     assert repository.start_number_bomb_game("missing-direct", now).status == (
