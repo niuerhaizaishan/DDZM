@@ -56,6 +56,17 @@ def _index_names(table_name: str) -> set[str]:
     }
 
 
+def _unique_constraint_name(
+    table_name: str, column_names: tuple[str, ...]
+) -> str | None:
+    if not _table_exists(table_name):
+        return None
+    for constraint in sa.inspect(op.get_bind()).get_unique_constraints(table_name):
+        if tuple(constraint["column_names"]) == column_names:
+            return constraint["name"]
+    return None
+
+
 def _add_group_chat_column(table_name: str) -> None:
     if not _table_exists(table_name):
         return
@@ -259,25 +270,29 @@ def upgrade() -> None:
         )
 
     if _table_exists("random_event_schedules"):
+        old_constraint_name = _unique_constraint_name(
+            "random_event_schedules", ("event_date", "scheduled_at")
+        )
         with op.batch_alter_table(
             "random_event_schedules", naming_convention=NAMING_CONVENTION
         ) as batch_op:
-            batch_op.drop_constraint(
-                "uq_random_event_schedules_event_date_scheduled_at", type_="unique"
-            )
+            if old_constraint_name is not None:
+                batch_op.drop_constraint(old_constraint_name, type_="unique")
             batch_op.create_unique_constraint(
                 "uq_random_event_schedules_group_chat_id_event_date_scheduled_at",
                 ["group_chat_id", "event_date", "scheduled_at"],
             )
     if _table_exists("income_report_deliveries"):
+        old_constraint_name = _unique_constraint_name(
+            "income_report_deliveries", ("report_date", "report_time")
+        )
         with op.batch_alter_table(
             "income_report_deliveries", naming_convention=NAMING_CONVENTION
         ) as batch_op:
-            batch_op.drop_constraint(
-                "uq_income_report_deliveries_report_date_report_time", type_="unique"
-            )
+            if old_constraint_name is not None:
+                batch_op.drop_constraint(old_constraint_name, type_="unique")
             batch_op.create_unique_constraint(
-                "uq_income_report_deliveries_group_chat_id_report_date_report_time",
+                "uq_income_deliveries_group_chat_date_time",
                 ["group_chat_id", "report_date", "report_time"],
             )
 
@@ -288,7 +303,7 @@ def downgrade() -> None:
             "income_report_deliveries", naming_convention=NAMING_CONVENTION
         ) as batch_op:
             batch_op.drop_constraint(
-                "uq_income_report_deliveries_group_chat_id_report_date_report_time",
+                "uq_income_deliveries_group_chat_date_time",
                 type_="unique",
             )
             batch_op.create_unique_constraint(

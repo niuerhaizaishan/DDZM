@@ -97,7 +97,11 @@ def _legacy_database(database_url: str) -> None:
         Column("id", Uuid, primary_key=True),
         Column("event_date", Date, nullable=False),
         Column("scheduled_at", DateTime(timezone=True), nullable=False),
-        UniqueConstraint("event_date", "scheduled_at"),
+        UniqueConstraint(
+            "event_date",
+            "scheduled_at",
+            name="random_event_schedules_event_date_scheduled_at_key",
+        ),
     )
     events = Table(
         "random_events",
@@ -112,7 +116,11 @@ def _legacy_database(database_url: str) -> None:
         Column("id", Uuid, primary_key=True),
         Column("report_date", Date, nullable=False),
         Column("report_time", String(5), nullable=False),
-        UniqueConstraint("report_date", "report_time"),
+        UniqueConstraint(
+            "report_date",
+            "report_time",
+            name="income_report_deliveries_report_date_report_time_key",
+        ),
     )
     metadata.create_all(engine)
     with engine.begin() as connection:
@@ -217,6 +225,10 @@ def test_multi_group_migration_backfills_legacy_group_rows(tmp_path, monkeypatch
             )
 
     assert "group_chat_runtime_states" in inspector.get_table_names()
+    for table_name in ("random_event_schedules", "income_report_deliveries"):
+        for constraint in inspector.get_unique_constraints(table_name):
+            if constraint["name"] is not None:
+                assert len(constraint["name"]) <= 63
 
     command.downgrade(config, "20260817_44")
 
