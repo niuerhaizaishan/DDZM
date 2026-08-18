@@ -804,6 +804,8 @@ class NumberBombGameSummary:
     attempt_number: int = 0
     players: tuple[NumberBombPlayer, ...] = ()
     last_activity_at: datetime | None = None
+    mode: str | None = None
+    maximum_rounds: int = 0
 
 
 @dataclass(frozen=True)
@@ -817,6 +819,8 @@ class NumberBombGameResult:
     players: tuple[NumberBombPlayer, ...] = ()
     submitted_count: int = 0
     public_message: str | None = None
+    mode: str | None = None
+    maximum_rounds: int = 0
 
 
 @dataclass(frozen=True)
@@ -899,6 +903,7 @@ class ActiveGameplaySummary:
     mode: str | None = None
     round_number: int = 0
     maximum_rounds: int = 0
+    actor_total_points: int | None = None
 
 
 @dataclass(frozen=True)
@@ -3443,6 +3448,11 @@ class CoreRepository:
                 "惩罚循环为真心话、真心话、大冒险；"
                 f"当前状态：{summary.state or '无对局'}"
             )
+            if summary.mode == "points_tournament":
+                lines.append(
+                    "当前赛制：积分赛；"
+                    f"当前轮次：{summary.round_number}/{summary.maximum_rounds}"
+                )
         if "player_activity" in topic_set:
             facts = self.list_ai_activity_facts(platform_id)
             lines.extend(
@@ -6530,6 +6540,8 @@ class CoreRepository:
                 attempt_number=game.attempt_number,
                 players=players,
                 last_activity_at=game.last_activity_at,
+                mode=game.mode,
+                maximum_rounds=game.maximum_rounds,
             )
 
     def active_gameplay_summary(
@@ -6657,7 +6669,7 @@ class CoreRepository:
                 elif role == "nonparticipant":
                     commands = ("/加入",)
                 elif actor is not None and actor.state == "retired":
-                    commands = ("/结束游戏",)
+                    commands = ()
                 elif (
                     number_game.mode == "points_tournament"
                     and number_game.state == "signup"
@@ -6682,6 +6694,9 @@ class CoreRepository:
                         mode=number_game.mode,
                         round_number=number_game.round_number,
                         maximum_rounds=number_game.maximum_rounds,
+                        actor_total_points=(
+                            None if actor is None else actor.total_points
+                        ),
                     )
                 )
 
@@ -8155,16 +8170,44 @@ class CoreRepository:
         calculation,
     ) -> str:
         punishment = "大冒险" if round_record.punishment_type == "dare" else "真心话"
-        lines = [f"第 {round_record.round_number} 轮 - {punishment}"]
+        lines = [
+            f"第 {round_record.round_number}/{game.maximum_rounds} 轮 - {punishment}"
+        ]
         if calculation is not None:
             target = calculation.target_numerator / calculation.target_denominator
+            average = calculation.total / calculation.player_count
             lines.extend(
                 [
+                    "1. 计算过程",
+                    *[
+                        f"{user.display_name}：{player.submitted_number}"
+                        for player, user, _ in rows
+                        if player.result_reason == "reported"
+                    ],
+                    f"总和：{calculation.total}",
+                    f"有效报数人数：{calculation.player_count}",
+                    f"平均值：{average:.2f}",
                     f"本轮随机倍率：×{round_record.multiplier_tenths / 10:g}",
                     f"最终数 F：{target:.2f}",
+                    "2. 偏离值与名次",
                 ]
             )
-        lines.append("本轮积分")
+            for player, user, _ in sorted(
+                rows,
+                key=lambda row: (
+                    row[0].competition_rank is None,
+                    row[0].competition_rank or 99,
+                    row[0].display_order,
+                ),
+            ):
+                if player.result_reason != "reported":
+                    continue
+                deviation = player.deviation_numerator / calculation.target_denominator
+                lines.append(
+                    f"{user.display_name}：{player.submitted_number}，偏离值 "
+                    f"{deviation:.2f}，第 {player.competition_rank} 名"
+                )
+        lines.append("3. 本轮积分")
         for player, user, _ in sorted(
             rows,
             key=lambda row: (
@@ -8295,7 +8338,7 @@ class CoreRepository:
                         NumberBombMemberRecord.game_id == game.id,
                         UserRecord.platform_id == platform_id,
                         NumberBombMemberRecord.state.in_(
-                            ("current", "retired")
+                            ("current",)
                             if game.mode == "points_tournament"
                             else ("current", "pending_exit")
                         ),
@@ -8470,6 +8513,8 @@ class CoreRepository:
             round_number=round_number,
             punishment_type=punishment_type,
             players=players,
+            mode=game.mode,
+            maximum_rounds=game.maximum_rounds,
         )
 
     def _finish_number_bomb_game(

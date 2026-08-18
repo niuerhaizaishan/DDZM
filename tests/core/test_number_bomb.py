@@ -82,6 +82,15 @@ def test_points_tournament_tied_first_players_share_first_place():
     assert [item.points for item in result.players] == [10, 10, 0, 0, 0, 0, -3, 2]
 
 
+def test_points_tournament_all_tied_players_take_first_place_priority():
+    result = calculate_points_tournament_scores(
+        points_calculation(5, 5, 5, 5, 5, 5, 5, 5), ()
+    )
+
+    assert [item.rank for item in result.players] == [1] * 8
+    assert [item.points for item in result.players] == [10] * 8
+
+
 def test_points_tournament_all_absent_players_each_lose_three_points():
     calculation = points_calculation()
 

@@ -311,6 +311,27 @@ def test_number_bomb_authoritative_context_has_public_rules_without_private_valu
     assert "chatroom" not in context.live_facts_text
 
 
+def test_number_bomb_ai_context_reports_active_tournament_mode_and_round(
+    repository, now
+):
+    platform_ids = _prepare_number_bomb_players(
+        repository, now, "points-ai", 8
+    )
+    repository.start_number_bomb_game(
+        platform_ids[0], now, mode="points_tournament"
+    )
+    for platform_id in platform_ids[1:]:
+        repository.join_number_bomb_game(platform_id, now)
+
+    context = repository.build_ai_authoritative_context(
+        platform_ids[0], "积分赛现在第几轮", now
+    )
+
+    assert context.topics == ("number_bomb",)
+    assert "当前赛制：积分赛" in context.live_facts_text
+    assert "当前轮次：1/12" in context.live_facts_text
+
+
 @pytest.fixture
 def session_factory():
     from dzmm_bot.core.schema import Base
@@ -2838,7 +2859,7 @@ def test_number_bomb_points_tournament_participant_end_discards_open_round(
     assert totals == [0] * 8
 
 
-def test_number_bomb_points_tournament_retired_participant_can_end_between_rounds(
+def test_number_bomb_points_tournament_only_unretired_participant_can_end(
     session_factory, now
 ):
     from dzmm_bot.core.repository import CoreRepository
@@ -2858,10 +2879,14 @@ def test_number_bomb_points_tournament_retired_participant_can_end_between_round
         platform_ids[7], now + timedelta(seconds=1)
     )
 
-    result = repository.end_number_bomb_game(
+    retired_result = repository.end_number_bomb_game(
         platform_ids[7], now + timedelta(seconds=2)
     )
+    result = repository.end_number_bomb_game(
+        platform_ids[0], now + timedelta(seconds=3)
+    )
 
+    assert retired_result.status == "cannot_end"
     assert result.status == "tournament_finished"
     assert "已完成 1 轮" in result.public_message
     assert repository.number_bomb_game_summary().state is None

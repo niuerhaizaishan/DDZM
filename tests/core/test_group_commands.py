@@ -821,7 +821,7 @@ def test_number_bomb_points_tournament_command_auto_starts_at_eight_players():
     )
 
     reply = _latest_reply(factory)
-    assert "第 1 轮 - 真心话" in reply
+    assert "第 1/12 轮 - 真心话" in reply
     assert "积分玩家1、积分玩家2、积分玩家3、积分玩家4" in reply
     assert reply.count("请按这个格式报数给我 /报数 数字") == 8
     assert repository.number_bomb_game_summary().state == "collecting"
@@ -866,11 +866,12 @@ def test_number_bomb_points_tournament_exit_and_end_publish_tournament_result():
     )
     assert "蹦蹦数字炸弹积分赛" in _latest_reply(factory)
     assert "第 1/12 轮" in _latest_reply(factory)
+    assert "你的积分：0 分" in _latest_reply(factory)
 
     _receive(
         service,
         "points-control-end",
-        "points-control-p8",
+        "points-control-p1",
         "/结束游戏",
         now + timedelta(seconds=2),
     )
@@ -2247,7 +2248,12 @@ def test_help_number_bomb_topic_shows_group_and_private_commands():
         "/跳过 编号", "/退出", "/继续", "/结束游戏",
     ):
         assert command in reply
-    assert "人数" not in reply
+    assert "第1名 +10" in reply
+    assert "第7名 -3" in reply
+    assert "第8名 +2" in reply
+    assert "并列" in reply
+    assert "提前结束" in reply
+    assert "/蹦蹦数字炸弹 人数" not in reply
     assert "3-10" not in reply
     assert "3 至 10" not in reply
     assert "无操作释放" not in reply

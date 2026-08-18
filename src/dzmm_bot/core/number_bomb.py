@@ -121,8 +121,14 @@ def calculate_points_tournament_scores(
         (standing.deviation_numerator for standing in reported),
         default=None,
     )
+    first_deviation = min(
+        (standing.deviation_numerator for standing in reported),
+        default=None,
+    )
 
     def competition_rank(standing: NumberBombStanding) -> int:
+        if standing.deviation_numerator == first_deviation:
+            return 1
         if standing.deviation_numerator == last_deviation:
             return len(reported)
         return 1 + sum(

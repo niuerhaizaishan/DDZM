@@ -33,6 +33,7 @@ def test_route_ai_topics_uses_exact_command_aliases():
     assert route_ai_topics("/答案 应该怎么发", ()) == ("memory_assessment",)
     assert route_ai_topics("蹦蹦数字炸弹怎么报数", ()) == ("number_bomb",)
     assert route_ai_topics("平均数炸弹怎么玩", ()) == ("number_bomb",)
+    assert route_ai_topics("积分赛第七名扣几分", ()) == ("number_bomb",)
     assert route_ai_topics("/报数 29", ()) == ("number_bomb",)
     assert route_ai_topics("德州扑克怎么加注", ()) == ("texas_holdem",)
     assert route_ai_topics("/全下", ()) == ("texas_holdem",)

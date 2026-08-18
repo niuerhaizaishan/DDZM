@@ -556,7 +556,8 @@ class GroupCommandHandler:
             and summary.mode == "points_tournament"
         ):
             state_name = (
-                f"{state_name}（第 {summary.round_number}/{summary.maximum_rounds} 轮）"
+                f"{state_name}（第 {summary.round_number}/{summary.maximum_rounds} 轮；"
+                f"你的积分：{summary.actor_total_points or 0} 分）"
             )
         role_name = {
             "participant": "参与者",
@@ -1655,7 +1656,11 @@ class GroupCommandHandler:
                     "number_bomb_started",
                     received_at,
                     {
-                        "{轮次}": result.round_number,
+                        "{轮次}": (
+                            f"{result.round_number}/{result.maximum_rounds}"
+                            if result.mode == "points_tournament"
+                            else result.round_number
+                        ),
                         "{惩罚类型}": (
                             "大冒险"
                             if result.punishment_type == "dare"
@@ -2618,13 +2623,14 @@ class GroupCommandHandler:
                 "【蹦蹦数字炸弹】",
                 (
                     ("/蹦蹦数字炸弹", "/蹦蹦数字炸弹：创建普通报名局；至少3名玩家后手动开始\n/蹦蹦数字炸弹 积分赛：创建固定8人、12轮积分赛，第8人加入后自动开始"),
+                    ("/蹦蹦数字炸弹", "积分规则：第1名 +10、第2名 +5、第3–6名 0、第7名 -3、第8名 +2；并列第一同为第1，并列最后同为实际报数人数对应的最后名次，其他并列取起始名次"),
                     ("/加入", "/加入：报名当前对局；积分赛开局后不接受替补"),
                     ("/开始", "/开始：报名阶段由任一参与者开始第一轮"),
                     ("/报数", "私聊 /报数 数字：提交 1–100 的本轮整数"),
                     ("/跳过", "/跳过 编号：首次未报数提醒后处理未报数玩家；积分赛中该玩家本轮 -3 分但下轮仍可参加"),
                     ("/退出", "/退出：普通局从下一轮退出；积分赛立即退赛且后续每轮 -3 分"),
                     ("/继续", "/继续：本轮结算后由任一未退赛参与者开启下一轮；积分赛第12轮自动结束"),
-                    ("/结束游戏", "/结束游戏：任一参与者终止整场游戏"),
+                    ("/结束游戏", "/结束游戏：任一未退赛参与者可提前结束积分赛；未完成轮次不计分"),
                 ),
             ),
             "德州扑克": (
