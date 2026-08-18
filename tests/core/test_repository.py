@@ -370,6 +370,68 @@ def test_texas_holdem_signup_debits_buy_in_and_waiting_exit_refunds(
     assert texas_repository.texas_holdem_summary(now, PRIMARY_GROUP_CHAT_ID).state is None
 
 
+def test_texas_holdem_signup_snapshots_limits_blinds_and_action_timeout(
+    texas_repository, session_factory, now
+):
+    _prepare_texas_users(texas_repository, now, "texas-p1", "texas-p2")
+    texas_repository.start_texas_holdem_signup(
+        "texas-p1", 20, now, PRIMARY_GROUP_CHAT_ID
+    )
+    texas_repository.join_texas_holdem("texas-p2", now, PRIMARY_GROUP_CHAT_ID)
+    texas_repository.set_texas_holdem_settings(
+        enabled=True,
+        minimum_players=3,
+        maximum_players=3,
+        minimum_buy_in=20,
+        maximum_buy_in=200,
+        daily_start_limit=2,
+        signup_timeout_seconds=300,
+        action_timeout_seconds=30,
+        small_blind_percent=20,
+        big_blind_percent=40,
+    )
+
+    started = texas_repository.start_texas_holdem_hand(
+        "texas-p1", now, PRIMARY_GROUP_CHAT_ID
+    )
+    assert started.status == "dealing"
+    _confirm_outbound(texas_repository, "direct-texas-p1", now, 1)
+    _confirm_outbound(texas_repository, "direct-texas-p2", now, 2)
+    summary = texas_repository.texas_holdem_summary(now, PRIMARY_GROUP_CHAT_ID)
+    assert summary.action_deadline == now + timedelta(seconds=120)
+    with session_factory() as session:
+        game = session.get(TexasHoldemGameRecord, started.game_id)
+    assert (game.small_blind_amount, game.big_blind_amount) == (1, 2)
+
+
+def test_texas_holdem_signup_snapshots_table_capacity(texas_repository, now):
+    _prepare_texas_users(
+        texas_repository, now, "texas-p1", "texas-p2", "texas-p3"
+    )
+    texas_repository.start_texas_holdem_signup(
+        "texas-p1", 20, now, PRIMARY_GROUP_CHAT_ID
+    )
+    texas_repository.set_texas_holdem_settings(
+        enabled=True,
+        minimum_players=2,
+        maximum_players=2,
+        minimum_buy_in=20,
+        maximum_buy_in=200,
+        daily_start_limit=1,
+        signup_timeout_seconds=120,
+        action_timeout_seconds=120,
+        small_blind_percent=5,
+        big_blind_percent=10,
+    )
+
+    assert texas_repository.join_texas_holdem(
+        "texas-p2", now, PRIMARY_GROUP_CHAT_ID
+    ).status == "joined"
+    assert texas_repository.join_texas_holdem(
+        "texas-p3", now, PRIMARY_GROUP_CHAT_ID
+    ).status == "joined"
+
+
 def test_daily_jobs_cancel_expired_texas_holdem_signup_and_notify_group(
     texas_repository, session_factory, now
 ):

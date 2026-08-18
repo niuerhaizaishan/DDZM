@@ -749,6 +749,24 @@ class TexasHoldemGameRecord(Base):
     street: Mapped[str | None] = mapped_column(String(16))
     active_key: Mapped[str | None] = mapped_column(String(32))
     buy_in: Mapped[int] = mapped_column(Integer, nullable=False)
+    minimum_players_snapshot: Mapped[int] = mapped_column(
+        Integer, default=2, nullable=False
+    )
+    maximum_players_snapshot: Mapped[int] = mapped_column(
+        Integer, default=9, nullable=False
+    )
+    daily_start_limit_snapshot: Mapped[int] = mapped_column(
+        Integer, default=1, nullable=False
+    )
+    action_timeout_seconds_snapshot: Mapped[int] = mapped_column(
+        Integer, default=120, nullable=False
+    )
+    small_blind_percent_snapshot: Mapped[int] = mapped_column(
+        Integer, default=5, nullable=False
+    )
+    big_blind_percent_snapshot: Mapped[int] = mapped_column(
+        Integer, default=10, nullable=False
+    )
     deck: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON)
     board: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
     button_seat: Mapped[int | None] = mapped_column(Integer)

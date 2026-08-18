@@ -5500,6 +5500,12 @@ class CoreRepository:
                     state="signup",
                     active_key="global",
                     buy_in=buy_in,
+                    minimum_players_snapshot=settings.minimum_players,
+                    maximum_players_snapshot=settings.maximum_players,
+                    daily_start_limit_snapshot=settings.daily_start_limit,
+                    action_timeout_seconds_snapshot=settings.action_timeout_seconds,
+                    small_blind_percent_snapshot=settings.small_blind_percent,
+                    big_blind_percent_snapshot=settings.big_blind_percent,
                     board=[],
                     current_bet=0,
                     last_full_raise=0,
@@ -5529,7 +5535,6 @@ class CoreRepository:
         group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
     ) -> TexasHoldemResult:
         now = now.astimezone(BEIJING)
-        settings = self.get_texas_holdem_settings()
         with self.transaction():
             with self._session() as session:
                 game = self._active_texas_holdem_game(session, group_chat_id)
@@ -5560,7 +5565,7 @@ class CoreRepository:
                     )
                     or 0
                 )
-                if count >= settings.maximum_players:
+                if count >= game.maximum_players_snapshot:
                     return TexasHoldemResult("full", game.id, count)
                 if not self._has_direct_chat(session, platform_id):
                     return TexasHoldemResult("direct_chat_required", game.id, count)
@@ -5652,7 +5657,6 @@ class CoreRepository:
         group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
     ) -> TexasHoldemResult:
         now = now.astimezone(BEIJING)
-        settings = self.get_texas_holdem_settings()
         with self.transaction():
             with self._session() as session:
                 game = self._active_texas_holdem_game(session, group_chat_id)
@@ -5668,7 +5672,7 @@ class CoreRepository:
                 )
                 if not any(user.platform_id == platform_id for _, user in rows):
                     return TexasHoldemResult("not_participant", game.id, len(rows))
-                if len(rows) < settings.minimum_players:
+                if len(rows) < game.minimum_players_snapshot:
                     return TexasHoldemResult("insufficient_players", game.id, len(rows))
                 if now >= game.signup_deadline:
                     self._refund_texas_signup(session, game, now)
@@ -5691,7 +5695,10 @@ class CoreRepository:
                     )
                     .with_for_update()
                 )
-                if creator_start is not None and creator_start.count >= settings.daily_start_limit:
+                if (
+                    creator_start is not None
+                    and creator_start.count >= game.daily_start_limit_snapshot
+                ):
                     return TexasHoldemResult("daily_limit", game.id, len(rows))
 
                 deck = list(build_deck())
@@ -5712,10 +5719,15 @@ class CoreRepository:
                     game.small_blind_seat = next_seat(game.button_seat)
                     game.big_blind_seat = next_seat(game.small_blind_seat)
                 game.small_blind_amount = max(
-                    1, (game.buy_in * settings.small_blind_percent + 99) // 100
+                    1,
+                    (
+                        game.buy_in * game.small_blind_percent_snapshot + 99
+                    )
+                    // 100,
                 )
                 game.big_blind_amount = max(
-                    2, (game.buy_in * settings.big_blind_percent + 99) // 100
+                    2,
+                    (game.buy_in * game.big_blind_percent_snapshot + 99) // 100,
                 )
                 game.current_bet = game.big_blind_amount
                 game.last_full_raise = game.big_blind_amount
@@ -5786,7 +5798,6 @@ class CoreRepository:
         )
         if int(pending or 0) != 0:
             return
-        settings = self.get_texas_holdem_settings()
         seats = tuple(
             seat
             for seat in session.scalars(
@@ -5801,7 +5812,9 @@ class CoreRepository:
         )
         game.state = "preflop"
         game.current_seat = preflop_first_seat(seats, game.button_seat or 1)
-        game.action_deadline = now + timedelta(seconds=settings.action_timeout_seconds)
+        game.action_deadline = now + timedelta(
+            seconds=game.action_timeout_seconds_snapshot
+        )
         rows = self._texas_players(session, game.id)
         current_name = next(
             user.display_name
@@ -6015,8 +6028,9 @@ class CoreRepository:
             ordered = sorted(active_seats)
             first = ordered[(ordered.index(first) + 1) % len(ordered)]
         game.current_seat = first
-        settings = self.get_texas_holdem_settings()
-        game.action_deadline = now + timedelta(seconds=settings.action_timeout_seconds)
+        game.action_deadline = now + timedelta(
+            seconds=game.action_timeout_seconds_snapshot
+        )
         return TexasHoldemResult(
             "street_advanced",
             game.id,
@@ -6101,8 +6115,9 @@ class CoreRepository:
         if result.round_complete:
             advanced = self._advance_texas_street(session, game, rows, now)
             return replace(advanced, next_seat=game.current_seat, **action_values)
-        settings = self.get_texas_holdem_settings()
-        game.action_deadline = now + timedelta(seconds=settings.action_timeout_seconds)
+        game.action_deadline = now + timedelta(
+            seconds=game.action_timeout_seconds_snapshot
+        )
         return TexasHoldemResult(
             "acted",
             game.id,

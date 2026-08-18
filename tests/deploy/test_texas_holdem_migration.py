@@ -49,6 +49,17 @@ def test_texas_holdem_migration_adds_group_scoped_tables_and_defaults(
         if column["name"] == "group_chat_id"
     )
     assert group_column["nullable"] is False
+    game_columns = {
+        column["name"] for column in inspector.get_columns("texas_holdem_games")
+    }
+    assert {
+        "minimum_players_snapshot",
+        "maximum_players_snapshot",
+        "daily_start_limit_snapshot",
+        "action_timeout_seconds_snapshot",
+        "small_blind_percent_snapshot",
+        "big_blind_percent_snapshot",
+    } <= game_columns
     with engine.connect() as connection:
         settings = connection.execute(
             text(
