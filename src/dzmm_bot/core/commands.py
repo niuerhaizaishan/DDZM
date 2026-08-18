@@ -1261,22 +1261,29 @@ class GroupCommandHandler:
             received_at,
             **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
         )
-        if result.public_message:
-            return result.public_message
-        if result.status in {"acted", "street_advanced"}:
-            summary = self._repository.texas_holdem_summary(
-                received_at,
-                **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
-            )
+        if result.status in {"acted", "street_advanced", "settled"}:
             user = self._repository.find_user(platform_id)
-            return self._reply(
+            acknowledgement = self._reply(
                 command,
                 "acted",
                 received_at,
                 {
                     "{昵称}": "玩家" if user is None else user.display_name,
-                    "{底池}": summary.total_pot,
+                    "{座位}": result.actor_seat or "—",
+                    "{投入}": result.committed_amount,
+                    "{底池}": result.total_pot,
+                    "{剩余筹码}": result.remaining_stack,
+                    "{下一位}": (
+                        f"{result.next_seat}号"
+                        if result.next_seat is not None
+                        else "本轮已结束"
+                    ),
                 },
+            )
+            return (
+                [acknowledgement, result.public_message]
+                if result.public_message
+                else acknowledgement
             )
         reasons = {
             "not_your_turn": "还没轮到你",
