@@ -2489,6 +2489,312 @@ def test_number_bomb_rejects_unknown_game_mode(repository, now):
         repository.start_number_bomb_game(platform_id, now, mode="ranked")
 
 
+def _start_number_bomb_points_tournament(repository, now, prefix):
+    platform_ids = _prepare_number_bomb_players(repository, now, prefix, 8)
+    repository.start_number_bomb_game(
+        platform_ids[0], now, mode="points_tournament"
+    )
+    for platform_id in platform_ids[1:]:
+        repository.join_number_bomb_game(platform_id, now)
+    return platform_ids
+
+
+def test_number_bomb_points_tournament_settlement_persists_round_and_total_points(
+    session_factory, now
+):
+    from dzmm_bot.core.repository import CoreRepository
+
+    repository = CoreRepository(
+        session_factory,
+        number_bomb_random=_ScriptedNumberBombRandom((10,)),
+    )
+    platform_ids = _start_number_bomb_points_tournament(
+        repository, now, "points-score"
+    )
+    for platform_id, number in zip(
+        platform_ids, (1, 10, 20, 30, 40, 50, 70, 100), strict=True
+    ):
+        result = repository.submit_number_bomb(platform_id, number, now)
+
+    assert result.status == "settled"
+    assert "本轮积分" in result.public_message
+    assert repository.number_bomb_game_summary().state == "waiting_continue"
+    with repository._session() as session:
+        rows = list(
+            session.execute(
+                select(
+                    UserRecord.platform_id,
+                    NumberBombMemberRecord.total_points,
+                    NumberBombRoundPlayerRecord.competition_rank,
+                    NumberBombRoundPlayerRecord.round_points,
+                    NumberBombRoundPlayerRecord.result_reason,
+                )
+                .join(
+                    NumberBombMemberRecord,
+                    NumberBombMemberRecord.user_id == UserRecord.id,
+                )
+                .join(
+                    NumberBombRoundPlayerRecord,
+                    NumberBombRoundPlayerRecord.user_id == UserRecord.id,
+                )
+                .order_by(NumberBombMemberRecord.roster_order)
+            )
+        )
+    assert rows == [
+        (platform_ids[0], -3, 7, -3, "reported"),
+        (platform_ids[1], 0, 6, 0, "reported"),
+        (platform_ids[2], 0, 4, 0, "reported"),
+        (platform_ids[3], 0, 3, 0, "reported"),
+        (platform_ids[4], 10, 1, 10, "reported"),
+        (platform_ids[5], 5, 2, 5, "reported"),
+        (platform_ids[6], 0, 5, 0, "reported"),
+        (platform_ids[7], 2, 8, 2, "reported"),
+    ]
+
+
+def test_number_bomb_points_tournament_skip_penalty_keeps_player_next_round(
+    session_factory, now
+):
+    from dzmm_bot.core.repository import CoreRepository
+
+    repository = CoreRepository(
+        session_factory,
+        number_bomb_random=_ScriptedNumberBombRandom((10, 9)),
+    )
+    platform_ids = _start_number_bomb_points_tournament(
+        repository, now, "points-skip"
+    )
+    for platform_id, number in zip(
+        platform_ids[:7], (10, 20, 30, 40, 50, 70, 100), strict=True
+    ):
+        repository.submit_number_bomb(platform_id, number, now)
+    repository.run_number_bomb_jobs(now + timedelta(seconds=15))
+
+    skipped = repository.skip_number_bomb_players(
+        platform_ids[0], ("8",), now + timedelta(seconds=16)
+    )
+
+    assert skipped.status == "settled"
+    with repository._session() as session:
+        skipped_member = session.scalar(
+            select(NumberBombMemberRecord)
+            .join(UserRecord, UserRecord.id == NumberBombMemberRecord.user_id)
+            .where(UserRecord.platform_id == platform_ids[7])
+        )
+        skipped_row = session.scalar(
+            select(NumberBombRoundPlayerRecord)
+            .join(UserRecord, UserRecord.id == NumberBombRoundPlayerRecord.user_id)
+            .where(UserRecord.platform_id == platform_ids[7])
+        )
+    assert (
+        skipped_member.state,
+        skipped_member.total_points,
+        skipped_row.competition_rank,
+        skipped_row.round_points,
+        skipped_row.result_reason,
+    ) == ("current", -3, None, -3, "skipped")
+
+    continued = repository.continue_number_bomb_game(
+        platform_ids[0], now + timedelta(seconds=17)
+    )
+
+    assert (continued.status, continued.round_number, continued.player_count) == (
+        "started", 2, 8,
+    )
+    assert platform_ids[7] in {player.platform_id for player in continued.players}
+
+
+def test_number_bomb_points_tournament_retirement_penalizes_remaining_rounds(
+    session_factory, now
+):
+    from dzmm_bot.core.repository import CoreRepository
+
+    repository = CoreRepository(
+        session_factory,
+        number_bomb_random=_ScriptedNumberBombRandom((10, 9)),
+    )
+    platform_ids = _start_number_bomb_points_tournament(
+        repository, now, "points-retire"
+    )
+
+    retired = repository.leave_number_bomb_game(
+        platform_ids[7], now + timedelta(seconds=1)
+    )
+
+    assert retired.status == "retired"
+    for platform_id, number in zip(
+        platform_ids[:7], (10, 20, 30, 40, 50, 70, 100), strict=True
+    ):
+        settled = repository.submit_number_bomb(
+            platform_id, number, now + timedelta(seconds=2)
+        )
+    assert settled.status == "settled"
+    with repository._session() as session:
+        member = session.scalar(
+            select(NumberBombMemberRecord)
+            .join(UserRecord, UserRecord.id == NumberBombMemberRecord.user_id)
+            .where(UserRecord.platform_id == platform_ids[7])
+        )
+    assert (member.state, member.retired_at_round, member.total_points) == (
+        "retired", 2, -3,
+    )
+
+    continued = repository.continue_number_bomb_game(
+        platform_ids[0], now + timedelta(seconds=3)
+    )
+    assert (continued.status, continued.round_number) == ("started", 2)
+    assert next(
+        player for player in continued.players if player.platform_id == platform_ids[7]
+    ).state == "retired"
+    for platform_id, number in zip(
+        platform_ids[:7], (10, 20, 30, 40, 50, 70, 100), strict=True
+    ):
+        settled = repository.submit_number_bomb(
+            platform_id, number, now + timedelta(seconds=4)
+        )
+    assert settled.status == "settled"
+    with repository._session() as session:
+        member = session.scalar(
+            select(NumberBombMemberRecord)
+            .join(UserRecord, UserRecord.id == NumberBombMemberRecord.user_id)
+            .where(UserRecord.platform_id == platform_ids[7])
+        )
+        second_round = session.scalar(
+            select(NumberBombRoundPlayerRecord)
+            .join(NumberBombRoundRecord)
+            .join(UserRecord, UserRecord.id == NumberBombRoundPlayerRecord.user_id)
+            .where(
+                NumberBombRoundRecord.round_number == 2,
+                UserRecord.platform_id == platform_ids[7],
+            )
+        )
+    assert member.total_points == -6
+    assert (
+        second_round.submitted_number,
+        second_round.competition_rank,
+        second_round.round_points,
+        second_round.result_reason,
+    ) == (None, None, -3, "retired")
+
+
+def test_number_bomb_points_tournament_all_retired_auto_fills_remaining_rounds(
+    session_factory, now
+):
+    from dzmm_bot.core.repository import CoreRepository
+
+    repository = CoreRepository(
+        session_factory,
+        number_bomb_random=_ScriptedNumberBombRandom((10,) * 12),
+    )
+    platform_ids = _start_number_bomb_points_tournament(
+        repository, now, "points-all-retired"
+    )
+
+    for index, platform_id in enumerate(platform_ids, 1):
+        result = repository.leave_number_bomb_game(
+            platform_id, now + timedelta(seconds=index)
+        )
+
+    assert result.status == "tournament_finished"
+    assert "全员已退赛" in result.public_message
+    assert "最终积分榜" in result.public_message
+    assert repository.number_bomb_game_summary().state is None
+    with repository._session() as session:
+        games = list(session.scalars(select(NumberBombGameRecord)))
+        rounds = list(
+            session.scalars(
+                select(NumberBombRoundRecord).order_by(
+                    NumberBombRoundRecord.round_number
+                )
+            )
+        )
+        members = list(
+            session.scalars(
+                select(NumberBombMemberRecord).order_by(
+                    NumberBombMemberRecord.roster_order
+                )
+            )
+        )
+    assert len(games) == 1
+    assert [(record.round_number, record.state) for record in rounds] == [
+        (round_number, "settled") for round_number in range(1, 13)
+    ]
+    assert [member.total_points for member in members] == [-36] * 8
+
+
+def test_number_bomb_points_tournament_all_retire_between_rounds_auto_finishes(
+    session_factory, now
+):
+    from dzmm_bot.core.repository import CoreRepository
+
+    repository = CoreRepository(
+        session_factory,
+        number_bomb_random=_ScriptedNumberBombRandom((10,) * 12),
+    )
+    platform_ids = _start_number_bomb_points_tournament(
+        repository, now, "points-retire-between"
+    )
+    for platform_id, number in zip(
+        platform_ids, (1, 10, 20, 30, 40, 50, 70, 100), strict=True
+    ):
+        repository.submit_number_bomb(platform_id, number, now)
+
+    for index, platform_id in enumerate(platform_ids, 1):
+        result = repository.leave_number_bomb_game(
+            platform_id, now + timedelta(seconds=index)
+        )
+
+    assert result.status == "tournament_finished"
+    assert "剩余轮次" in result.public_message
+    assert repository.number_bomb_game_summary().state is None
+    with repository._session() as session:
+        rounds = list(session.scalars(select(NumberBombRoundRecord)))
+    assert len(rounds) == 12
+
+
+def test_number_bomb_points_tournament_twelfth_round_auto_finishes_with_final_board(
+    session_factory, now
+):
+    from dzmm_bot.core.repository import CoreRepository
+
+    repository = CoreRepository(
+        session_factory,
+        number_bomb_random=_ScriptedNumberBombRandom((10, 10)),
+    )
+    platform_ids = _start_number_bomb_points_tournament(
+        repository, now, "points-final"
+    )
+    with repository.transaction():
+        with repository._session() as session:
+            game = session.scalar(select(NumberBombGameRecord).with_for_update())
+            first_round = session.scalar(select(NumberBombRoundRecord).with_for_update())
+            first_round.state = "settled"
+            first_round.finished_at = now
+            game.state = "waiting_continue"
+            game.round_number = 11
+            game.attempt_number = 1
+
+    started = repository.continue_number_bomb_game(
+        platform_ids[0], now + timedelta(seconds=1)
+    )
+    assert (started.status, started.round_number) == ("started", 12)
+    for platform_id, number in zip(
+        platform_ids, (1, 10, 20, 30, 40, 50, 70, 100), strict=True
+    ):
+        result = repository.submit_number_bomb(
+            platform_id, number, now + timedelta(seconds=2)
+        )
+
+    assert result.status == "tournament_finished"
+    assert "最终积分榜" in result.public_message
+    assert repository.number_bomb_game_summary().state is None
+    with repository._session() as session:
+        game = session.scalar(select(NumberBombGameRecord))
+    assert (game.state, game.active_key, game.finish_reason) == (
+        "ended", None, "maximum_rounds_reached",
+    )
+
+
 def test_number_bomb_requires_direct_chat_for_creation_join_and_start(repository, now):
     repository.create_user("missing-direct", "无私聊", now, 20)
     assert repository.start_number_bomb_game("missing-direct", now).status == (

@@ -53,6 +53,7 @@ from .number_bomb import (
     NUMBER_BOMB_MULTIPLIER_TENTHS,
     NumberBombEntry,
     calculate_number_bomb,
+    calculate_points_tournament_scores,
     render_number_bomb_result,
 )
 from .red_packet import RandomSource, generate_red_packet_allocation
@@ -7422,6 +7423,91 @@ class CoreRepository:
                 if member.state == "pending_exit":
                     return NumberBombGameResult("cannot_leave", game_id=game.id)
                 if member.state == "current":
+                    if game.mode == "points_tournament":
+                        member.state = "retired"
+                        member.retired_at_round = game.round_number + 1
+                        game.last_activity_at = now
+                        if game.state == "collecting":
+                            round_record = session.scalar(
+                                select(NumberBombRoundRecord)
+                                .where(
+                                    NumberBombRoundRecord.game_id == game.id,
+                                    NumberBombRoundRecord.state == "collecting",
+                                    NumberBombRoundRecord.round_number == game.round_number,
+                                    NumberBombRoundRecord.attempt_number == game.attempt_number,
+                                )
+                                .with_for_update()
+                            )
+                            if round_record is None:
+                                raise RuntimeError("蹦蹦数字炸弹收数轮消失")
+                            player = session.scalar(
+                                select(NumberBombRoundPlayerRecord)
+                                .where(
+                                    NumberBombRoundPlayerRecord.round_id == round_record.id,
+                                    NumberBombRoundPlayerRecord.user_id == member.user_id,
+                                )
+                                .with_for_update()
+                            )
+                            if player is None:
+                                raise RuntimeError("蹦蹦数字炸弹参赛快照消失")
+                            if player.submitted_number is None:
+                                player.skipped_at = now
+                                player.result_reason = "skipped"
+                            pending_count = int(
+                                session.scalar(
+                                    select(func.count(NumberBombRoundPlayerRecord.id))
+                                    .join(
+                                        NumberBombMemberRecord,
+                                        (NumberBombMemberRecord.game_id == game.id)
+                                        & (
+                                            NumberBombMemberRecord.user_id
+                                            == NumberBombRoundPlayerRecord.user_id
+                                        ),
+                                    )
+                                    .where(
+                                        NumberBombRoundPlayerRecord.round_id == round_record.id,
+                                        NumberBombRoundPlayerRecord.submitted_number.is_(None),
+                                        NumberBombRoundPlayerRecord.skipped_at.is_(None),
+                                        NumberBombMemberRecord.state == "current",
+                                    )
+                                )
+                                or 0
+                            )
+                            if pending_count == 0:
+                                return self._settle_number_bomb_round(
+                                    session, game, round_record, now
+                                )
+                        if self._number_bomb_member_count(
+                            session, game.id, ("current",)
+                        ) == 0:
+                            self._fill_retired_number_bomb_points_rounds(
+                                session, game, now
+                            )
+                            self._finish_number_bomb_game(
+                                session,
+                                game,
+                                "all_players_retired",
+                                now,
+                                status="tournament_finished",
+                            )
+                            return NumberBombGameResult(
+                                "tournament_finished",
+                                game_id=game.id,
+                                player_count=game.target_player_count,
+                                target_player_count=game.target_player_count,
+                                round_number=game.round_number,
+                                public_message=(
+                                    "全员已退赛，剩余轮次均按每轮 -3 分结算。\n"
+                                    + self._render_number_bomb_points_board(
+                                        session, game.id, final=True
+                                    )
+                                ),
+                            )
+                        return NumberBombGameResult(
+                            "retired",
+                            game_id=game.id,
+                            round_number=game.round_number or None,
+                        )
                     member.state = "pending_exit"
                     game.last_activity_at = now
                     return NumberBombGameResult("exit_queued", game_id=game.id)
@@ -7640,11 +7726,14 @@ class CoreRepository:
                 )
                 for player, _, member in resolved:
                     player.skipped_at = now
-                    member.state = "left"
+                    if game.mode == "points_tournament":
+                        player.result_reason = "skipped"
+                    else:
+                        member.state = "left"
                 remaining = [row for row in rows if row not in resolved]
                 round_record.player_count = len(remaining)
                 game.last_activity_at = now
-                if len(remaining) < 3:
+                if game.mode != "points_tournament" and len(remaining) < 3:
                     self._finish_number_bomb_game(
                         session,
                         game,
@@ -7679,6 +7768,10 @@ class CoreRepository:
         round_record: NumberBombRoundRecord,
         now: datetime,
     ) -> NumberBombGameResult:
+        if game.mode == "points_tournament":
+            return self._settle_number_bomb_points_round(
+                session, game, round_record, now
+            )
         rows = list(
             session.execute(
                 select(NumberBombRoundPlayerRecord, UserRecord)
@@ -7797,6 +7890,305 @@ class CoreRepository:
             public_message=public_message,
         )
 
+    def _settle_number_bomb_points_round(
+        self,
+        session: Session,
+        game: NumberBombGameRecord,
+        round_record: NumberBombRoundRecord,
+        now: datetime,
+    ) -> NumberBombGameResult:
+        rows = list(
+            session.execute(
+                select(
+                    NumberBombRoundPlayerRecord,
+                    UserRecord,
+                    NumberBombMemberRecord,
+                )
+                .join(UserRecord, UserRecord.id == NumberBombRoundPlayerRecord.user_id)
+                .join(
+                    NumberBombMemberRecord,
+                    (NumberBombMemberRecord.game_id == game.id)
+                    & (NumberBombMemberRecord.user_id == UserRecord.id),
+                )
+                .where(NumberBombRoundPlayerRecord.round_id == round_record.id)
+                .order_by(NumberBombRoundPlayerRecord.display_order)
+                .with_for_update()
+            )
+        )
+        reported = [(player, user, member) for player, user, member in rows if player.submitted_number is not None]
+        absent = [(player, user, member) for player, user, member in rows if player.submitted_number is None]
+        calculation = None
+        scores_by_platform_id = {}
+        standings_by_platform_id = {}
+        if reported:
+            calculation = calculate_number_bomb(
+                tuple(
+                    NumberBombEntry(
+                        user.platform_id,
+                        user.display_name,
+                        player.submitted_number,
+                        player.display_order,
+                    )
+                    for player, user, _ in reported
+                ),
+                round_record.multiplier_tenths,
+            )
+            scores = calculate_points_tournament_scores(
+                calculation,
+                tuple(user.platform_id for _, user, _ in absent),
+            )
+            scores_by_platform_id = {
+                player.platform_id: player for player in scores.players
+            }
+            standings_by_platform_id = {
+                standing.entry.platform_id: standing
+                for standing in calculation.standings
+            }
+            round_record.total = calculation.total
+            round_record.target_numerator = calculation.target_numerator
+            round_record.target_denominator = calculation.target_denominator
+
+        for player, user, member in rows:
+            score = scores_by_platform_id.get(user.platform_id)
+            if score is None:
+                rank = None
+                points = -3
+            else:
+                rank = score.rank
+                points = score.points
+            player.competition_rank = rank
+            player.round_points = points
+            member.total_points += points
+            if player.submitted_number is None:
+                player.result_reason = player.result_reason or "skipped"
+                player.result = "punished" if points < 0 else "neutral"
+            else:
+                standing = standings_by_platform_id[user.platform_id]
+                player.deviation_numerator = standing.deviation_numerator
+                player.result_reason = "reported"
+                player.result = (
+                    "winner" if rank == 1 else "punished" if rank == 7 else "neutral"
+                )
+            self._record_ai_activity_fact(
+                session,
+                event_key=(
+                    f"number_bomb_points:{game.id}:{round_record.round_number}:"
+                    f"{user.id}"
+                ),
+                user_id=user.id,
+                activity_type="number_bomb",
+                result=(
+                    "win" if rank == 1 else "loss" if points < 0 else "ended"
+                ),
+                occurred_at=now,
+                detail=round_record.punishment_type,
+            )
+
+        round_record.player_count = len(reported)
+        round_record.state = "settled"
+        round_record.finished_at = now
+        game.last_activity_at = now
+        game.next_reminder_at = None
+        game.skip_enabled = False
+        public_message = self._render_number_bomb_points_round(
+            session, game, round_record, rows, calculation
+        )
+        submitted_count = len(reported)
+        current_count = self._number_bomb_member_count(
+            session, game.id, ("current",)
+        )
+        if current_count == 0 and round_record.round_number < game.maximum_rounds:
+            self._fill_retired_number_bomb_points_rounds(session, game, now)
+            self._finish_number_bomb_game(
+                session, game, "all_players_retired", now,
+                status="tournament_finished",
+            )
+            public_message = (
+                f"{public_message}\n\n全员已退赛，剩余轮次均按每轮 -3 分结算。\n"
+                f"{self._render_number_bomb_points_board(session, game.id, final=True)}"
+            )
+            return NumberBombGameResult(
+                "tournament_finished",
+                game_id=game.id,
+                player_count=len(rows),
+                target_player_count=game.target_player_count,
+                round_number=game.round_number,
+                punishment_type=round_record.punishment_type,
+                submitted_count=submitted_count,
+                public_message=public_message,
+            )
+        if round_record.round_number >= game.maximum_rounds:
+            self._finish_number_bomb_game(
+                session, game, "maximum_rounds_reached", now,
+                status="tournament_finished",
+            )
+            public_message = (
+                f"{public_message}\n\n12 轮积分赛已结束。\n"
+                f"{self._render_number_bomb_points_board(session, game.id, final=True)}"
+            )
+            return NumberBombGameResult(
+                "tournament_finished",
+                game_id=game.id,
+                player_count=len(rows),
+                target_player_count=game.target_player_count,
+                round_number=round_record.round_number,
+                punishment_type=round_record.punishment_type,
+                submitted_count=submitted_count,
+                public_message=public_message,
+            )
+
+        game.state = "waiting_continue"
+        return NumberBombGameResult(
+            "settled",
+            game_id=game.id,
+            player_count=len(rows),
+            target_player_count=game.target_player_count,
+            round_number=round_record.round_number,
+            punishment_type=round_record.punishment_type,
+            submitted_count=submitted_count,
+            public_message=public_message,
+        )
+
+    def _fill_retired_number_bomb_points_rounds(
+        self,
+        session: Session,
+        game: NumberBombGameRecord,
+        now: datetime,
+    ) -> None:
+        members = list(
+            session.execute(
+                select(NumberBombMemberRecord, UserRecord)
+                .join(UserRecord, UserRecord.id == NumberBombMemberRecord.user_id)
+                .where(NumberBombMemberRecord.game_id == game.id)
+                .order_by(NumberBombMemberRecord.roster_order)
+                .with_for_update(of=NumberBombMemberRecord)
+            )
+        )
+        for round_number in range(game.round_number + 1, game.maximum_rounds + 1):
+            punishment_type = "dare" if round_number % 3 == 0 else "truth"
+            round_record = NumberBombRoundRecord(
+                game_id=game.id,
+                round_number=round_number,
+                attempt_number=1,
+                punishment_type=punishment_type,
+                multiplier_tenths=self._number_bomb_random.choice(
+                    NUMBER_BOMB_MULTIPLIER_TENTHS
+                ),
+                state="settled",
+                player_count=0,
+                created_at=now,
+                finished_at=now,
+            )
+            session.add(round_record)
+            session.flush()
+            for display_order, (member, user) in enumerate(members, 1):
+                session.add(
+                    NumberBombRoundPlayerRecord(
+                        round_id=round_record.id,
+                        user_id=member.user_id,
+                        display_order=display_order,
+                        skipped_at=now,
+                        round_points=-3,
+                        result_reason="retired",
+                        result="punished",
+                    )
+                )
+                member.total_points -= 3
+                self._record_ai_activity_fact(
+                    session,
+                    event_key=(
+                        f"number_bomb_points:{game.id}:{round_number}:{user.id}"
+                    ),
+                    user_id=user.id,
+                    activity_type="number_bomb",
+                    result="loss",
+                    occurred_at=now,
+                    detail=punishment_type,
+                )
+            game.round_number = round_number
+            game.attempt_number = 1
+            game.last_activity_at = now
+
+    def _render_number_bomb_points_round(
+        self,
+        session: Session,
+        game: NumberBombGameRecord,
+        round_record: NumberBombRoundRecord,
+        rows,
+        calculation,
+    ) -> str:
+        punishment = "大冒险" if round_record.punishment_type == "dare" else "真心话"
+        lines = [f"第 {round_record.round_number} 轮 - {punishment}"]
+        if calculation is not None:
+            target = calculation.target_numerator / calculation.target_denominator
+            lines.extend(
+                [
+                    f"本轮随机倍率：×{round_record.multiplier_tenths / 10:g}",
+                    f"最终数 F：{target:.2f}",
+                ]
+            )
+        lines.append("本轮积分")
+        for player, user, _ in sorted(
+            rows,
+            key=lambda row: (
+                row[0].competition_rank is None,
+                row[0].competition_rank or 99,
+                row[0].display_order,
+            ),
+        ):
+            points = f"+{player.round_points}" if player.round_points > 0 else str(player.round_points)
+            if player.result_reason == "reported":
+                lines.append(
+                    f"{user.display_name}：第 {player.competition_rank} 名，{points} 分"
+                )
+            else:
+                label = "已退赛" if player.result_reason == "retired" else "未报数"
+                lines.append(f"{user.display_name}：{label}，{points} 分")
+        winners = "、".join(
+            user.display_name
+            for player, user, _ in rows
+            if player.competition_rank == 1
+        )
+        punished = "、".join(
+            user.display_name
+            for player, user, _ in rows
+            if player.competition_rank == 7
+        )
+        if winners:
+            lines.append(f"本轮第 1 名：{winners}")
+        if punished:
+            lines.append(
+                f"本轮第 7 名：{punished}，执行{punishment}，由第 1 名出题并监督。"
+            )
+        lines.append(self._render_number_bomb_points_board(session, game.id))
+        return "\n".join(lines)
+
+    def _render_number_bomb_points_board(
+        self, session: Session, game_id: UUID, *, final: bool = False
+    ) -> str:
+        rows = list(
+            session.execute(
+                select(NumberBombMemberRecord, UserRecord)
+                .join(UserRecord, UserRecord.id == NumberBombMemberRecord.user_id)
+                .where(NumberBombMemberRecord.game_id == game_id)
+                .order_by(
+                    NumberBombMemberRecord.total_points.desc(),
+                    NumberBombMemberRecord.roster_order,
+                )
+            )
+        )
+        title = "最终积分榜" if final else "累计积分榜"
+        lines = [title]
+        for member, user in rows:
+            rank = 1 + sum(
+                other.total_points > member.total_points for other, _ in rows
+            )
+            retired = "（已退赛）" if member.state == "retired" else ""
+            lines.append(
+                f"第 {rank} 名：{user.display_name} {member.total_points} 分{retired}"
+            )
+        return "\n".join(lines)
+
     def continue_number_bomb_game(
         self,
         platform_id: str,
@@ -7838,7 +8230,7 @@ class CoreRepository:
                     if member.state == "pending_join":
                         member.state = "current"
                 current_count = sum(member.state == "current" for member in members)
-                if current_count < 3:
+                if game.mode != "points_tournament" and current_count < 3:
                     return self._finish_number_bomb_game(
                         session, game, "insufficient_players", now,
                         status="insufficient_players",
@@ -7940,12 +8332,17 @@ class CoreRepository:
         now: datetime,
         multiplier_tenths: int | None = None,
     ) -> NumberBombGameResult:
+        member_states = (
+            ("current", "retired")
+            if game.mode == "points_tournament"
+            else ("current",)
+        )
         members = list(
             session.scalars(
                 select(NumberBombMemberRecord)
                 .where(
                     NumberBombMemberRecord.game_id == game.id,
-                    NumberBombMemberRecord.state == "current",
+                    NumberBombMemberRecord.state.in_(member_states),
                 )
                 .order_by(NumberBombMemberRecord.roster_order)
                 .with_for_update()
@@ -7963,7 +8360,7 @@ class CoreRepository:
             punishment_type=punishment_type,
             multiplier_tenths=multiplier_tenths,
             state="collecting",
-            player_count=len(members),
+            player_count=sum(member.state == "current" for member in members),
             created_at=now,
         )
         session.add(round_record)
@@ -7974,6 +8371,8 @@ class CoreRepository:
                     round_id=round_record.id,
                     user_id=member.user_id,
                     display_order=display_order,
+                    skipped_at=(now if member.state == "retired" else None),
+                    result_reason=("retired" if member.state == "retired" else None),
                 )
                 for display_order, member in enumerate(members, 1)
             ]
@@ -7994,7 +8393,7 @@ class CoreRepository:
         return NumberBombGameResult(
             "started",
             game_id=game.id,
-            player_count=len(members),
+            player_count=sum(member.state == "current" for member in members),
             target_player_count=game.target_player_count,
             round_number=round_number,
             punishment_type=punishment_type,
