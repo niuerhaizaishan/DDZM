@@ -525,6 +525,33 @@ def test_texas_holdem_private_look_requires_group_when_user_has_multiple_games(
     assert "♠" in result.private_message or "♥" in result.private_message or "♣" in result.private_message or "♦" in result.private_message
 
 
+def test_texas_holdem_exit_folds_immediately_even_out_of_turn(texas_repository, now):
+    _prepare_texas_users(
+        texas_repository, now, "texas-p1", "texas-p2", "texas-p3"
+    )
+    texas_repository.start_texas_holdem_signup(
+        "texas-p1", 20, now, PRIMARY_GROUP_CHAT_ID
+    )
+    texas_repository.join_texas_holdem("texas-p2", now, PRIMARY_GROUP_CHAT_ID)
+    texas_repository.join_texas_holdem("texas-p3", now, PRIMARY_GROUP_CHAT_ID)
+    texas_repository.start_texas_holdem_hand(
+        "texas-p1", now, PRIMARY_GROUP_CHAT_ID
+    )
+    for index, platform_id in enumerate(("texas-p1", "texas-p2", "texas-p3"), 1):
+        _confirm_outbound(texas_repository, f"direct-{platform_id}", now, index)
+    before = texas_repository.texas_holdem_summary(now, PRIMARY_GROUP_CHAT_ID)
+    assert before.current_seat == 1
+
+    result = texas_repository.leave_texas_holdem(
+        "texas-p2", now, PRIMARY_GROUP_CHAT_ID
+    )
+
+    assert result.status == "acted"
+    after = texas_repository.texas_holdem_summary(now, PRIMARY_GROUP_CHAT_ID)
+    assert after.current_seat == 1
+    assert next(player for player in after.players if player.platform_id == "texas-p2").state == "folded"
+
+
 def test_bootstrap_primary_group_normalizes_env_url_once(repository, now):
     group = repository.bootstrap_primary_group(
         "https://www.aikda.com/chat?c=group-main&utm_source=test#ignored", now

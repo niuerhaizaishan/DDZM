@@ -18,7 +18,7 @@ from .service import CommandReply
 
 _BEIJING = ZoneInfo("Asia/Shanghai")
 _COMMANDS = {
-    "/入职", "/我的物品", "/打卡", "/余额", "/修改名称", "/编辑档案", "/编辑档案形象", "/我的档案", "/发奖金", "/发红包", "/抢红包", "/打赏", "/我", "/商店", "/帮助", "/当前游戏", "/加入", "/退出", "/开始", "/摸鱼躲猫猫", "/记忆考核", "/继续", "/收手", "/投降", "/部门", "/部门人数", "/我的部门人数", "/加入部门", "/切换部门", "/部门申请列表", "/同意部门", "/全部同意部门", "/拒绝部门", "/全部拒绝部门", "/职位", "/晋升", "/晋升申请列表", "/同意", "/全部同意", "/拒绝", "/全部拒绝", "/谁是卧底", "/开始投票", "/投票", "/退出谁是卧底", "/结束游戏", "/甩锅游戏", "/甩锅", "/退出甩锅", "/蹦蹦数字炸弹", "/报数", "/跳过",
+    "/入职", "/我的物品", "/打卡", "/余额", "/修改名称", "/编辑档案", "/编辑档案形象", "/我的档案", "/发奖金", "/发红包", "/抢红包", "/打赏", "/我", "/商店", "/帮助", "/当前游戏", "/加入", "/退出", "/开始", "/摸鱼躲猫猫", "/记忆考核", "/继续", "/收手", "/投降", "/部门", "/部门人数", "/我的部门人数", "/加入部门", "/切换部门", "/部门申请列表", "/同意部门", "/全部同意部门", "/拒绝部门", "/全部拒绝部门", "/职位", "/晋升", "/晋升申请列表", "/同意", "/全部同意", "/拒绝", "/全部拒绝", "/谁是卧底", "/开始投票", "/投票", "/退出谁是卧底", "/结束游戏", "/甩锅游戏", "/甩锅", "/退出甩锅", "/蹦蹦数字炸弹", "/报数", "/跳过", "/德州扑克", "/看牌", "/过牌", "/跟注", "/加注", "/全下", "/弃牌",
 }
 
 
@@ -68,7 +68,7 @@ class GroupCommandHandler:
             and not group.games_enabled
             and command in {
                 "/发红包", "/摸鱼躲猫猫", "/记忆考核", "/谁是卧底",
-                "/甩锅游戏", "/蹦蹦数字炸弹",
+                "/甩锅游戏", "/蹦蹦数字炸弹", "/德州扑克",
             }
         ):
             return self._reply(command, "disabled", received_at)
@@ -92,6 +92,31 @@ class GroupCommandHandler:
             return self._number_bomb_start(
                 message.sender_platform_id, content, received_at, group_chat_id
             )
+        if command == "/德州扑克":
+            return self._texas_holdem_start(
+                message.sender_platform_id, content, received_at, group_chat_id
+            )
+        if command == "/看牌":
+            if message.source_type != "direct":
+                return self._reply("/看牌", "group_only", received_at)
+            result = self._repository.get_texas_holdem_private_cards(
+                message.sender_platform_id, received_at
+            )
+            if result.status == "shown":
+                return result.private_message
+            return self._reply(
+                "/看牌",
+                "choose_group" if result.status == "choose_group" else "no_cards",
+                received_at,
+            )
+        if command in {"/过牌", "/跟注", "/加注", "/全下", "/弃牌"}:
+            return self._texas_holdem_action(
+                message.sender_platform_id,
+                command,
+                content,
+                received_at,
+                group_chat_id,
+            )
         if command == "/开始":
             summary = self._repository.active_gameplay_summary(
                 message.sender_platform_id,
@@ -100,6 +125,10 @@ class GroupCommandHandler:
             )
             if summary.game_type == "number_bomb":
                 return self._number_bomb_manual_start(
+                    message.sender_platform_id, received_at, group_chat_id
+                )
+            if summary.game_type == "texas_holdem":
+                return self._texas_holdem_manual_start(
                     message.sender_platform_id, received_at, group_chat_id
                 )
             return self._reply("/开始", "no_current_game", received_at)
@@ -178,6 +207,8 @@ class GroupCommandHandler:
                 return self._number_bomb_end(
                     message.sender_platform_id, received_at, group_chat_id
                 )
+            if summary.game_type == "texas_holdem":
+                return self._reply("/结束游戏", "texas_cannot_end", received_at)
             if summary.game_type == "blame_bomb":
                 return self._blame_end(
                     message.sender_platform_id, received_at, group_chat_id
@@ -262,6 +293,10 @@ class GroupCommandHandler:
                 return self._number_bomb_join(
                     message.sender_platform_id, received_at, group_chat_id
                 )
+            if summary.game_type == "texas_holdem":
+                return self._texas_holdem_join(
+                    message.sender_platform_id, received_at, group_chat_id
+                )
             if summary.game_type == "blame_bomb":
                 return self._blame_join(
                     message.sender_platform_id, received_at, group_chat_id
@@ -283,6 +318,10 @@ class GroupCommandHandler:
             )
             if summary.game_type == "number_bomb":
                 return self._number_bomb_leave(
+                    message.sender_platform_id, received_at, group_chat_id
+                )
+            if summary.game_type == "texas_holdem":
+                return self._texas_holdem_leave(
                     message.sender_platform_id, received_at, group_chat_id
                 )
             if summary.game_type == "blame_bomb":
@@ -453,6 +492,7 @@ class GroupCommandHandler:
         if summary.game_type == "conflict":
             return self._reply("/当前游戏", "conflict", received_at)
         game_name = {
+            "texas_holdem": "德州扑克",
             "number_bomb": "蹦蹦数字炸弹",
             "blame_bomb": "甩锅游戏",
             "undercover": "谁是卧底",
@@ -468,6 +508,11 @@ class GroupCommandHandler:
             "awaiting_continue": "等待继续",
             "in_progress": "进行中",
             "tipping": "打赏中",
+            "dealing": "发牌中",
+            "preflop": "翻牌前",
+            "flop": "翻牌圈",
+            "turn": "转牌圈",
+            "river": "河牌圈",
         }.get(summary.state, "进行中")
         role_name = {
             "participant": "参与者",
@@ -1084,6 +1129,172 @@ class GroupCommandHandler:
             "multiplayer_active", "already_active"
         } else "multiplayer_active"
         return self._reply("/蹦蹦数字炸弹", scenario, received_at)
+
+    def _texas_holdem_start(
+        self, platform_id: str, content: str, received_at, group_chat_id=None
+    ) -> str:
+        parts = content.split()
+        if len(parts) != 2:
+            return self._reply("/德州扑克", "usage", received_at)
+        try:
+            buy_in = int(parts[1])
+        except ValueError:
+            return self._reply("/德州扑克", "usage", received_at)
+        settings = self._repository.get_texas_holdem_settings()
+        result = self._repository.start_texas_holdem_signup(
+            platform_id,
+            buy_in,
+            received_at,
+            **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
+        )
+        values = {
+            "{带入}": buy_in,
+            "{最低带入}": settings.minimum_buy_in,
+            "{最高带入}": settings.maximum_buy_in,
+            "{最少人数}": settings.minimum_players,
+        }
+        if result.status == "created":
+            user = self._repository.find_user(platform_id)
+            values["{昵称}"] = "玩家" if user is None else user.display_name
+        scenario = result.status if result.status in {
+            "created", "not_joined", "direct_chat_required", "disabled",
+            "invalid_buy_in", "insufficient_balance", "daily_limit",
+            "already_active", "multiplayer_active",
+        } else "multiplayer_active"
+        return self._reply("/德州扑克", scenario, received_at, values)
+
+    def _texas_holdem_join(
+        self, platform_id: str, received_at, group_chat_id=None
+    ) -> str:
+        result = self._repository.join_texas_holdem(
+            platform_id,
+            received_at,
+            **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
+        )
+        scenarios = {
+            "joined": "texas_joined",
+            "already_joined": "texas_already_joined",
+            "direct_chat_required": "texas_direct_chat_required",
+            "insufficient_balance": "texas_insufficient_balance",
+            "full": "texas_full",
+        }
+        values = {"{当前人数}": result.player_count}
+        if result.status == "joined":
+            user = self._repository.find_user(platform_id)
+            values["{昵称}"] = "玩家" if user is None else user.display_name
+        return self._reply(
+            "/加入",
+            scenarios.get(result.status, "texas_cannot_join"),
+            received_at,
+            values,
+        )
+
+    def _texas_holdem_manual_start(
+        self, platform_id: str, received_at, group_chat_id=None
+    ) -> str:
+        result = self._repository.start_texas_holdem_hand(
+            platform_id,
+            received_at,
+            **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
+        )
+        settings = self._repository.get_texas_holdem_settings()
+        scenario = {
+            "dealing": "texas_dealing",
+            "insufficient_players": "texas_insufficient_players",
+            "missing_direct_chats": "texas_missing_direct_chats",
+        }.get(result.status, "texas_cannot_start")
+        return self._reply(
+            "/开始",
+            scenario,
+            received_at,
+            {"{人数}": result.player_count, "{最少人数}": settings.minimum_players},
+        )
+
+    def _texas_holdem_leave(
+        self, platform_id: str, received_at, group_chat_id=None
+    ) -> str:
+        result = self._repository.leave_texas_holdem(
+            platform_id,
+            received_at,
+            **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
+        )
+        if result.public_message:
+            return result.public_message
+        scenario = {
+            "signup_left": "texas_signup_left",
+            "acted": "texas_folded",
+            "settled": "texas_folded",
+        }.get(result.status, "texas_cannot_leave")
+        return self._reply("/退出", scenario, received_at)
+
+    def _texas_holdem_action(
+        self,
+        platform_id: str,
+        command: str,
+        content: str,
+        received_at,
+        group_chat_id=None,
+    ) -> str | list[str]:
+        action = {
+            "/过牌": "check",
+            "/跟注": "call",
+            "/加注": "raise",
+            "/全下": "all_in",
+            "/弃牌": "fold",
+        }[command]
+        parts = content.split()
+        amount = None
+        if command == "/加注":
+            if len(parts) != 2:
+                return self._reply(command, "usage", received_at)
+            try:
+                amount = int(parts[1])
+            except ValueError:
+                return self._reply(command, "usage", received_at)
+        elif len(parts) != 1:
+            return self._reply(command, "cannot_act", received_at, {"{原因}": "指令不带参数"})
+        result = self._repository.act_texas_holdem(
+            platform_id,
+            action,
+            amount,
+            None,
+            received_at,
+            **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
+        )
+        if result.public_message:
+            return result.public_message
+        if result.status in {"acted", "street_advanced"}:
+            summary = self._repository.texas_holdem_summary(
+                received_at,
+                **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
+            )
+            user = self._repository.find_user(platform_id)
+            return self._reply(
+                command,
+                "acted",
+                received_at,
+                {
+                    "{昵称}": "玩家" if user is None else user.display_name,
+                    "{底池}": summary.total_pot,
+                },
+            )
+        reasons = {
+            "not_your_turn": "还没轮到你",
+            "cannot_check": "当前需要跟注或弃牌",
+            "nothing_to_call": "当前无需跟注",
+            "raise_too_small": "加注额度不足",
+            "insufficient_stack": "筹码不足",
+            "raise_not_reopened": "短码全下没有重新开放加注权",
+            "no_game": "当前没有德州扑克牌局",
+            "not_participant": "你不是本局参与者",
+            "action_expired": "本次行动已经超时",
+        }
+        return self._reply(
+            command,
+            "cannot_act",
+            received_at,
+            {"{原因}": reasons.get(result.status, "当前状态不允许")},
+        )
 
     def _number_bomb_manual_start(
         self, platform_id: str, received_at, group_chat_id=None
@@ -2336,6 +2547,21 @@ class GroupCommandHandler:
                     ("/结束游戏", "/结束游戏：任一参与者终止整场游戏"),
                 ),
             ),
+            "德州扑克": (
+                "【德州扑克】",
+                (
+                    ("/德州扑克", "/德州扑克 带入金额：创建 2 至 9 人单局现金桌"),
+                    ("/加入", "/加入：按本局统一带入加入报名"),
+                    ("/开始", "/开始：至少2人后由任一参与者开始发牌"),
+                    ("/看牌", "私聊 /看牌：仅查看自己的两张底牌"),
+                    ("/过牌", "/过牌：无需跟注时让牌"),
+                    ("/跟注", "/跟注：补足到当前下注"),
+                    ("/加注", "/加注 金额：加到本轮总下注金额"),
+                    ("/全下", "/全下：投入剩余全部筹码"),
+                    ("/弃牌", "/弃牌：放弃本手牌"),
+                    ("/退出", "/退出：开局前退出退款；开局后立即弃牌"),
+                ),
+            ),
             "部门": (
                 "【部门与审批】",
                 (
@@ -2375,6 +2601,7 @@ class GroupCommandHandler:
                         "谁是卧底",
                         "甩锅游戏",
                         "蹦蹦数字炸弹",
+                        "德州扑克",
                     )
                 )
             return any(command in commands for command, _ in guides[category][1])
@@ -2384,7 +2611,7 @@ class GroupCommandHandler:
                 ("基础", "/帮助 基础：入职、资产与商店"),
                 (
                     "游戏",
-                    "/帮助 游戏：玩法总览；/帮助 摸鱼躲藏、/帮助 记忆考核、/帮助 谁是卧底、/帮助 甩锅游戏、/帮助 蹦蹦数字炸弹",
+                    "/帮助 游戏：玩法总览；/帮助 摸鱼躲藏、/帮助 记忆考核、/帮助 谁是卧底、/帮助 甩锅游戏、/帮助 蹦蹦数字炸弹、/帮助 德州扑克",
                 ),
                 ("随机事件", "/帮助 随机事件：报名与退出"),
                 ("部门", "/帮助 部门：部门申请与审批"),
@@ -2404,6 +2631,7 @@ class GroupCommandHandler:
                     "谁是卧底",
                     "甩锅游戏",
                     "蹦蹦数字炸弹",
+                    "德州扑克",
                 )
                 if any(command in commands for command, _ in guides[name][1])
             ]

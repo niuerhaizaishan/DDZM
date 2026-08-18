@@ -12,7 +12,7 @@ from dzmm_bot.runtime.contracts import InboundMessage, MessageReference
 BEIJING = ZoneInfo("Asia/Shanghai")
 
 
-def _service(*, red_packet_random=None, number_bomb_random=None):
+def _service(*, red_packet_random=None, number_bomb_random=None, texas_holdem_random=None):
     from dzmm_bot.core.commands import GroupCommandHandler
     from dzmm_bot.core.repository import CoreRepository
     from dzmm_bot.core.schema import Base
@@ -25,6 +25,7 @@ def _service(*, red_packet_random=None, number_bomb_random=None):
         factory,
         red_packet_random=red_packet_random,
         number_bomb_random=number_bomb_random,
+        texas_holdem_random=texas_holdem_random,
     )
     return CoreService(repository, GroupCommandHandler(repository)), repository, factory
 
@@ -100,6 +101,111 @@ def _replies_for(factory, inbound_id):
                 .order_by(OutboundRecord.reply_index)
             )
         )
+
+
+def _group_receive(service, message_id, sender, content, now, chatroom_id):
+    return service.receive_inbound(
+        InboundMessage(
+            message_id,
+            sender,
+            content,
+            now,
+            source_type="group",
+            chatroom_id=chatroom_id,
+        )
+    )
+
+
+def test_texas_holdem_group_commands_create_join_start_and_deal_privately():
+    service, repository, factory = _service(texas_holdem_random=Random(7))
+    now = datetime(2026, 8, 18, 10, 0, tzinfo=BEIJING)
+    group = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=texas-command", now
+    )
+    repository.create_user("texas-command-1", "牌手甲", now, 100)
+    repository.create_user("texas-command-2", "牌手乙", now, 100)
+    repository.upsert_direct_chats(
+        [
+            ("texas-command-1", "direct-command-1"),
+            ("texas-command-2", "direct-command-2"),
+        ],
+        now,
+    )
+
+    created = _group_receive(
+        service, "texas-create", "texas-command-1", "/德州扑克 20", now,
+        group.chatroom_id,
+    )
+    assert "德州扑克报名" in "".join(_replies_for(factory, created.message_id))
+    joined = _group_receive(
+        service, "texas-join", "texas-command-2", "/加入", now,
+        group.chatroom_id,
+    )
+    assert "已加入德州扑克" in "".join(_replies_for(factory, joined.message_id))
+    started = _group_receive(
+        service, "texas-start", "texas-command-2", "/开始", now,
+        group.chatroom_id,
+    )
+    assert "正在私聊发牌" in "".join(_replies_for(factory, started.message_id))
+
+    from dzmm_bot.core.schema import OutboundRecord
+
+    with factory() as session:
+        card_messages = list(
+            session.scalars(
+                select(OutboundRecord).where(
+                    OutboundRecord.delivery_kind == "texas_holdem_card"
+                )
+            )
+        )
+    assert {message.destination_chatroom_id for message in card_messages} == {
+        "direct-command-1", "direct-command-2"
+    }
+    assert all(message.group_chat_id is None for message in card_messages)
+
+
+def test_texas_holdem_look_cards_is_private_only():
+    service, repository, factory = _service(texas_holdem_random=Random(7))
+    now = datetime(2026, 8, 18, 10, 0, tzinfo=BEIJING)
+    group = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=texas-look", now
+    )
+    for platform_id, name in (("texas-look-1", "看牌甲"), ("texas-look-2", "看牌乙")):
+        repository.create_user(platform_id, name, now, 100)
+    repository.upsert_direct_chats(
+        [("texas-look-1", "direct-look-1"), ("texas-look-2", "direct-look-2")],
+        now,
+    )
+    _group_receive(service, "look-create", "texas-look-1", "/德州扑克 20", now, group.chatroom_id)
+    _group_receive(service, "look-join", "texas-look-2", "/加入", now, group.chatroom_id)
+    _group_receive(service, "look-start", "texas-look-1", "/开始", now, group.chatroom_id)
+
+    group_result = _group_receive(service, "look-group", "texas-look-1", "/看牌", now, group.chatroom_id)
+    group_reply = "".join(_replies_for(factory, group_result.message_id))
+    assert group_reply == "请在私聊中发送 /看牌，群内不会展示底牌。"
+    assert not any(suit in group_reply for suit in "♠♥♣♦")
+
+    direct_result = service.receive_inbound(
+        InboundMessage(
+            "look-direct", "texas-look-1", "/看牌", now,
+            source_type="direct", chatroom_id="direct-look-1",
+        )
+    )
+    direct_reply = "".join(_replies_for(factory, direct_result.message_id))
+    assert "你的德州扑克底牌" in direct_reply
+    assert any(suit in direct_reply for suit in "♠♥♣♦")
+
+
+def test_texas_holdem_help_lists_every_player_command():
+    service, repository, factory = _service()
+    now = datetime(2026, 8, 18, 10, 0, tzinfo=BEIJING)
+    repository.create_user("texas-help", "帮助牌手", now, 0)
+
+    help_result = _receive(service, "texas-help-message", "texas-help", "/帮助 德州扑克", now)
+
+    reply = "".join(_replies_for(factory, help_result.message_id))
+    for command in ("/德州扑克", "/加入", "/开始", "/看牌", "/过牌", "/跟注", "/加注", "/全下", "/弃牌", "/退出"):
+        assert command in reply
 
 
 def _prepare_group_tip_event(repository, now):

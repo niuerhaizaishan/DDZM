@@ -1479,6 +1479,13 @@ _COMMAND_DEFINITIONS = (
     ("/蹦蹦数字炸弹", "/蹦蹦数字炸弹", "创建蹦蹦数字炸弹报名局，至少3人后发送 /开始"),
     ("/报数", "/报数 数字（仅私聊）", "提交蹦蹦数字炸弹本轮 1–100 整数"),
     ("/跳过", "/跳过 编号 [编号...]", "排除蹦蹦数字炸弹中尚未报数的参与者"),
+    ("/德州扑克", "/德州扑克 带入金额", "创建一局德州扑克现金桌报名"),
+    ("/看牌", "/看牌（仅私聊）", "私聊查看自己的德州扑克底牌"),
+    ("/过牌", "/过牌", "德州扑克当前行动过牌"),
+    ("/跟注", "/跟注", "德州扑克当前行动跟注"),
+    ("/加注", "/加注 加到金额", "德州扑克加注到本轮总金额"),
+    ("/全下", "/全下", "德州扑克投入剩余全部筹码"),
+    ("/弃牌", "/弃牌", "德州扑克放弃本手牌"),
     ("/投稿", "/投稿 随机事件", "进入随机事件私聊投稿向导"),
     ("/我的投稿", "/我的投稿", "查看自己最近的随机事件投稿状态"),
     ("/撤回投稿", "/撤回投稿 编号", "撤回自己仍在等待审核的随机事件投稿"),
@@ -5598,6 +5605,18 @@ class CoreRepository:
                     return TexasHoldemResult("not_participant", game.id)
                 player, user = row
                 if game.state != "signup":
+                    if player.seat_number != game.current_seat:
+                        if player.state not in {"active", "all_in"}:
+                            return TexasHoldemResult("cannot_act", game.id)
+                        player.state = "folded"
+                        player.raise_open = False
+                        player.acted = True
+                        rows = self._texas_players(session, game.id, lock=True)
+                        if len([record for record, _ in rows if record.state != "folded"]) == 1:
+                            return self._settle_texas_holdem(
+                                session, game, rows, now, reason="last_player"
+                            )
+                        return TexasHoldemResult("acted", game.id, len(rows))
                     return self._act_texas_holdem_locked(
                         session, game, player, user, "fold", None, None, now
                     )
@@ -5712,6 +5731,7 @@ class CoreRepository:
                         destination_chatroom_id=direct_rooms[user.platform_id],
                         delivery_kind="texas_holdem_card",
                     )
+                    outbound.group_chat_id = None
                     player.private_outbound_id = outbound.id
                     outbound_ids.append(outbound.id)
                 if creator_start is None:
@@ -6033,7 +6053,7 @@ class CoreRepository:
         platform_id: str,
         action: str,
         amount: int | None,
-        inbound_message_id: UUID,
+        inbound_message_id: UUID | None,
         now: datetime,
         group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
     ) -> TexasHoldemResult:
@@ -6352,6 +6372,58 @@ class CoreRepository:
         del now
         with self._session() as session:
             active: list[ActiveGameplaySummary] = []
+
+            texas_game = session.scalar(
+                select(TexasHoldemGameRecord).where(
+                    TexasHoldemGameRecord.active_key == "global",
+                    TexasHoldemGameRecord.group_chat_id == group_chat_id,
+                )
+            )
+            if texas_game is not None:
+                rows = self._texas_players(session, texas_game.id)
+                actor = next(
+                    (
+                        player
+                        for player, user in rows
+                        if user.platform_id == platform_id
+                    ),
+                    None,
+                )
+                if actor is None:
+                    commands = ("/加入",) if texas_game.state == "signup" else ()
+                    role = "nonparticipant"
+                elif texas_game.state == "signup":
+                    commands = ("/开始", "/退出")
+                    role = "participant"
+                elif texas_game.state == "dealing":
+                    commands = ("私聊 /看牌",)
+                    role = "participant"
+                else:
+                    commands = ("/退出", "私聊 /看牌")
+                    if actor.seat_number == texas_game.current_seat:
+                        to_call = max(
+                            0,
+                            texas_game.current_bet - actor.street_contribution,
+                        )
+                        commands = (
+                            *(("/过牌",) if to_call == 0 else ("/跟注",)),
+                            "/加注 金额",
+                            "/全下",
+                            "/弃牌",
+                            "私聊 /看牌",
+                        )
+                    role = "participant"
+                active.append(
+                    ActiveGameplaySummary(
+                        "texas_holdem",
+                        texas_game.id,
+                        texas_game.state,
+                        role,
+                        tuple(user.display_name for _, user in rows),
+                        commands,
+                        texas_game.signup_deadline,
+                    )
+                )
 
             number_game = session.scalar(
                 select(NumberBombGameRecord).where(
@@ -6756,6 +6828,7 @@ class CoreRepository:
         if group_chat_id is None:
             group_chat_id = PRIMARY_GROUP_CHAT_ID
         game_names = {
+            "texas_holdem": "德州扑克",
             "number_bomb": "蹦蹦数字炸弹",
             "blame_bomb": "甩锅游戏",
             "undercover": "谁是卧底",
@@ -6769,7 +6842,11 @@ class CoreRepository:
             with self._session() as session:
                 self._lock_gameplay_gate(session)
                 ended = False
-                if game_type == "number_bomb":
+                if game_type == "texas_holdem":
+                    ended = self.abort_texas_holdem(
+                        game_id, now, group_chat_id
+                    )
+                elif game_type == "number_bomb":
                     game = session.get(NumberBombGameRecord, game_id, with_for_update=True)
                     if (
                         game is not None

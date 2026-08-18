@@ -34,6 +34,8 @@ def test_route_ai_topics_uses_exact_command_aliases():
     assert route_ai_topics("蹦蹦数字炸弹怎么报数", ()) == ("number_bomb",)
     assert route_ai_topics("平均数炸弹怎么玩", ()) == ("number_bomb",)
     assert route_ai_topics("/报数 29", ()) == ("number_bomb",)
+    assert route_ai_topics("德州扑克怎么加注", ()) == ("texas_holdem",)
+    assert route_ai_topics("/全下", ()) == ("texas_holdem",)
 
 
 def test_routing_and_selection_are_normalized_bounded_and_deterministic():
