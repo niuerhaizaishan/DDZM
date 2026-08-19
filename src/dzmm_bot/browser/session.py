@@ -6,7 +6,6 @@ from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from dzmm_bot.runtime.contracts import (
-    DirectChatRoom,
     GroupChatTarget,
     InboundMessage,
     LoginState,
@@ -14,7 +13,11 @@ from dzmm_bot.runtime.contracts import (
 )
 from dzmm_bot.dzmm_source import DzmmMessageSource
 
-from .aikda_socket import AikdaSocketGateway
+from .aikda_socket import (
+    AikdaAuthenticationError,
+    AikdaSocketGateway,
+    AikdaTransportError,
+)
 
 
 _TRPC_REQUEST_TIMEOUT_MS = 5_000
@@ -31,13 +34,9 @@ class ChatGateway(Protocol):
         self, direct_chatroom_ids: tuple[str, ...] = ()
     ) -> list[InboundMessage]: ...
 
-    def reconcile_history(
+    def maintain_recovery(
         self, direct_chatroom_ids: tuple[str, ...] = ()
-    ) -> list[InboundMessage]: ...
-
-    def maintain_direct_chats(
-        self, direct_chatroom_ids: tuple[str, ...] = ()
-    ) -> list[DirectChatRoom]: ...
+    ) -> None: ...
 
     def send(
         self, text: str, *, message_id: str | None = None,
@@ -60,8 +59,6 @@ class ChatGateway(Protocol):
     ) -> str: ...
 
     def upload_image(self, path: Path, mime_type: str) -> dict: ...
-
-    def discover_direct_chats(self) -> list[DirectChatRoom]: ...
 
     def retract(self, message_id: str) -> None: ...
 
@@ -173,17 +170,23 @@ class BrowserSession:
         )
 
     def _token(self) -> str:
-        return self._active_page().evaluate(_TOKEN_SCRIPT)
+        try:
+            return self._active_page().evaluate(_TOKEN_SCRIPT)
+        except Exception as error:
+            raise _platform_request_error(error) from error
 
     def _request(self, procedure: str, payload: dict | None = None) -> dict:
-        return self._active_page().evaluate(
-            _TRPC_SCRIPT,
-            {
-                "procedure": procedure,
-                "payload": payload,
-                "timeoutMs": _TRPC_REQUEST_TIMEOUT_MS,
-            },
-        )
+        try:
+            return self._active_page().evaluate(
+                _TRPC_SCRIPT,
+                {
+                    "procedure": procedure,
+                    "payload": payload,
+                    "timeoutMs": _TRPC_REQUEST_TIMEOUT_MS,
+                },
+            )
+        except Exception as error:
+            raise _platform_request_error(error) from error
 
     def _upload_image(
         self, path: Path, mime_type: str, chatroom_id: str
@@ -274,14 +277,9 @@ class _PlaywrightGateway:
             for message in DzmmMessageSource(page).read_new()
         ]
 
-    def reconcile_history(
+    def maintain_recovery(
         self, direct_chatroom_ids: tuple[str, ...] = ()
-    ) -> list[InboundMessage]:
-        return self.read_new(direct_chatroom_ids)
-
-    def maintain_direct_chats(
-        self, direct_chatroom_ids: tuple[str, ...] = ()
-    ) -> list[DirectChatRoom]:
+    ) -> None:
         raise NotImplementedError("direct messages require the Aikda socket gateway")
 
     def send(
@@ -315,9 +313,6 @@ class _PlaywrightGateway:
     def upload_image(self, path: Path, mime_type: str) -> dict:
         raise NotImplementedError("image upload requires the Aikda socket gateway")
 
-    def discover_direct_chats(self) -> list[DirectChatRoom]:
-        raise NotImplementedError("direct messages require the Aikda socket gateway")
-
     def retract(self, message_id: str) -> None:
         raise NotImplementedError("message retraction requires the Aikda socket gateway")
 
@@ -347,6 +342,13 @@ def _origin(url: str | None) -> str:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
+def _platform_request_error(error: Exception) -> RuntimeError:
+    detail = str(error)
+    if "status=401" in detail or "status=403" in detail:
+        return AikdaAuthenticationError(detail)
+    return AikdaTransportError(detail or type(error).__name__)
+
+
 def _start_playwright():
     from playwright.sync_api import sync_playwright
 
@@ -355,6 +357,9 @@ def _start_playwright():
 
 _TOKEN_SCRIPT = """async () => {
   const response = await fetch('/api/auth/token');
+  if (response.status === 401 || response.status === 403) {
+    throw new Error(`Aikda access token unavailable status=${response.status}`);
+  }
   const body = await response.json();
   if (!response.ok || !body.access_token) {
     throw new Error('Aikda access token unavailable');
@@ -372,10 +377,10 @@ _TRPC_SCRIPT = """async ({ procedure, payload, timeoutMs }) => {
       `/api/trpc/${procedure}?input=${encodeURIComponent(JSON.stringify(input))}`,
       { signal: controller.signal }
     );
-    const body = await response.json();
     if (!response.ok) {
-      throw new Error(`Aikda ${procedure} request failed`);
+      throw new Error(`Aikda ${procedure} request failed status=${response.status}`);
     }
+    const body = await response.json();
     return body?.result?.data?.json ?? body?.json ?? body?.[0]?.result?.data?.json;
   } finally {
     clearTimeout(timeout);

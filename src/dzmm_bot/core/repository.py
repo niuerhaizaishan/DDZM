@@ -5035,9 +5035,72 @@ class CoreRepository:
 
     def direct_inbound_chatroom_ids(self) -> tuple[str, ...]:
         with self._session() as session:
+            active_platform_ids = set(
+                session.scalars(
+                    select(UserRecord.platform_id)
+                    .join(
+                        RandomEventSubmissionRecord,
+                        RandomEventSubmissionRecord.user_id == UserRecord.id,
+                    )
+                    .where(RandomEventSubmissionRecord.status == "draft")
+                )
+            )
+            active_platform_ids.update(
+                session.scalars(
+                    select(UserRecord.platform_id)
+                    .join(
+                        NumberBombRoundPlayerRecord,
+                        NumberBombRoundPlayerRecord.user_id == UserRecord.id,
+                    )
+                    .join(
+                        NumberBombRoundRecord,
+                        NumberBombRoundRecord.id
+                        == NumberBombRoundPlayerRecord.round_id,
+                    )
+                    .join(
+                        NumberBombGameRecord,
+                        NumberBombGameRecord.id == NumberBombRoundRecord.game_id,
+                    )
+                    .where(
+                        NumberBombGameRecord.active_key.is_not(None),
+                        NumberBombGameRecord.state == "collecting",
+                        NumberBombRoundRecord.state == "collecting",
+                        NumberBombRoundPlayerRecord.submitted_number.is_(None),
+                        NumberBombRoundPlayerRecord.skipped_at.is_(None),
+                    )
+                )
+            )
+            active_platform_ids.update(
+                session.scalars(
+                    select(UserRecord.platform_id)
+                    .join(
+                        TexasHoldemPlayerRecord,
+                        TexasHoldemPlayerRecord.user_id == UserRecord.id,
+                    )
+                    .join(
+                        TexasHoldemGameRecord,
+                        TexasHoldemGameRecord.id == TexasHoldemPlayerRecord.game_id,
+                    )
+                    .where(
+                        TexasHoldemGameRecord.active_key.is_not(None),
+                        TexasHoldemGameRecord.state.in_(
+                            ("dealing", "preflop", "flop", "turn", "river")
+                        ),
+                        TexasHoldemPlayerRecord.state.not_in(
+                            ("left", "finished", "cancelled")
+                        ),
+                    )
+                )
+            )
+            if not active_platform_ids:
+                return ()
             return tuple(
                 session.scalars(
-                    select(DirectChatRecord.chatroom_id).order_by(
+                    select(DirectChatRecord.chatroom_id)
+                    .where(
+                        DirectChatRecord.platform_user_id.in_(active_platform_ids)
+                    )
+                    .order_by(
                         DirectChatRecord.discovered_at,
                         DirectChatRecord.chatroom_id,
                     )

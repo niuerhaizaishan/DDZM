@@ -10,7 +10,6 @@ from socketio.exceptions import TimeoutError as SocketTimeoutError
 
 from dzmm_bot.browser.aikda_socket import AikdaSocketGateway, _socket_client
 from dzmm_bot.runtime.contracts import (
-    DirectChatRoom,
     GroupChatTarget,
     InboundMessage,
     MessageReference,
@@ -240,7 +239,7 @@ def test_live_target_room_text_event_is_read_once(gateway):
     assert adapter.read_new() == []
 
 
-def test_gateway_accepts_only_configured_groups_and_known_direct_rooms(gateway):
+def test_gateway_classifies_nonconfigured_socket_rooms_as_direct(gateway):
     adapter, socket, _ = gateway
     adapter.configure_group_rooms(
         (
@@ -278,6 +277,7 @@ def test_gateway_accepts_only_configured_groups_and_known_direct_rooms(gateway):
         ("group", "group-a"),
         ("group", "group-b"),
         ("direct", "direct-1"),
+        ("direct", "unknown-room"),
     ]
 
 
@@ -354,7 +354,7 @@ def test_malformed_replied_image_is_ignored_without_dropping_text(gateway):
     assert adapter.read_new() == []
 
 
-def test_private_socket_events_are_read_once_after_active_room_join(gateway):
+def test_private_socket_events_are_read_once_even_before_core_selects_the_room(gateway):
     adapter, socket, request = gateway
     request.messages_by_room = {"room-1": [], "direct-1": []}
 
@@ -377,7 +377,7 @@ def test_private_socket_events_are_read_once_after_active_room_join(gateway):
     )
 
     assert [item.platform_message_id for item in adapter.read_new(("direct-1",))] == [
-        "dm-1", "dm-text"
+        "dm-1", "dm-text", "dm-other"
     ]
     assert adapter.read_new(("direct-1",)) == []
     assert socket.calls == [
@@ -401,7 +401,7 @@ def test_direct_room_join_timeout_does_not_block_the_next_room(gateway):
     )
 
 
-def test_unknown_socket_event_is_discarded_until_core_configures_the_room(gateway):
+def test_unknown_socket_event_is_emitted_for_worker_level_private_filtering(gateway):
     adapter, socket, _ = gateway
     adapter.read_new()
 
@@ -410,10 +410,12 @@ def test_unknown_socket_event_is_discarded_until_core_configures_the_room(gatewa
         {"chatroomId": "new-direct", "message": message("new-dm", "new-user", "你好")},
     )
 
-    assert adapter.read_new() == []
+    [received] = adapter.read_new()
+    assert received.platform_message_id == "new-dm"
+    assert received.source_type == "direct"
 
 
-def test_socket_handler_does_not_receive_unknown_room_events(gateway):
+def test_socket_handler_receives_unknown_room_events_for_private_filtering(gateway):
     adapter, socket, _ = gateway
     received = []
     adapter.set_message_handler(received.append)
@@ -424,7 +426,7 @@ def test_socket_handler_does_not_receive_unknown_room_events(gateway):
         {"chatroomId": "new-direct", "message": message("new-dm", "new-user", "你好")},
     )
 
-    assert received == []
+    assert [item.platform_message_id for item in received] == ["new-dm"]
     assert adapter.read_new() == []
 
 
@@ -440,7 +442,7 @@ def test_read_new_does_not_poll_history_after_socket_is_connected(gateway):
     assert request.calls == []
 
 
-def test_direct_chat_maintenance_uses_at_most_one_http_request_per_step(gateway):
+def test_recovery_uses_one_history_request_per_room_then_stays_idle(gateway):
     adapter, _, request = gateway
     request.messages_by_room = {
         "room-1": [],
@@ -451,13 +453,13 @@ def test_direct_chat_maintenance_uses_at_most_one_http_request_per_step(gateway)
     request.calls.clear()
 
     recovered = []
-    for _ in range(4):
+    for _ in range(5):
         before = len(request.calls)
-        adapter.maintain_direct_chats(("direct-1", "direct-2"))
+        adapter.maintain_recovery(("direct-1", "direct-2"))
         step_calls = [
             call
             for call in request.calls[before:]
-            if call[0] in {"chat.listAll", "chatroom.getMessages"}
+            if call[0] == "chatroom.getMessages"
         ]
         assert len(step_calls) <= 1
         recovered.extend(adapter.read_new(("direct-1", "direct-2")))
@@ -468,86 +470,73 @@ def test_direct_chat_maintenance_uses_at_most_one_http_request_per_step(gateway)
         if procedure == "chatroom.getMessages"
     ]
     assert history_rooms == ["room-1", "direct-1", "direct-2"]
+    assert all(procedure != "chat.listAll" for procedure, _ in request.calls)
     assert [item.platform_message_id for item in recovered] == ["dm-1", "dm-2"]
 
 
-def test_direct_chat_maintenance_discovers_only_unknown_rooms(gateway):
-    adapter, _, request = gateway
-    request.rooms = [
-        {"data": {"chatroomId": "direct-1", "chatType": "one_on_one"}},
-        {"data": {"chatroomId": "direct-2", "chatType": "one_on_one"}},
-        {"data": {"chatroomId": "direct-new", "chatType": "one_on_one"}},
-    ]
-    request.messages_by_room = {
-        "direct-new": [message("dm-new", "employee-new", "你好")],
-    }
-    adapter.read_new(("direct-1", "direct-2"))
-    request.calls.clear()
-
-    assert adapter.maintain_direct_chats(("direct-1", "direct-2")) == []
-    discovered = adapter.maintain_direct_chats(("direct-1", "direct-2"))
-
-    assert discovered == [DirectChatRoom("employee-new", "direct-new")]
-    assert [
-        payload["chatroomId"]
-        for procedure, payload in request.calls
-        if procedure == "chatroom.getMessages"
-    ] == ["direct-new"]
-
-
-def test_direct_chat_maintenance_reconnects_after_recovering_a_missed_event():
-    now = [NOW]
+def test_reconnect_precedes_one_recovery_cycle():
     socket = FakeSocket()
     request = FakeRequest()
+    request.messages_by_room = {"room-1": []}
     adapter = AikdaSocketGateway(
         TARGET_URL,
         token_provider=lambda: "short-lived-token",
         request=request,
         socket_factory=lambda: socket,
-        clock=lambda: now[0],
+        clock=lambda: NOW,
     )
 
     adapter.read_new()
-    adapter.maintain_direct_chats()
-    adapter.maintain_direct_chats()
-    request.messages = [message("m-missed", "employee-1", "/帮助")]
-    now[0] += timedelta(seconds=31)
+    adapter.maintain_recovery()
+    request.calls.clear()
+    socket.handlers["disconnect"]()
+    request.messages_by_room = {
+        "room-1": [message("m-missed", "employee-1", "/帮助")]
+    }
 
-    adapter.maintain_direct_chats()
-    adapter.maintain_direct_chats()
+    adapter.read_new()
+    adapter.maintain_recovery()
+    adapter.maintain_recovery()
     recovered = adapter.read_new()
 
     assert len(socket.connect_calls) == 2
-    assert [item.platform_message_id for item in recovered] == ["m-missed"]
-
-
-def test_failed_unknown_room_does_not_starve_history_reconciliation(gateway):
-    adapter, _, request = gateway
-    request.rooms = [
-        {"data": {"chatroomId": "direct-broken", "chatType": "one_on_one"}},
-    ]
-    adapter.read_new()
-    adapter.maintain_direct_chats()
-    original_request = adapter._request
-
-    def fail_broken_room(procedure, payload=None):
-        if (
-            procedure == "chatroom.getMessages"
-            and payload["chatroomId"] == "direct-broken"
-        ):
-            raise RuntimeError("room unavailable")
-        return original_request(procedure, payload)
-
-    adapter._request = fail_broken_room
-    with pytest.raises(RuntimeError, match="room unavailable"):
-        adapter.maintain_direct_chats()
-
-    adapter.maintain_direct_chats()
-
     assert request.calls[-1] == (
         "chatroom.getMessages",
         {"chatroomId": "room-1"},
     )
+    assert [item.platform_message_id for item in recovered] == ["m-missed"]
+
+
+def test_failed_recovery_room_does_not_starve_the_next_room(gateway):
+    adapter, _, request = gateway
+    adapter.read_new(("direct-broken",))
+    original_request = adapter._request
+    attempted_rooms = []
+
+    def fail_broken_room(procedure, payload=None):
+        if procedure == "chatroom.getMessages":
+            attempted_rooms.append(payload["chatroomId"])
+        if procedure == "chatroom.getMessages" and payload["chatroomId"] == "room-1":
+            raise RuntimeError("room unavailable")
+        return original_request(procedure, payload)
+
+    adapter._request = fail_broken_room
+    adapter.maintain_recovery(("direct-broken",))
+    adapter.maintain_recovery(("direct-broken",))
+
+    assert attempted_rooms == ["room-1", "direct-broken"]
+
+
+def test_changing_live_direct_targets_does_not_start_a_history_scan(gateway):
+    adapter, _, request = gateway
+    adapter.read_new()
+    adapter.maintain_recovery()
+    request.calls.clear()
+
+    adapter.read_new(("direct-1",))
+    adapter.maintain_recovery(("direct-1",))
+
+    assert all(procedure != "chatroom.getMessages" for procedure, _ in request.calls)
 
 def test_targeted_private_history_recovers_unseen_report_once(gateway):
     adapter, _, request = gateway
@@ -556,14 +545,17 @@ def test_targeted_private_history_recovers_unseen_report_once(gateway):
         "direct-1": [message("dm-history", "u-1", "/报数 41")],
     }
 
-    recovered = adapter.reconcile_history(("direct-1",))
+    adapter.read_new(("direct-1",))
+    adapter.maintain_recovery(("direct-1",))
+    adapter.maintain_recovery(("direct-1",))
+    recovered = adapter.read_new(("direct-1",))
 
     assert [item.platform_message_id for item in recovered] == ["dm-history"]
     assert recovered[0].source_type == "direct"
     assert adapter.read_new(("direct-1",)) == []
 
 
-def test_self_and_unknown_room_events_are_ignored(gateway):
+def test_self_events_are_ignored_and_unknown_rooms_are_emitted_as_direct(gateway):
     adapter, socket, _ = gateway
     adapter.read_new()
 
@@ -576,7 +568,11 @@ def test_self_and_unknown_room_events_are_ignored(gateway):
         {"chatroomId": "room-2", "message": message("m-other", "u-1", "/余额")},
     )
 
-    assert adapter.read_new() == []
+    received = adapter.read_new()
+
+    assert [item.platform_message_id for item in received] == ["m-other"]
+    assert received[0].source_type == "direct"
+    assert received[0].chatroom_id == "room-2"
 
 
 def test_self_message_arriving_during_connection_is_ignored(gateway):
@@ -607,49 +603,9 @@ def test_history_reconciles_unseen_text_messages_in_timestamp_order():
         clock=lambda: NOW,
     )
 
-    assert [item.platform_message_id for item in adapter.reconcile_history()] == ["m-1", "m-2"]
-
-
-def test_history_recovers_a_message_when_a_connected_socket_stops_emitting_events():
-    """Fails until connected-but-stale sockets periodically reconcile history."""
-    now = [NOW]
-    socket = FakeSocket()
-    request = FakeRequest()
-    adapter = AikdaSocketGateway(
-        TARGET_URL,
-        token_provider=lambda: "short-lived-token",
-        request=request,
-        socket_factory=lambda: socket,
-        clock=lambda: now[0],
-    )
-
-    assert adapter.read_new() == []
-    request.messages = [message("m-missed", "u-1", "/帮助")]
-    now[0] += timedelta(seconds=5)
-
-    assert [item.platform_message_id for item in adapter.reconcile_history()] == ["m-missed"]
-
-
-def test_history_recovery_reconnects_a_stale_socket_before_the_next_poll():
-    """Fails until a missed live event invalidates the stale subscription."""
-    now = [NOW]
-    socket = FakeSocket()
-    request = FakeRequest()
-    adapter = AikdaSocketGateway(
-        TARGET_URL,
-        token_provider=lambda: "short-lived-token",
-        request=request,
-        socket_factory=lambda: socket,
-        clock=lambda: now[0],
-    )
-
-    adapter.reconcile_history()
-    request.messages = [message("m-missed", "u-1", "/帮助")]
-    now[0] += timedelta(seconds=5)
-    adapter.reconcile_history()
     adapter.read_new()
-
-    assert len(socket.connect_calls) == 2
+    adapter.maintain_recovery()
+    assert [item.platform_message_id for item in adapter.read_new()] == ["m-1", "m-2"]
 
 
 def test_send_requires_successful_ack(gateway):
@@ -811,34 +767,6 @@ def test_send_waits_for_server_join_before_emitting(gateway):
     assert socket.joined is True
 
 
-def test_gateway_discovers_only_direct_rooms_from_non_bot_history(gateway):
-    """Fails if group rooms or bot messages are considered employee direct chats."""
-    adapter, _, request = gateway
-    request.direct_rooms = [
-        {"data": {"chatroomId": "group-1", "chatType": "group"}},
-        {"data": {"chatroomId": "direct-1", "chatType": "one_on_one"}},
-        {"data": {"chatroomId": "direct-empty", "chatType": "one_on_one"}},
-    ]
-
-    def direct_request(procedure, payload=None):
-        request.calls.append((procedure, payload))
-        if procedure == "user.getMe":
-            return request.profile
-        if procedure == "chat.listAll":
-            return request.direct_rooms
-        if procedure == "chatroom.getMessages":
-            if payload["chatroomId"] == "direct-1":
-                return {"messages": [message("own", "bot-1", "已读"), message("dm", "employee-1", "你好")]}
-            return {"messages": [message("own-2", "bot-1", "已读")]}
-        raise AssertionError(f"unexpected procedure {procedure}")
-
-    adapter._request = direct_request
-
-    assert adapter.discover_direct_chats() == [
-        DirectChatRoom(platform_user_id="employee-1", chatroom_id="direct-1")
-    ]
-
-
 def test_send_to_uses_the_supplied_direct_chatroom(gateway):
     """Fails if direct card messages are accidentally sent into the configured group."""
     adapter, socket, _ = gateway
@@ -873,17 +801,16 @@ def test_joined_event_without_payload_marks_the_gateway_ready(gateway):
     assert adapter.is_authenticated()
 
 
-def test_authenticated_gateway_refreshes_the_current_account_display_name(gateway):
+def test_authenticated_live_socket_does_not_repeat_the_identity_request(gateway):
     adapter, _, request = gateway
-    request.profile = {"id": "bot-1", "fullName": "旧名称"}
-
-    assert adapter.is_authenticated() is True
-    assert adapter.account_display_name == "旧名称"
-
     request.profile = {"id": "bot-1", "fullName": "饭饭（小狗青巫）."}
 
     assert adapter.is_authenticated() is True
+    request.calls.clear()
+
+    assert adapter.is_authenticated() is True
     assert adapter.account_display_name == "饭饭（小狗青巫）."
+    assert request.calls == []
 
 
 def test_authentication_is_lost_when_the_platform_identity_is_unavailable():
@@ -899,6 +826,7 @@ def test_authentication_is_lost_when_the_platform_identity_is_unavailable():
     )
 
     assert adapter.is_authenticated() is True
+    socket.handlers["disconnect"]()
     request.profile = {}
 
     assert adapter.is_authenticated() is False

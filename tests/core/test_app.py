@@ -21,6 +21,9 @@ from dzmm_bot.core.schema import (
     NumberBombRoundPlayerRecord,
     NumberBombRoundRecord,
     OutboundRecord,
+    RandomEventSubmissionRecord,
+    TexasHoldemGameRecord,
+    TexasHoldemPlayerRecord,
     UserRecord,
     WorkerCommandRecord,
 )
@@ -107,7 +110,7 @@ def test_direct_chat_sync_persists_discovered_room(app_context, headers):
     assert (record.platform_user_id, record.chatroom_id) == ("employee-1", "direct-1")
 
 
-def test_direct_inbound_rooms_include_all_discovered_direct_chats(
+def test_direct_inbound_rooms_exclude_inactive_discovered_direct_chats(
     app_context, headers
 ):
     app_context.repository.upsert_direct_chats(
@@ -119,7 +122,7 @@ def test_direct_inbound_rooms_include_all_discovered_direct_chats(
     )
 
     assert response.status_code == 200
-    assert set(response.json()["chatroom_ids"]) == {"direct-1", "direct-2"}
+    assert response.json() == {"chatroom_ids": []}
 
 
 def test_random_event_submission_review_api_lists_and_approves(app_context, headers):
@@ -162,7 +165,7 @@ def test_random_event_submission_review_api_lists_and_approves(app_context, head
     assert approved.json()["scene_id"] is not None
 
 
-def test_direct_inbound_rooms_keep_discovered_rooms_after_game_state_changes(
+def test_direct_inbound_rooms_only_include_number_bomb_players_awaiting_a_number(
     app_context, headers
 ):
     with app_context.session_factory.begin() as session:
@@ -222,10 +225,86 @@ def test_direct_inbound_rooms_keep_discovered_rooms_after_game_state_changes(
     assert response.json() == {"chatroom_ids": ["direct-1"]}
 
     with app_context.session_factory.begin() as session:
-        session.query(NumberBombGameRecord).update({"state": "waiting_continue"})
+        session.query(NumberBombRoundPlayerRecord).update({"submitted_number": 42})
     assert app_context.client.get(
         "/internal/direct-inbound/rooms", headers=headers
-    ).json() == {"chatroom_ids": ["direct-1"]}
+    ).json() == {"chatroom_ids": []}
+
+
+def test_direct_inbound_rooms_include_active_submission_and_texas_player(
+    app_context, headers
+):
+    with app_context.session_factory.begin() as session:
+        submitter = UserRecord(
+            platform_id="submitter",
+            display_name="投稿人",
+            employee_number=98,
+            balance=0,
+            joined_at=NOW,
+        )
+        player = UserRecord(
+            platform_id="texas-player",
+            display_name="牌手",
+            employee_number=99,
+            balance=100,
+            joined_at=NOW,
+        )
+        session.add_all([submitter, player])
+        session.flush()
+        game = TexasHoldemGameRecord(
+            creator_user_id=player.id,
+            state="preflop",
+            active_key="global",
+            buy_in=20,
+            signup_deadline=NOW,
+            created_at=NOW,
+        )
+        session.add(game)
+        session.flush()
+        session.add_all([
+            DirectChatRecord(
+                platform_user_id="submitter",
+                chatroom_id="direct-submitter",
+                discovered_at=NOW,
+            ),
+            DirectChatRecord(
+                platform_user_id="texas-player",
+                chatroom_id="direct-player",
+                discovered_at=NOW,
+            ),
+            RandomEventSubmissionRecord(
+                number=1,
+                user_id=submitter.id,
+                status="draft",
+                current_step="scene_name",
+                content={},
+                created_at=NOW,
+                updated_at=NOW,
+                last_activity_at=NOW,
+            ),
+            TexasHoldemPlayerRecord(
+                game_id=game.id,
+                user_id=player.id,
+                seat_number=1,
+                original_buy_in=20,
+                stack=20,
+                state="active",
+                joined_at=NOW,
+            ),
+        ])
+
+    assert app_context.client.get(
+        "/internal/direct-inbound/rooms", headers=headers
+    ).json() == {"chatroom_ids": ["direct-player", "direct-submitter"]}
+
+    with app_context.session_factory.begin() as session:
+        session.query(RandomEventSubmissionRecord).update({"status": "pending"})
+        session.query(TexasHoldemGameRecord).update(
+            {"state": "settled", "active_key": None}
+        )
+    assert app_context.client.get(
+        "/internal/direct-inbound/rooms", headers=headers
+    ).json() == {"chatroom_ids": []}
 
 
 def test_number_bomb_settings_core_api_validates_bounds(client, headers):

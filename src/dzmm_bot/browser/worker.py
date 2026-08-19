@@ -23,7 +23,7 @@ from dzmm_bot.runtime.outbound import group_message_chunks, requires_bot_group_s
 
 from .bot_api import DzmmBotSendError
 from .core_client import CorePort, OutboundClaim, WorkerCommand
-from .aikda_socket import AikdaMessageRejectedError
+from .aikda_socket import AikdaAuthenticationError, AikdaMessageRejectedError
 from .session import BrowserSession, ChatGateway
 
 
@@ -86,8 +86,6 @@ class BrowserWorker:
         self._outbound_futures: dict[str, Future[None]] = {}
         self._paused_messages: list[InboundMessage] = []
         self._paused_messages_lock = Lock()
-        self._outbound_failed = False
-        self._outbound_failed_lock = Lock()
         self._group_targets: tuple[GroupChatTarget, ...] = ()
         self._next_group_target_sync_at: datetime | None = None
         self._disabled_group_updates: list[GroupChatRuntimeUpdate] = []
@@ -106,21 +104,23 @@ class BrowserWorker:
     def run_once(self) -> None:
         now = self._clock()
         self._sync_group_targets(now)
-        if self._consume_outbound_failure():
-            self._recover_browser_session()
         command = self._core.claim_command(
             self._worker_id, now, self._lease_seconds
         )
         if command is not None:
             self._execute_command(command)
 
+        transport_ready = True
         if self._login_state is not LoginState.AUTH_IN_PROGRESS:
             try:
                 gateway = self._ensure_gateway()
                 authenticated = gateway.is_authenticated()
-            except Exception:
-                _LOGGER.exception("browser authentication check failed")
+            except AikdaAuthenticationError:
+                _LOGGER.warning("browser authentication is no longer valid")
                 self._recover_browser_session()
+            except Exception:
+                _LOGGER.exception("browser transport check failed")
+                transport_ready = False
             else:
                 if authenticated or self._manual_auth_confirmed:
                     self._login_state = LoginState.READY
@@ -143,6 +143,9 @@ class BrowserWorker:
         if self._login_state is LoginState.AUTH_IN_PROGRESS:
             self._core.run_daily_jobs(now)
             return
+        if not transport_ready:
+            self._core.run_daily_jobs(now)
+            return
 
         gateway = self._ensure_gateway()
         self._start_outbound_if_idle(gateway)
@@ -155,10 +158,15 @@ class BrowserWorker:
             except NotImplementedError:
                 self._listening = False
                 messages = []
-            except Exception:
-                _LOGGER.exception("browser message read failed")
+            except AikdaAuthenticationError:
+                _LOGGER.warning("browser message read detected authentication loss")
                 self._recover_browser_session()
                 self._sync_listener_state()
+                return
+            except Exception:
+                _LOGGER.exception("browser message read failed")
+                gateway.close()
+                self._core.run_daily_jobs(now)
                 return
             for message in messages:
                 if message.platform_message_id in self._seen_message_ids:
@@ -184,7 +192,7 @@ class BrowserWorker:
                     self._clock(),
                 )
 
-        self._maintain_direct_chats(gateway, now)
+        self._maintain_recovery(gateway)
 
     def _process_profile_image_upload(self, gateway: ChatGateway) -> None:
         claim = self._core.claim_profile_image_upload(
@@ -254,6 +262,12 @@ class BrowserWorker:
                 [DirectChatRoom(message.sender_platform_id, message.chatroom_id)],
                 self._clock(),
             )
+            if (
+                message.content.strip() != "/投稿 随机事件"
+                and message.chatroom_id
+                not in self._core.direct_inbound_chatroom_ids()
+            ):
+                return
         self._core.submit_inbound(message)
 
     def _start_outbound_if_idle(self, gateway: ChatGateway) -> None:
@@ -275,11 +289,6 @@ class BrowserWorker:
             self._outbound_futures[delivery_key] = self._outbound_executor.submit(
                 self._drain_outbound, gateway, outbound
             )
-
-    def _consume_outbound_failure(self) -> bool:
-        with self._outbound_failed_lock:
-            failed, self._outbound_failed = self._outbound_failed, False
-        return failed
 
     def _drain_outbound(self, gateway: ChatGateway, outbound) -> None:
         started_at = self._monotonic()
@@ -314,8 +323,6 @@ class BrowserWorker:
                 outbound.lease_token,
                 self._clock(),
             )
-            with self._outbound_failed_lock:
-                self._outbound_failed = True
             return False
         except AikdaMessageRejectedError as error:
             _LOGGER.warning(
@@ -349,8 +356,12 @@ class BrowserWorker:
                 return False
             _LOGGER.exception("outbound send failed: %s", outbound.id)
             gateway.close()
-            with self._outbound_failed_lock:
-                self._outbound_failed = True
+            self._core.release_outbound(
+                outbound.id,
+                self._worker_id,
+                outbound.lease_token,
+                self._clock(),
+            )
             return False
         self._core.confirm_sent(
             outbound.id,
@@ -516,17 +527,15 @@ class BrowserWorker:
             text=outbound.reference_text,
         )
 
-    def _maintain_direct_chats(self, gateway: ChatGateway, now: datetime) -> None:
+    def _maintain_recovery(self, gateway: ChatGateway) -> None:
         try:
-            rooms = gateway.maintain_direct_chats(
+            gateway.maintain_recovery(
                 self._core.direct_inbound_chatroom_ids()
             )
-            if rooms:
-                self._core.sync_direct_chats(rooms, now)
         except NotImplementedError:
             return
         except Exception:
-            _LOGGER.exception("direct chat maintenance failed")
+            _LOGGER.exception("message recovery maintenance failed")
 
     def _ensure_gateway(self) -> ChatGateway:
         if self._gateway is None:

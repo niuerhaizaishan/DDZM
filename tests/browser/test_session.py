@@ -4,6 +4,10 @@ import subprocess
 
 import pytest
 
+from dzmm_bot.browser.aikda_socket import (
+    AikdaAuthenticationError,
+    AikdaTransportError,
+)
 from dzmm_bot.browser.session import BrowserSession
 from dzmm_bot.browser import session as session_module
 from dzmm_bot.runtime.contracts import LoginState
@@ -301,8 +305,26 @@ def test_trpc_request_aborts_a_hung_platform_fetch(tmp_path, monkeypatch):
     )
     session._context = context
 
-    with pytest.raises(RuntimeError, match="aborted"):
+    with pytest.raises(AikdaTransportError, match="aborted"):
         session._request("chatroom.getMessages", {"chatroomId": "group-1"})
+
+
+def test_trpc_unauthorized_response_is_classified_as_authentication_loss(tmp_path):
+    context = FakeContext("https://chat.example/chat?c=group-1")
+
+    def unauthorized(_script, _argument):
+        raise RuntimeError("Aikda user.getMe request failed status=401")
+
+    context.pages[0].evaluate = unauthorized
+    session = BrowserSession(
+        tmp_path / "profile",
+        "https://chat.example/login",
+        chat_url="https://chat.example/chat?c=group-1",
+    )
+    session._context = context
+
+    with pytest.raises(AikdaAuthenticationError, match="status=401"):
+        session._request("user.getMe")
 
 
 def test_configured_session_uploads_image_as_multipart_without_hex_encoding(tmp_path):

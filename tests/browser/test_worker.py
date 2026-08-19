@@ -9,6 +9,7 @@ from socketio.exceptions import TimeoutError as SocketTimeoutError
 
 from dzmm_bot.browser.bot_api import DzmmBotSendError
 from dzmm_bot.browser.core_client import OutboundClaim, OutboundRecallClaim, WorkerCommand
+from dzmm_bot.browser.aikda_socket import AikdaTransportError
 from dzmm_bot.browser.worker import BrowserWorker
 from dzmm_bot.runtime.contracts import (
     DirectChatRoom,
@@ -30,9 +31,9 @@ GROUP_ID = UUID("00000000-0000-0000-0000-000000000101")
 class FakeGateway:
     messages: list[InboundMessage] = field(default_factory=list)
     authenticated: bool = True
+    authentication_error: Exception | None = None
     account_display_name: str | None = None
     sent: list[str] = field(default_factory=list)
-    direct_rooms: list[DirectChatRoom] = field(default_factory=list)
     sent_to: list[tuple[str, str]] = field(default_factory=list)
     sent_images: list[tuple[str, str]] = field(default_factory=list)
     uploaded_images: list[tuple[str, str]] = field(default_factory=list)
@@ -53,6 +54,7 @@ class FakeGateway:
     maintenance_started: Event = field(default_factory=Event)
     maintenance_release: Event | None = None
     configured_groups: tuple[GroupChatTarget, ...] = ()
+    close_count: int = 0
 
     def configure_group_rooms(self, targets):
         self.configured_groups = targets
@@ -115,32 +117,24 @@ class FakeGateway:
         self.uploaded_images.append((str(path), mime_type))
         return {"url": "https://cdn.example.com/uploaded.png"}
 
-    def discover_direct_chats(self):
+    def maintain_recovery(self, direct_chatroom_ids=()):
         self.maintenance_started.set()
         if self.maintenance_release is not None:
             self.maintenance_release.wait(timeout=2)
-        return list(self.direct_rooms)
-
-    def reconcile_history(self, direct_chatroom_ids=()):
-        return []
-
-    def maintain_direct_chats(self, direct_chatroom_ids=()):
-        self.maintenance_started.set()
-        if self.maintenance_release is not None:
-            self.maintenance_release.wait(timeout=2)
-        return list(self.direct_rooms)
 
     def set_message_handler(self, handler):
         self.message_handler = handler
 
     def is_authenticated(self):
+        if self.authentication_error is not None:
+            raise self.authentication_error
         return self.authenticated
 
     def retract(self, message_id):
         self.retracted.append(message_id)
 
     def close(self):
-        pass
+        self.close_count += 1
 
 
 @dataclass
@@ -205,6 +199,7 @@ class FakeCore:
     audits: list[tuple] = field(default_factory=list)
     daily_job_times: list[datetime] = field(default_factory=list)
     direct_chat_syncs: list[tuple[list[DirectChatRoom], datetime]] = field(default_factory=list)
+    direct_chat_sync_event: Event = field(default_factory=Event)
     listening_desired: bool = True
     direct_rooms_to_read: tuple[str, ...] = ()
     submitted_event: Event = field(default_factory=Event)
@@ -301,6 +296,7 @@ class FakeCore:
 
     def sync_direct_chats(self, rooms, now):
         self.direct_chat_syncs.append((rooms, now))
+        self.direct_chat_sync_event.set()
 
     def direct_inbound_chatroom_ids(self):
         return self.direct_rooms_to_read
@@ -431,7 +427,7 @@ def test_worker_reads_only_core_selected_direct_rooms(context):
     assert core.submitted_ids == ["dm-1"]
 
 
-def test_worker_persists_unknown_direct_socket_room_before_dispatch(context):
+def test_worker_maps_but_does_not_dispatch_an_ordinary_unknown_direct_message(context):
     worker, gateway, _, _, core, _ = context
     worker.run_once()
 
@@ -441,11 +437,29 @@ def test_worker_persists_unknown_direct_socket_room_before_dispatch(context):
         source_type="direct", chatroom_id="new-direct",
     ))
 
+    assert core.direct_chat_sync_event.wait(timeout=1)
+    assert core.direct_chat_syncs[-1] == (
+        [DirectChatRoom("new-user", "new-direct")], NOW
+    )
+    assert core.submitted_ids == []
+
+
+def test_worker_dispatches_the_random_event_submission_entry_from_a_new_direct_room(
+    context,
+):
+    worker, gateway, _, _, core, _ = context
+    worker.run_once()
+
+    gateway.message_handler(InboundMessage(
+        "new-submission", "new-user", "/投稿 随机事件", NOW,
+        source_type="direct", chatroom_id="new-direct",
+    ))
+
     assert core.submitted_event.wait(timeout=1)
     assert core.direct_chat_syncs[-1] == (
         [DirectChatRoom("new-user", "new-direct")], NOW
     )
-    assert core.submitted_ids == ["new-dm"]
+    assert core.submitted_ids == ["new-submission"]
 
 
 def test_worker_does_not_wait_for_outbound_socket_send(context):
@@ -498,7 +512,7 @@ def test_worker_heartbeats_the_current_account_display_name(context):
         "饭饭（小狗青巫）.",
     )
 
-def test_worker_confirms_only_after_gateway_send_succeeds(context):
+def test_worker_releases_transport_failure_without_marking_auth_lost(context):
     worker, gateway, session, _, core, _ = context
     core.pending = [OutboundClaim(OUTBOUND_ID, "in-1", "reply", LEASE)]
     gateway.send_error = RuntimeError("page unavailable")
@@ -508,32 +522,48 @@ def test_worker_confirms_only_after_gateway_send_succeeds(context):
     worker.run_once()
 
     assert core.confirmed == []
-    assert session.stops == 1
-    assert core.audits == [("authentication_lost", "worker-a", NOW)]
+    assert core.released == [(OUTBOUND_ID, "worker-a", LEASE, NOW)]
+    assert gateway.close_count == 1
+    assert session.stops == 0
+    assert core.audits == []
+    assert worker.login_state is LoginState.READY
 
 
-def test_read_failure_resets_the_browser_session_and_marks_auth_required(context):
+def test_read_transport_failure_closes_socket_without_marking_auth_required(context):
     worker, gateway, session, _, core, _ = context
-    gateway.read_error = RuntimeError("socket disconnected")
+    gateway.read_error = AikdaTransportError("socket disconnected")
 
     worker.run_once()
 
-    assert worker.login_state is LoginState.AUTH_REQUIRED
-    assert session.stops == 1
-    assert core.audits == [("authentication_lost", "worker-a", NOW)]
+    assert worker.login_state is LoginState.READY
+    assert gateway.close_count == 1
+    assert session.stops == 0
+    assert core.audits == []
     assert core.heartbeats[-1] == (
         "worker-a",
-        LoginState.AUTH_REQUIRED,
-        False,
+        LoginState.READY,
+        True,
         NOW,
         None,
     )
 
 
+def test_authentication_transport_failure_keeps_the_worker_ready(context):
+    worker, gateway, session, _, core, _ = context
+    gateway.authentication_error = AikdaTransportError("request aborted")
+
+    worker.run_once()
+
+    assert worker.login_state is LoginState.READY
+    assert session.stops == 0
+    assert core.audits == []
+    assert core.daily_job_times == [NOW]
+
+
 def test_worker_resumes_reading_after_an_authenticated_session_recovers(context):
     """Fails if recovery returns Ready but leaves inbound listening disabled."""
     worker, gateway, _, _, core, _ = context
-    gateway.read_error = RuntimeError("temporary socket failure")
+    gateway.read_error = AikdaTransportError("temporary socket failure")
 
     worker.run_once()
 
@@ -1042,9 +1072,8 @@ def test_worker_keeps_direct_messages_on_the_browser_gateway(context):
     assert gateway.sent_to == [("direct-1", "咖啡")]
 
 
-def test_worker_syncs_direct_rooms_and_sends_targeted_claims(context):
+def test_worker_sends_targeted_claims_without_scanning_historical_direct_rooms(context):
     worker, gateway, _, _, core, _ = context
-    gateway.direct_rooms = [DirectChatRoom("employee-1", "direct-1")]
     core.pending = [
         OutboundClaim(
             OUTBOUND_ID,
@@ -1058,7 +1087,7 @@ def test_worker_syncs_direct_rooms_and_sends_targeted_claims(context):
 
     worker.run_once()
 
-    assert core.direct_chat_syncs == [([DirectChatRoom("employee-1", "direct-1")], NOW)]
+    assert core.direct_chat_syncs == []
     assert gateway.sent == []
     assert gateway.sent_to == [("direct-1", "你的身份：卧底。词语：咖啡")]
     assert core.confirmed == [(OUTBOUND_ID, "worker-a", LEASE, "direct-1", NOW)]

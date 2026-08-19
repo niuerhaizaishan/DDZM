@@ -1,6 +1,6 @@
 from collections import deque
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 import logging
 from threading import Event, Lock, RLock, get_ident
 from typing import Any
@@ -11,7 +11,6 @@ from zoneinfo import ZoneInfo
 from socketio.exceptions import TimeoutError as SocketTimeoutError
 
 from dzmm_bot.runtime.contracts import (
-    DirectChatRoom,
     GroupChatTarget,
     InboundMessage,
     MessageReference,
@@ -21,10 +20,17 @@ from dzmm_bot.runtime.contracts import (
 _LOGGER = logging.getLogger(__name__)
 _SEND_ACK_TIMEOUT_SECONDS = 3
 _DIRECT_JOIN_ACK_TIMEOUT_SECONDS = 2
-_MAINTENANCE_INTERVAL = timedelta(seconds=30)
 
 
 class AikdaMessageRejectedError(RuntimeError):
+    pass
+
+
+class AikdaAuthenticationError(RuntimeError):
+    pass
+
+
+class AikdaTransportError(RuntimeError):
     pass
 
 
@@ -78,13 +84,7 @@ class AikdaSocketGateway:
         self._direct_chatroom_ids: set[str] = set()
         self._joined_direct_chatroom_ids: set[str] = set()
         self._next_direct_room_join_index = 0
-        self._direct_discovery_queue: deque[str] = deque()
-        self._direct_discovery_seen_users: set[str] = set()
         self._history_reconcile_queue: deque[str] = deque()
-        self._next_discovery_at: datetime | None = None
-        self._next_reconcile_at: datetime | None = None
-        self._reconcile_cycle_is_initial = True
-        self._reconcile_cycle_recovered = False
 
     def configure_group_rooms(
         self, targets: tuple[GroupChatTarget, ...]
@@ -112,9 +112,6 @@ class AikdaSocketGateway:
         }
         if next_ids:
             self.chatroom_id = sorted(next_ids)[0]
-        self._reconcile_needed = True
-        self._history_reconcile_queue.clear()
-        self._next_reconcile_at = None
         if self._socket is not None and self._socket.connected:
             self._join_configured_group_rooms()
 
@@ -130,100 +127,25 @@ class AikdaSocketGateway:
         self._set_direct_targets(direct_chatroom_ids)
         return self._drain_pending()
 
-    def reconcile_history(
+    def maintain_recovery(
         self, direct_chatroom_ids: tuple[str, ...] = ()
-    ) -> list[InboundMessage]:
+    ) -> None:
         self._ensure_connected()
         self._set_direct_targets(direct_chatroom_ids)
-        initial_sync = self._reconcile_needed
-        recovered = self._reconcile_history(self._clock())
-        if recovered and not initial_sync:
-            self._invalidate_stale_socket()
-        return self._drain_pending()
-
-    def maintain_direct_chats(
-        self, direct_chatroom_ids: tuple[str, ...] = ()
-    ) -> list[DirectChatRoom]:
-        self._ensure_connected()
-        self._set_direct_targets(direct_chatroom_ids)
-        now = self._clock()
-
-        if self._direct_discovery_queue:
-            chatroom_id = self._direct_discovery_queue.popleft()
-            try:
-                _, messages = self._accept_history(chatroom_id)
-            finally:
-                if not self._direct_discovery_queue:
-                    self._next_discovery_at = now + _MAINTENANCE_INTERVAL
-            user_id = next(
-                (
-                    item.get("sent_by")
-                    for item in messages
-                    if isinstance(item.get("sent_by"), str)
-                    and item["sent_by"] != self._bot_id
-                    and item["sent_by"] not in self._direct_discovery_seen_users
-                ),
-                None,
-            )
-            if user_id is None:
-                return []
-            self._direct_discovery_seen_users.add(user_id)
-            return [DirectChatRoom(user_id, chatroom_id)]
-
-        if self._next_discovery_at is None or now >= self._next_discovery_at:
-            rooms = self._request("chat.listAll")
-            entries = rooms if isinstance(rooms, list) else rooms.get("items", [])
-            known_rooms = {*self._group_chatroom_ids, *direct_chatroom_ids}
-            queued_rooms: set[str] = set()
-            self._direct_discovery_seen_users.clear()
-            for entry in entries:
-                if not isinstance(entry, dict):
-                    continue
-                data = entry.get("data")
-                if not isinstance(data, dict) or data.get("chatType") != "one_on_one":
-                    continue
-                chatroom_id = data.get("chatroomId")
-                if (
-                    not isinstance(chatroom_id, str)
-                    or not chatroom_id
-                    or chatroom_id in known_rooms
-                    or chatroom_id in queued_rooms
-                ):
-                    continue
-                queued_rooms.add(chatroom_id)
-                self._direct_discovery_queue.append(chatroom_id)
-            if not self._direct_discovery_queue:
-                self._next_discovery_at = now + _MAINTENANCE_INTERVAL
-            return []
-
-        if self._history_reconcile_queue:
-            self._maintain_history_reconciliation(now)
-            return []
-
-        if (
-            self._reconcile_needed
-            or self._next_reconcile_at is None
-            or now >= self._next_reconcile_at
-        ):
+        if self._reconcile_needed:
             self._history_reconcile_queue.extend(
                 (
                     *sorted(self._group_chatroom_ids),
                     *sorted(self._direct_chatroom_ids),
                 )
             )
-            self._reconcile_cycle_is_initial = self._reconcile_needed
-            self._reconcile_cycle_recovered = False
             self._reconcile_needed = False
-            self._maintain_history_reconciliation(now)
-        return []
+        self._maintain_history_reconciliation()
 
     def _set_direct_targets(self, direct_chatroom_ids: tuple[str, ...]) -> None:
         targets = set(direct_chatroom_ids)
         if targets != self._direct_chatroom_ids:
             self._direct_chatroom_ids = targets
-            self._reconcile_needed = True
-            self._history_reconcile_queue.clear()
-            self._next_reconcile_at = None
             self._next_direct_room_join_index = 0
         for offset in range(len(direct_chatroom_ids)):
             index = (self._next_direct_room_join_index + offset) % len(
@@ -397,38 +319,6 @@ class AikdaSocketGateway:
         with self._send_locks_guard:
             return self._send_locks.setdefault(chatroom_id, Lock())
 
-    def discover_direct_chats(self) -> list[DirectChatRoom]:
-        self._ensure_connected()
-        rooms = self._request("chat.listAll")
-        entries = rooms if isinstance(rooms, list) else rooms.get("items", [])
-        discovered: list[DirectChatRoom] = []
-        seen_users: set[str] = set()
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            data = entry.get("data")
-            if not isinstance(data, dict) or data.get("chatType") != "one_on_one":
-                continue
-            chatroom_id = data.get("chatroomId")
-            if not isinstance(chatroom_id, str) or not chatroom_id:
-                continue
-            history = self._request("chatroom.getMessages", {"chatroomId": chatroom_id})
-            user_id = next(
-                (
-                    message.get("sent_by")
-                    for message in history.get("messages", [])
-                    if isinstance(message, dict)
-                    and isinstance(message.get("sent_by"), str)
-                    and message["sent_by"] != self._bot_id
-                ),
-                None,
-            )
-            if user_id is None or user_id in seen_users:
-                continue
-            seen_users.add(user_id)
-            discovered.append(DirectChatRoom(user_id, chatroom_id))
-        return discovered
-
     def retract(self, message_id: str) -> None:
         self._ensure_connected()
         acknowledgement = self._call(
@@ -441,14 +331,14 @@ class AikdaSocketGateway:
             raise RuntimeError(error)
 
     def is_authenticated(self) -> bool:
+        if self._socket is not None and self._socket.connected and self._joined.is_set():
+            self._authenticated = True
+            return True
         try:
-            profile = self._request("user.getMe")
-            if not profile.get("id"):
-                raise RuntimeError("bot identity unavailable")
-            self._account_display_name = _profile_display_name(profile)
             self._ensure_connected()
-        except Exception:
+        except AikdaAuthenticationError:
             self._authenticated = False
+            return False
         return self._authenticated
 
     @property
@@ -492,14 +382,24 @@ class AikdaSocketGateway:
             return
         if get_ident() != self._owner_thread_id:
             raise SocketTimeoutError()
-        profile = self._request("user.getMe")
+        try:
+            profile = self._request("user.getMe")
+        except (AikdaAuthenticationError, AikdaTransportError):
+            raise
+        except Exception as error:
+            raise AikdaTransportError(str(error) or type(error).__name__) from error
         bot_id = profile.get("id")
         if not bot_id:
-            raise RuntimeError("bot identity unavailable")
+            raise AikdaAuthenticationError("bot identity unavailable")
         self._account_display_name = _profile_display_name(profile)
-        token = self._token_provider()
+        try:
+            token = self._token_provider()
+        except (AikdaAuthenticationError, AikdaTransportError):
+            raise
+        except Exception as error:
+            raise AikdaTransportError(str(error) or type(error).__name__) from error
         if not token:
-            raise RuntimeError("socket token unavailable")
+            raise AikdaAuthenticationError("socket token unavailable")
         self._bot_id = bot_id
         if self._socket is None:
             self._socket = self._socket_factory()
@@ -515,39 +415,21 @@ class AikdaSocketGateway:
         }
         if cookie:
             connect_options["headers"] = {"Cookie": cookie}
-        self._socket.connect(
-            self._origin,
-            **connect_options,
-        )
+        try:
+            self._socket.connect(
+                self._origin,
+                **connect_options,
+            )
+        except Exception as error:
+            raise AikdaTransportError(str(error) or type(error).__name__) from error
         if not self._joined.wait(timeout=10):
             self._socket.disconnect()
-            raise RuntimeError("socket join timed out")
+            raise AikdaTransportError("socket join timed out")
         if self._implicit_group_chatroom_id in self._group_chatroom_ids:
             self._joined_group_chatroom_ids.add(self._implicit_group_chatroom_id)
         self._join_configured_group_rooms()
         self._authenticated = True
         self._reconcile_needed = True
-
-    def _reconcile_history(self, now: datetime) -> bool:
-        seen_before = len(self._seen_ids)
-        for chatroom_id in (
-            *sorted(self._group_chatroom_ids),
-            *sorted(self._direct_chatroom_ids),
-        ):
-            try:
-                payload = self._request(
-                    "chatroom.getMessages", {"chatroomId": chatroom_id}
-                )
-            except Exception:
-                _LOGGER.exception(
-                    "message history reconciliation failed chatroom=%s",
-                    chatroom_id,
-                )
-                continue
-            for message in payload.get("messages", []):
-                self._accept_message(chatroom_id, message)
-        self._reconcile_needed = False
-        return len(self._seen_ids) > seen_before
 
     def _accept_history(
         self, chatroom_id: str
@@ -563,35 +445,17 @@ class AikdaSocketGateway:
             self._accept_message(chatroom_id, message)
         return len(self._seen_ids) > seen_before, messages
 
-    def _maintain_history_reconciliation(self, now: datetime) -> None:
+    def _maintain_history_reconciliation(self) -> None:
         with self._state_lock:
             if not self._history_reconcile_queue:
                 return
             chatroom_id = self._history_reconcile_queue.popleft()
         try:
-            recovered, _ = self._accept_history(chatroom_id)
+            self._accept_history(chatroom_id)
         except Exception:
             _LOGGER.exception(
                 "message history maintenance failed chatroom=%s", chatroom_id
             )
-            recovered = False
-        self._reconcile_cycle_recovered |= recovered
-        if self._history_reconcile_queue:
-            return
-        self._next_reconcile_at = now + _MAINTENANCE_INTERVAL
-        if self._reconcile_cycle_recovered and not self._reconcile_cycle_is_initial:
-            self._invalidate_stale_socket()
-
-    def _invalidate_stale_socket(self) -> None:
-        with self._state_lock:
-            self._socket.disconnect()
-            self._authenticated = False
-            self._joined.clear()
-            self._joined_group_chatroom_ids.clear()
-            self._joined_direct_chatroom_ids.clear()
-            self._reconcile_needed = True
-            self._history_reconcile_queue.clear()
-            self._next_reconcile_at = None
 
     def _on_message(self, payload: dict[str, Any]) -> None:
         message = payload.get("message")
@@ -609,7 +473,6 @@ class AikdaSocketGateway:
             self._joined_direct_chatroom_ids.clear()
             self._reconcile_needed = True
             self._history_reconcile_queue.clear()
-            self._next_reconcile_at = None
 
     def _accept_message(self, chatroom_id: str | None, message: dict[str, Any]) -> None:
         if message.get("sent_by") == self._bot_id:
@@ -631,10 +494,8 @@ class AikdaSocketGateway:
             return
         if chatroom_id in self._group_chatroom_ids:
             source_type = "group"
-        elif chatroom_id in self._direct_chatroom_ids:
-            source_type = "direct"
         else:
-            return
+            source_type = "direct"
         inbound = InboundMessage(
             message_id,
             sent_by,
