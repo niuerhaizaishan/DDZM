@@ -1,3 +1,4 @@
+import base64
 import json
 from pathlib import Path
 import subprocess
@@ -325,6 +326,35 @@ def test_trpc_unauthorized_response_is_classified_as_authentication_loss(tmp_pat
 
     with pytest.raises(AikdaAuthenticationError, match="status=401"):
         session._request("user.getMe")
+
+
+def test_configured_session_recovers_socket_identity_from_auth_cookie_on_418(tmp_path):
+    page = FakePage("https://chat.example/chat?c=group-1")
+    page.evaluate = lambda _script, _argument=None: (_ for _ in ()).throw(
+        RuntimeError("Aikda request failed status=418")
+    )
+    cached_session = base64.b64encode(json.dumps({
+        "access_token": "cached-socket-token",
+        "user": {"id": "user-1"},
+    }).encode()).decode()
+    context = FakeContext(page.url, cookies=[{
+        "name": "sb-project-auth-token",
+        "value": f"base64-{cached_session}",
+    }])
+    context.pages = [page]
+    socket = FakeSocket()
+    session = BrowserSession(
+        tmp_path / "profile",
+        "https://chat.example/login",
+        chat_url="https://chat.example/chat?c=group-1",
+        playwright_factory=lambda: FakePlaywright(FakeChromium(context)),
+        socket_factory=lambda: socket,
+    )
+
+    gateway = session.start_headless()
+
+    assert gateway.is_authenticated()
+    assert socket.connect_calls[0][1]["auth"] == {"token": "cached-socket-token"}
 
 
 def test_configured_session_uploads_image_as_multipart_without_hex_encoding(tmp_path):

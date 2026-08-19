@@ -1,4 +1,6 @@
+import base64
 from datetime import datetime
+import json
 from pathlib import Path
 from time import time
 from typing import Callable, Protocol
@@ -173,7 +175,13 @@ class BrowserSession:
         try:
             return self._active_page().evaluate(_TOKEN_SCRIPT)
         except Exception as error:
-            raise _platform_request_error(error) from error
+            classified = _platform_request_error(error)
+            cached = self._stored_auth_session()
+            if isinstance(classified, AikdaTransportError) and cached is not None:
+                token = cached.get("access_token")
+                if isinstance(token, str) and token:
+                    return token
+            raise classified from error
 
     def _request(self, procedure: str, payload: dict | None = None) -> dict:
         try:
@@ -186,7 +194,39 @@ class BrowserSession:
                 },
             )
         except Exception as error:
-            raise _platform_request_error(error) from error
+            classified = _platform_request_error(error)
+            cached = self._stored_auth_session()
+            if (
+                procedure == "user.getMe"
+                and isinstance(classified, AikdaTransportError)
+                and cached is not None
+            ):
+                user = cached.get("user")
+                if isinstance(user, dict) and isinstance(user.get("id"), str):
+                    return user
+            raise classified from error
+
+    def _stored_auth_session(self) -> dict | None:
+        if self._context is None:
+            return None
+        for cookie in self._context.cookies():
+            name = cookie.get("name", "")
+            value = cookie.get("value", "")
+            if not (
+                name.startswith("sb-")
+                and name.endswith("-auth-token")
+                and value.startswith("base64-")
+            ):
+                continue
+            try:
+                encoded = value.removeprefix("base64-")
+                decoded = base64.b64decode(encoded + "=" * (-len(encoded) % 4))
+                session = json.loads(decoded)
+            except (ValueError, TypeError, json.JSONDecodeError):
+                continue
+            if isinstance(session, dict):
+                return session
+        return None
 
     def _upload_image(
         self, path: Path, mime_type: str, chatroom_id: str
