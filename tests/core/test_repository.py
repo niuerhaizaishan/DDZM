@@ -1804,6 +1804,57 @@ def test_duplicate_platform_message_returns_existing_record(repository, inbound)
     assert second.id == first.id
 
 
+@pytest.mark.parametrize(
+    ("source_type", "expected_predicate"),
+    (("group", "source_type = 'group'"), ("direct", "source_type = 'direct'")),
+)
+def test_postgres_inbound_conflict_predicate_is_literal(
+    now, source_type, expected_predicate
+):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    from sqlalchemy.dialects import postgresql
+
+    from dzmm_bot.core.repository import CoreRepository
+
+    class CompilingSession:
+        compiled_statement = ""
+
+        def get_bind(self):
+            return SimpleNamespace(dialect=postgresql.dialect())
+
+        def scalar(self, statement):
+            self.compiled_statement = str(
+                statement.compile(dialect=postgresql.dialect())
+            )
+            return uuid4()
+
+        def get(self, _model, record_id):
+            return SimpleNamespace(id=record_id)
+
+    session = CompilingSession()
+
+    @contextmanager
+    def begin():
+        yield session
+
+    repository = CoreRepository(SimpleNamespace(begin=begin))
+    repository.accept_inbound(
+        InboundMessage(
+            "postgres-platform-1",
+            "postgres-sender-1",
+            "hello",
+            now,
+            source_type=source_type,
+            chatroom_id="room-1",
+        )
+    )
+
+    assert expected_predicate in session.compiled_statement
+    assert "source_type_1" not in session.compiled_statement
+
+
 def test_board_bonus_grants_single_employee_and_records_audit(
     repository, session_factory, now
 ):

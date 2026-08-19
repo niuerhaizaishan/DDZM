@@ -11,7 +11,7 @@ import unicodedata
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, delete, exists, func, or_, select, update
+from sqlalchemy import and_, delete, exists, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session, aliased, sessionmaker
@@ -2057,14 +2057,14 @@ class CoreRepository:
                     InboundRecord.group_chat_id,
                     InboundRecord.platform_message_id,
                 ]
-                conflict_filter = InboundRecord.source_type == "group"
+                conflict_filter = text("source_type = 'group'")
                 existing_filter = InboundRecord.group_chat_id == group_chat_id
             else:
                 conflict_columns = [
                     InboundRecord.chatroom_id,
                     InboundRecord.platform_message_id,
                 ]
-                conflict_filter = InboundRecord.source_type == "direct"
+                conflict_filter = text("source_type = 'direct'")
                 existing_filter = InboundRecord.chatroom_id == message.chatroom_id
             inserted_id = session.scalar(
                 statement.on_conflict_do_nothing(
