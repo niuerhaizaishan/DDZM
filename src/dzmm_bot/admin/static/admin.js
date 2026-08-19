@@ -47,6 +47,16 @@ let rankPage = 1;
 let groupChats = [];
 let employeeGroupMessagePage = 1;
 
+const groupGameOptions = [
+  ["red_packet", "发红包", "red-packet"],
+  ["hide_and_seek", "摸鱼躲猫猫", "hide-and-seek"],
+  ["memory_assessment", "记忆考核", "memory-assessment"],
+  ["undercover", "谁是卧底", "undercover"],
+  ["blame_bomb", "甩锅游戏", "blame-bomb"],
+  ["number_bomb", "蹦蹦数字炸弹", "number-bomb"],
+  ["texas_holdem", "德州扑克", "texas-holdem"],
+];
+
 const pageSizeOptions = [5, 10, 15, 20, 50];
 const pageSizeByList = new Map();
 const listFilters = new Map();
@@ -1452,13 +1462,16 @@ function groupConnectionLabel(state) {
 function renderGroupChats(items) {
   document.querySelector("#group-chat-list").innerHTML = items.map((group) => {
     const runtime = group.runtime || {};
+    const enabledGameTypes = new Set(group.enabled_game_types || groupGameOptions.map(([type]) => type));
+    const enabledGameLabels = groupGameOptions.filter(([type]) => enabledGameTypes.has(type)).map(([, label]) => label);
+    const gameSummary = group.games_enabled ? (enabledGameLabels.join("、") || "无") : "总开关已关闭";
     const switches = [
       ["监听", group.listening_enabled],
       ["游戏", group.games_enabled],
       ["随机事件", group.random_events_enabled],
       ["公告", group.announcements_enabled],
     ].map(([label, enabled]) => `${label}：${enabled ? "开" : "关"}`).join(" · ");
-    return `<article class="data-row"><div><b>${escapeHtml(group.name)}</b><small>${statusBadge(groupConnectionLabel(runtime.connection_state), runtime.connection_state === "connected" ? "success" : runtime.connection_state === "failed" ? "warning" : "")}</small><small>群聊 ID：${escapeHtml(group.chatroom_id || "未识别")} · ${escapeHtml(switches)}</small><small>${escapeHtml(group.chat_url || "未配置链接")}</small><small>最近接收：${formatHeartbeat(runtime.last_inbound_at)} · 最近发送：${formatHeartbeat(runtime.last_outbound_at)}</small>${runtime.last_error_summary ? `<small class="form-error">${escapeHtml(runtime.last_error_summary)}</small>` : ""}</div><div class="command-actions"><button class="secondary" data-edit-group-chat="${group.id}" type="button">编辑</button><button class="danger-button" data-delete-group-chat="${group.id}" type="button" ${group.listening_enabled ? "disabled" : ""}>删除</button></div></article>`;
+    return `<article class="data-row"><div><b>${escapeHtml(group.name)}</b><small>${statusBadge(groupConnectionLabel(runtime.connection_state), runtime.connection_state === "connected" ? "success" : runtime.connection_state === "failed" ? "warning" : "")}</small><small>群聊 ID：${escapeHtml(group.chatroom_id || "未识别")} · ${escapeHtml(switches)}</small><small>已开启玩法：${escapeHtml(gameSummary)}</small><small>${escapeHtml(group.chat_url || "未配置链接")}</small><small>最近接收：${formatHeartbeat(runtime.last_inbound_at)} · 最近发送：${formatHeartbeat(runtime.last_outbound_at)}</small>${runtime.last_error_summary ? `<small class="form-error">${escapeHtml(runtime.last_error_summary)}</small>` : ""}</div><div class="command-actions"><button class="secondary" data-edit-group-chat="${group.id}" type="button">编辑</button><button class="danger-button" data-delete-group-chat="${group.id}" type="button" ${group.listening_enabled ? "disabled" : ""}>删除</button></div></article>`;
   }).join("") || '<p class="muted">还没有可管理的群聊。</p>';
 }
 
@@ -1478,6 +1491,10 @@ function openGroupChatModal(group = null) {
   document.querySelector("#group-chat-room-id").value = group?.chatroom_id || "";
   document.querySelector("#group-chat-listening-enabled").checked = group?.listening_enabled ?? true;
   document.querySelector("#group-chat-games-enabled").checked = group?.games_enabled ?? true;
+  const enabledGameTypes = new Set(group?.enabled_game_types || groupGameOptions.map(([type]) => type));
+  for (const [type, , inputId] of groupGameOptions) {
+    document.querySelector(`#group-chat-game-${inputId}`).checked = enabledGameTypes.has(type);
+  }
   document.querySelector("#group-chat-random-events-enabled").checked = group?.random_events_enabled ?? true;
   document.querySelector("#group-chat-announcements-enabled").checked = group?.announcements_enabled ?? true;
   groupChatModal.hidden = false;
@@ -1983,6 +2000,7 @@ document.querySelector("#save-group-chat").addEventListener("click", async (even
     chat_url: document.querySelector("#group-chat-url").value,
     listening_enabled: document.querySelector("#group-chat-listening-enabled").checked,
     games_enabled: document.querySelector("#group-chat-games-enabled").checked,
+    enabled_game_types: groupGameOptions.filter(([, , inputId]) => document.querySelector(`#group-chat-game-${inputId}`).checked).map(([type]) => type),
     random_events_enabled: document.querySelector("#group-chat-random-events-enabled").checked,
     announcements_enabled: document.querySelector("#group-chat-announcements-enabled").checked,
   };

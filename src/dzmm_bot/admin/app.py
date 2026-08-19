@@ -24,6 +24,7 @@ from httpx import HTTPStatusError
 from sqlalchemy.exc import IntegrityError
 
 from dzmm_bot.core.database import create_session_factory
+from dzmm_bot.core.group_games import GROUP_GAME_TYPES
 from dzmm_bot.core.schema import beijing_now
 from dzmm_bot.runtime.settings import Settings
 
@@ -385,13 +386,34 @@ def create_app(
         if (
             not isinstance(request.get("name"), str)
             or not isinstance(request.get("chat_url"), str)
-            or not all(isinstance(request.get(key), bool) for key in required[2:])
+            or not all(
+                isinstance(request.get(key), bool)
+                for key in (
+                    "listening_enabled",
+                    "games_enabled",
+                    "random_events_enabled",
+                    "announcements_enabled",
+                )
+            )
+            or (
+                "enabled_game_types" in request
+                and (
+                    not isinstance(request["enabled_game_types"], list)
+                    or not all(
+                        isinstance(value, str)
+                        for value in request["enabled_game_types"]
+                    )
+                )
+            )
         ):
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid group chat"
             )
         payload = {
             **{key: request[key] for key in required},
+            "enabled_game_types": request.get(
+                "enabled_game_types", list(GROUP_GAME_TYPES)
+            ),
             "now": beijing_now().isoformat(),
         }
         return versioned_configuration_response(
@@ -418,6 +440,7 @@ def create_app(
             "chat_url",
             "listening_enabled",
             "games_enabled",
+            "enabled_game_types",
             "random_events_enabled",
             "announcements_enabled",
         }
@@ -430,7 +453,16 @@ def create_app(
             for key in ("name", "chat_url")
         ) or any(
             key in request and not isinstance(request[key], bool)
-            for key in allowed - {"name", "chat_url"}
+            for key in allowed - {"name", "chat_url", "enabled_game_types"}
+        ) or (
+            "enabled_game_types" in request
+            and (
+                not isinstance(request["enabled_game_types"], list)
+                or not all(
+                    isinstance(value, str)
+                    for value in request["enabled_game_types"]
+                )
+            )
         ):
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid group chat"

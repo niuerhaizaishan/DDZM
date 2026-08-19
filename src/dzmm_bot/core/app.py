@@ -274,6 +274,7 @@ def create_app(
                 request.random_events_enabled,
                 request.announcements_enabled,
                 request.now,
+                enabled_game_types=request.enabled_game_types,
             )
         except (ValueError, GroupChatConflict) as error:
             raise HTTPException(status.HTTP_409_CONFLICT, str(error))
@@ -339,6 +340,7 @@ def create_app(
                 chat_url=request.chat_url,
                 listening_enabled=request.listening_enabled,
                 games_enabled=request.games_enabled,
+                enabled_game_types=request.enabled_game_types,
                 random_events_enabled=request.random_events_enabled,
                 announcements_enabled=request.announcements_enabled,
                 now=request.now,
@@ -2423,6 +2425,7 @@ def _group_chat_response(group, runtime) -> GroupChatResponse:
         chatroom_id=group.chatroom_id,
         listening_enabled=group.listening_enabled,
         games_enabled=group.games_enabled,
+        enabled_game_types=list(group.enabled_game_types),
         random_events_enabled=group.random_events_enabled,
         announcements_enabled=group.announcements_enabled,
         created_at=group.created_at,

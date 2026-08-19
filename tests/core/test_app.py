@@ -1602,6 +1602,7 @@ def test_group_chat_crud_targets_and_runtime_api(app_context, headers):
             "chat_url": "https://www.aikda.com/chat?c=group-2&utm_source=admin",
             "listening_enabled": True,
             "games_enabled": False,
+            "enabled_game_types": ["number_bomb"],
             "random_events_enabled": True,
             "announcements_enabled": False,
             "now": NOW.isoformat(),
@@ -1611,6 +1612,7 @@ def test_group_chat_crud_targets_and_runtime_api(app_context, headers):
     assert created.status_code == 201
     second = created.json()
     assert second["chat_url"] == "https://www.aikda.com/chat?c=group-2"
+    assert second.get("enabled_game_types") == ["number_bomb"]
     assert second["runtime"]["connection_state"] == "pending"
 
     targets = app_context.client.get(

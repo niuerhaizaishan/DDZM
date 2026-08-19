@@ -49,6 +49,7 @@ from .ai_knowledge import (
 )
 
 from .ai_mentions import normalize_ai_mention
+from .group_games import GROUP_GAME_TYPES, normalized_group_game_types
 from .number_bomb import (
     NUMBER_BOMB_MULTIPLIER_TENTHS,
     NumberBombEntry,
@@ -192,6 +193,7 @@ class GroupChatConfig:
     chatroom_id: str | None
     listening_enabled: bool
     games_enabled: bool
+    enabled_game_types: tuple[str, ...]
     random_events_enabled: bool
     announcements_enabled: bool
     created_at: datetime
@@ -255,6 +257,7 @@ def _group_chat_config(record: GroupChatRecord) -> GroupChatConfig:
         chatroom_id=record.chatroom_id,
         listening_enabled=record.listening_enabled,
         games_enabled=record.games_enabled,
+        enabled_game_types=tuple(record.enabled_game_types),
         random_events_enabled=record.random_events_enabled,
         announcements_enabled=record.announcements_enabled,
         created_at=record.created_at,
@@ -1577,6 +1580,7 @@ class CoreRepository:
                     chatroom_id=chatroom_id,
                     listening_enabled=True,
                     games_enabled=True,
+                    enabled_game_types=list(GROUP_GAME_TYPES),
                     random_events_enabled=True,
                     announcements_enabled=True,
                     created_at=now,
@@ -1589,6 +1593,7 @@ class CoreRepository:
                 record.chatroom_id = chatroom_id
                 record.listening_enabled = True
                 record.games_enabled = True
+                record.enabled_game_types = list(GROUP_GAME_TYPES)
                 record.random_events_enabled = True
                 record.announcements_enabled = True
                 record.updated_at = now
@@ -1653,6 +1658,8 @@ class CoreRepository:
         random_events_enabled: bool,
         announcements_enabled: bool,
         now: datetime,
+        *,
+        enabled_game_types: Sequence[str] | None = None,
     ) -> GroupChatConfig:
         normalized_name = self._validate_group_chat_name(name)
         with self._session() as session:
@@ -1669,6 +1676,13 @@ class CoreRepository:
                 chatroom_id=chatroom_id,
                 listening_enabled=listening_enabled,
                 games_enabled=games_enabled,
+                enabled_game_types=list(
+                    normalized_group_game_types(
+                        GROUP_GAME_TYPES
+                        if enabled_game_types is None
+                        else enabled_game_types
+                    )
+                ),
                 random_events_enabled=random_events_enabled,
                 announcements_enabled=announcements_enabled,
                 created_at=now,
@@ -1695,6 +1709,7 @@ class CoreRepository:
         chat_url: str | None = None,
         listening_enabled: bool | None = None,
         games_enabled: bool | None = None,
+        enabled_game_types: Sequence[str] | None = None,
         random_events_enabled: bool | None = None,
         announcements_enabled: bool | None = None,
         now: datetime,
@@ -1732,12 +1747,32 @@ class CoreRepository:
             if record.listening_enabled and not next_listening:
                 self._guard_group_chat_can_stop(session, group_id)
 
+            next_game_types = (
+                record.enabled_game_types
+                if enabled_game_types is None
+                else normalized_group_game_types(enabled_game_types)
+            )
+            removed_game_types = set(record.enabled_game_types) - set(
+                next_game_types
+            )
+            if (
+                record.games_enabled
+                and games_enabled is False
+                and self._group_has_active_group_game(session, group_id)
+            ) or any(
+                self._group_has_active_game_type(session, group_id, game_type)
+                for game_type in removed_game_types
+            ):
+                raise GroupChatConflict("active_gameplay")
+
             record.name = next_name
             record.chat_url = next_url
             record.chatroom_id = next_chatroom_id
             record.listening_enabled = next_listening
             if games_enabled is not None:
                 record.games_enabled = games_enabled
+            if enabled_game_types is not None:
+                record.enabled_game_types = list(next_game_types)
             if random_events_enabled is not None:
                 record.random_events_enabled = random_events_enabled
             if announcements_enabled is not None:
@@ -1913,39 +1948,63 @@ class CoreRepository:
         if int(enabled_count or 0) <= 1:
             raise GroupChatConflict("last_enabled_group")
 
+    @classmethod
+    def _group_has_active_gameplay(
+        cls, session: Session, group_id: UUID
+    ) -> bool:
+        if cls._group_has_active_group_game(session, group_id):
+            return True
+        random_event = select(RandomEventRecord.id).where(
+            RandomEventRecord.group_chat_id == group_id,
+            RandomEventRecord.state.in_(("signup", "in_progress", "tipping")),
+        )
+        return bool(session.scalar(select(exists(random_event))))
+
+    @classmethod
+    def _group_has_active_group_game(
+        cls, session: Session, group_id: UUID
+    ) -> bool:
+        return any(
+            cls._group_has_active_game_type(session, group_id, game_type)
+            for game_type in GROUP_GAME_TYPES
+        )
+
     @staticmethod
-    def _group_has_active_gameplay(session: Session, group_id: UUID) -> bool:
-        checks = (
-            select(UndercoverSessionRecord.id).where(
-                UndercoverSessionRecord.group_chat_id == group_id,
-                UndercoverSessionRecord.active_key.is_not(None),
-            ),
-            select(BlameGameRecord.id).where(
-                BlameGameRecord.group_chat_id == group_id,
-                BlameGameRecord.active_key.is_not(None),
-            ),
-            select(RedPacketRecord.id).where(
+    def _group_has_active_game_type(
+        session: Session, group_id: UUID, game_type: str
+    ) -> bool:
+        checks = {
+            "red_packet": select(RedPacketRecord.id).where(
                 RedPacketRecord.group_chat_id == group_id,
                 RedPacketRecord.active_key.is_not(None),
             ),
-            select(NumberBombGameRecord.id).where(
-                NumberBombGameRecord.group_chat_id == group_id,
-                NumberBombGameRecord.active_key.is_not(None),
-            ),
-            select(HideAndSeekGameRecord.id).where(
+            "hide_and_seek": select(HideAndSeekGameRecord.id).where(
                 HideAndSeekGameRecord.group_chat_id == group_id,
                 HideAndSeekGameRecord.state == "selecting",
             ),
-            select(MemoryAssessmentGameRecord.id).where(
+            "memory_assessment": select(MemoryAssessmentGameRecord.id).where(
                 MemoryAssessmentGameRecord.group_chat_id == group_id,
                 MemoryAssessmentGameRecord.active_key.is_not(None),
             ),
-            select(RandomEventRecord.id).where(
-                RandomEventRecord.group_chat_id == group_id,
-                RandomEventRecord.state.in_(("signup", "in_progress", "tipping")),
+            "undercover": select(UndercoverSessionRecord.id).where(
+                UndercoverSessionRecord.group_chat_id == group_id,
+                UndercoverSessionRecord.active_key.is_not(None),
             ),
-        )
-        return any(session.scalar(select(exists(check))) for check in checks)
+            "blame_bomb": select(BlameGameRecord.id).where(
+                BlameGameRecord.group_chat_id == group_id,
+                BlameGameRecord.active_key.is_not(None),
+            ),
+            "number_bomb": select(NumberBombGameRecord.id).where(
+                NumberBombGameRecord.group_chat_id == group_id,
+                NumberBombGameRecord.active_key.is_not(None),
+            ),
+            "texas_holdem": select(TexasHoldemGameRecord.id).where(
+                TexasHoldemGameRecord.group_chat_id == group_id,
+                TexasHoldemGameRecord.active_key.is_not(None),
+            ),
+        }
+        check = checks.get(game_type)
+        return False if check is None else bool(session.scalar(select(exists(check))))
 
     @staticmethod
     def _audit_group_chat(
@@ -1965,6 +2024,7 @@ class CoreRepository:
                 "chatroom_id": config.chatroom_id,
                 "listening_enabled": config.listening_enabled,
                 "games_enabled": config.games_enabled,
+                "enabled_game_types": list(config.enabled_game_types),
                 "random_events_enabled": config.random_events_enabled,
                 "announcements_enabled": config.announcements_enabled,
                 "deleted": config.deleted_at is not None,

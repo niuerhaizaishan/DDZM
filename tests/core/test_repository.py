@@ -1064,6 +1064,53 @@ def test_group_chat_with_active_gameplay_cannot_be_disabled(repository, now):
         )
 
 
+def test_group_chat_cannot_disable_an_active_specific_game(repository, now):
+    from dzmm_bot.core.group_games import GROUP_GAME_TYPES
+    from dzmm_bot.core.repository import GroupChatConflict
+
+    number_group = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=group-number", now
+    )
+    texas_group = repository.create_group_chat(
+        "德州群",
+        "https://www.aikda.com/chat?c=group-texas",
+        True,
+        True,
+        True,
+        True,
+        now,
+    )
+    repository.create_user("number-owner", "数字发起人", now, 100)
+    repository.create_user("texas-owner", "德州发起人", now, 100)
+    repository.upsert_direct_chats(
+        [("number-owner", "direct-number"), ("texas-owner", "direct-texas")],
+        now,
+    )
+    assert repository.start_number_bomb_game(
+        "number-owner", now, number_group.id
+    ).status == "signup_started"
+    assert repository.start_texas_holdem_signup(
+        "texas-owner", 20, now, texas_group.id
+    ).status == "created"
+
+    with pytest.raises(GroupChatConflict, match="active_gameplay"):
+        repository.update_group_chat(
+            number_group.id,
+            enabled_game_types=tuple(
+                item for item in GROUP_GAME_TYPES if item != "number_bomb"
+            ),
+            now=now + timedelta(minutes=1),
+        )
+    with pytest.raises(GroupChatConflict, match="active_gameplay"):
+        repository.update_group_chat(
+            texas_group.id,
+            enabled_game_types=tuple(
+                item for item in GROUP_GAME_TYPES if item != "texas_holdem"
+            ),
+            now=now + timedelta(minutes=1),
+        )
+
+
 def test_red_packets_are_isolated_by_group_while_daily_starts_are_global(
     repository, now
 ):

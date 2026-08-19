@@ -90,6 +90,135 @@ def test_group_game_switch_blocks_only_new_game_creation():
     ).game_type is None
 
 
+def test_groups_can_enable_number_bomb_and_texas_holdem_independently():
+    service, repository, factory = _service()
+    now = datetime(2026, 8, 19, 10, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=group-main", now
+    )
+    number_group = repository.create_group_chat(
+        "数字群",
+        "https://www.aikda.com/chat?c=group-number",
+        True,
+        True,
+        True,
+        True,
+        now,
+        enabled_game_types=("number_bomb",),
+    )
+    texas_group = repository.create_group_chat(
+        "德州群",
+        "https://www.aikda.com/chat?c=group-texas",
+        True,
+        True,
+        True,
+        True,
+        now,
+        enabled_game_types=("texas_holdem",),
+    )
+    repository.create_user("number-player", "数字玩家", now, 100)
+    repository.create_user("texas-player", "德州玩家", now, 100)
+    repository.upsert_direct_chats(
+        [("number-player", "direct-number"), ("texas-player", "direct-texas")],
+        now,
+    )
+
+    blocked_texas = _group_receive(
+        service,
+        "number-group-texas",
+        "number-player",
+        "/德州扑克 20",
+        now,
+        number_group.chatroom_id,
+    )
+    assert _replies_for(factory, blocked_texas.message_id) == [
+        "本群未开启「德州扑克」。"
+    ]
+    number_started = _group_receive(
+        service,
+        "number-group-number",
+        "number-player",
+        "/蹦蹦数字炸弹",
+        now,
+        number_group.chatroom_id,
+    )
+    assert "蹦蹦数字炸弹" in "".join(
+        _replies_for(factory, number_started.message_id)
+    )
+
+    blocked_number = _group_receive(
+        service,
+        "texas-group-number",
+        "texas-player",
+        "/蹦蹦数字炸弹",
+        now,
+        texas_group.chatroom_id,
+    )
+    assert _replies_for(factory, blocked_number.message_id) == [
+        "本群未开启「蹦蹦数字炸弹」。"
+    ]
+    texas_started = _group_receive(
+        service,
+        "texas-group-texas",
+        "texas-player",
+        "/德州扑克 20",
+        now,
+        texas_group.chatroom_id,
+    )
+    assert "德州扑克报名" in "".join(
+        _replies_for(factory, texas_started.message_id)
+    )
+
+
+@pytest.mark.parametrize(
+    ("command", "game_label"),
+    (
+        ("/发红包 2 2", "发红包"),
+        ("/抢红包", "发红包"),
+        ("/开始摸鱼躲藏", "摸鱼躲猫猫"),
+        ("/记忆考核", "记忆考核"),
+        ("/收手", "记忆考核"),
+        ("/谁是卧底 4", "谁是卧底"),
+        ("/开始投票", "谁是卧底"),
+        ("/甩锅游戏 2", "甩锅游戏"),
+        ("/甩锅 1 测试", "甩锅游戏"),
+        ("/过牌", "德州扑克"),
+    ),
+)
+def test_disabled_group_game_blocks_start_and_specific_follow_up_commands(
+    command, game_label
+):
+    service, repository, factory = _service()
+    now = datetime(2026, 8, 19, 10, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=group-main", now
+    )
+    group = repository.create_group_chat(
+        "禁用玩法群",
+        "https://www.aikda.com/chat?c=group-disabled-games",
+        True,
+        True,
+        True,
+        True,
+        now,
+        enabled_game_types=(),
+    )
+    repository.create_user("disabled-player", "禁用玩家", now, 100)
+
+    result = _group_receive(
+        service,
+        f"disabled-{command}",
+        "disabled-player",
+        command,
+        now,
+        group.chatroom_id,
+    )
+
+    assert _replies_for(factory, result.message_id) == [
+        f"本群未开启「{game_label}」。"
+    ]
+
+
 def _replies_for(factory, inbound_id):
     from dzmm_bot.core.schema import OutboundRecord
 

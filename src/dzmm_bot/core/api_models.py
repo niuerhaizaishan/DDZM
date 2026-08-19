@@ -5,6 +5,7 @@ from uuid import UUID
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from dzmm_bot.runtime.contracts import LoginState
+from .group_games import GROUP_GAME_TYPES, GroupGameType
 from .schema import PRIMARY_GROUP_CHAT_ID
 
 
@@ -76,6 +77,7 @@ class GroupChatResponse(ApiModel):
     chatroom_id: str | None
     listening_enabled: bool
     games_enabled: bool
+    enabled_game_types: list[GroupGameType]
     random_events_enabled: bool
     announcements_enabled: bool
     created_at: datetime
@@ -89,6 +91,9 @@ class CreateGroupChatRequest(ApiModel):
     chat_url: str = Field(min_length=1, max_length=4096)
     listening_enabled: bool = True
     games_enabled: bool = True
+    enabled_game_types: list[GroupGameType] = Field(
+        default_factory=lambda: list(GROUP_GAME_TYPES)
+    )
     random_events_enabled: bool = True
     announcements_enabled: bool = True
     now: AwareDatetime
@@ -99,6 +104,7 @@ class UpdateGroupChatRequest(ApiModel):
     chat_url: str | None = Field(default=None, min_length=1, max_length=4096)
     listening_enabled: bool | None = None
     games_enabled: bool | None = None
+    enabled_game_types: list[GroupGameType] | None = None
     random_events_enabled: bool | None = None
     announcements_enabled: bool | None = None
     now: AwareDatetime

@@ -23,6 +23,8 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import TypeDecorator
 
+from .group_games import GROUP_GAME_TYPES
+
 
 BEIJING = ZoneInfo("Asia/Shanghai")
 PRIMARY_GROUP_CHAT_ID = UUID("00000000-0000-0000-0000-000000000001")
@@ -66,6 +68,9 @@ class GroupChatRecord(Base):
     chatroom_id: Mapped[str | None] = mapped_column(String(255), unique=True)
     listening_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
     games_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    enabled_game_types: Mapped[list[str]] = mapped_column(
+        JSON, nullable=False, default=lambda: list(GROUP_GAME_TYPES)
+    )
     random_events_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
     announcements_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
     created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)

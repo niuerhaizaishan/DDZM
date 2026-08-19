@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo
 
 from dzmm_bot.runtime.contracts import InboundMessage
 
+from .group_games import GROUP_GAME_COMMANDS, GROUP_GAME_LABELS
 from .reply_templates import render_template, template_definition
 from .repository import (
     BlameGameResult,
@@ -72,6 +73,13 @@ class GroupCommandHandler:
             }
         ):
             return self._reply(command, "disabled", received_at)
+        game_type = GROUP_GAME_COMMANDS.get(command)
+        if (
+            group is not None
+            and game_type is not None
+            and game_type not in group.enabled_game_types
+        ):
+            return f"本群未开启「{GROUP_GAME_LABELS[game_type]}」。"
         if command == "/发红包":
             return self._red_packet_create(
                 message, content, received_at, group_chat_id

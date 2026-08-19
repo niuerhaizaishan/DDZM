@@ -982,6 +982,7 @@ def test_admin_group_chat_crud_uses_configuration_versioning(client, headers):
             "chat_url": "https://www.aikda.com/chat?c=group-2",
             "listening_enabled": True,
             "games_enabled": True,
+            "enabled_game_types": ["number_bomb"],
             "random_events_enabled": False,
             "announcements_enabled": True,
         },
@@ -993,6 +994,7 @@ def test_admin_group_chat_crud_uses_configuration_versioning(client, headers):
     listed = client.get("/api/group-chats", headers=headers)
     assert listed.json()["version"] == 1
     assert listed.json()["items"][0]["name"] == "第二群"
+    assert listed.json()["items"][0].get("enabled_game_types") == ["number_bomb"]
 
     updated = client.patch(
         f"/api/group-chats/{group_id}",
@@ -1001,7 +1003,7 @@ def test_admin_group_chat_crud_uses_configuration_versioning(client, headers):
             "Idempotency-Key": "group-update",
             "If-Match": "1",
         },
-        json={"games_enabled": False},
+        json={"games_enabled": False, "enabled_game_types": ["texas_holdem"]},
     )
     deleted = client.delete(
         f"/api/group-chats/{group_id}",
@@ -1014,6 +1016,7 @@ def test_admin_group_chat_crud_uses_configuration_versioning(client, headers):
 
     assert updated.json()["version"] == 2
     assert updated.json()["games_enabled"] is False
+    assert updated.json().get("enabled_game_types") == ["texas_holdem"]
     assert deleted.json()["version"] == 3
     assert deleted.json()["deleted_at"] is not None
 
@@ -1028,6 +1031,16 @@ def test_admin_page_contains_multi_group_controls(client):
     assert 'id="group-chat-url"' in page
     for switch in ("listening", "games", "random-events", "announcements"):
         assert f'id="group-chat-{switch}-enabled"' in page
+    for game_type in (
+        "red-packet",
+        "hide-and-seek",
+        "memory-assessment",
+        "undercover",
+        "blame-bomb",
+        "number-bomb",
+        "texas-holdem",
+    ):
+        assert f'id="group-chat-game-{game_type}"' in page
     assert 'requestGame("/api/group-chats"' in script
     assert 'data-employee-group-messages' in script
 
