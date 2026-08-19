@@ -89,18 +89,6 @@ class GroupChatRuntimeStateRecord(Base):
     last_inbound_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
     last_outbound_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
     last_error_summary: Mapped[str | None] = mapped_column(String(512))
-    shadow_sync_state: Mapped[str] = mapped_column(
-        String(32), nullable=False, default="idle"
-    )
-    shadow_cursor_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
-    shadow_cursor_message_id: Mapped[str | None] = mapped_column(String(255))
-    shadow_last_attempt_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
-    shadow_last_success_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
-    shadow_next_retry_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
-    shadow_failure_count: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0
-    )
-    shadow_error_summary: Mapped[str | None] = mapped_column(String(512))
     worker_id: Mapped[str | None] = mapped_column(String(255))
     updated_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
 
@@ -1330,6 +1318,9 @@ class AIAssistantSettingsRecord(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
     enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    trigger_prefixes: Mapped[list[str]] = mapped_column(
+        JSON, nullable=False, default=lambda: ["@总监事"]
+    )
     persona: Mapped[str] = mapped_column(Text, nullable=False)
     system_prompt: Mapped[str] = mapped_column(Text, nullable=False)
     over_limit_reply: Mapped[str] = mapped_column(Text, nullable=False)

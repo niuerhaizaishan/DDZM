@@ -181,7 +181,7 @@
 
               <section id="ai-assistant-view" class="dashboard-view panel" hidden>
                 <p class="eyebrow">机器人运营</p>
-                <div class="panel-heading"><div><h2>AI 总监事</h2><p class="muted">仅响应群内“@总监事 内容”；游戏、指令与随机事件规则始终优先。</p></div><button id="edit-ai-assistant-settings" class="primary" type="button">配置 AI 总监事</button></div>
+                <div class="panel-heading"><div><h2>AI 总监事</h2><p class="muted">仅响应后台配置的触发词；游戏、指令与随机事件规则始终优先。</p></div><button id="edit-ai-assistant-settings" class="primary" type="button">配置 AI 总监事</button></div>
                 <div id="ai-assistant-settings-card" class="settings-card" aria-live="polite"></div>
                 <hr><div class="panel-heading"><div><h2>玩法知识卡</h2><p class="muted">只维护稳定规则；动态金额、库存、开放状态和玩家数据由系统实时提供。</p></div><button id="add-ai-knowledge-card" class="primary" type="button">新增知识卡</button></div>
                 <div id="ai-knowledge-card-list" class="data-list"></div>
@@ -544,6 +544,7 @@
       <section class="template-modal-card ai-assistant-settings-modal-card">
         <div class="template-modal-heading"><div><p class="eyebrow">机器人运营</p><h2 id="ai-assistant-settings-modal-title">配置 AI 总监事</h2><p class="muted">密钥只保存在服务器环境变量中，后台不会展示或保存密钥。</p></div><button class="text-button" data-close-ai-assistant-settings-modal type="button">关闭</button></div>
         <label><input id="ai-assistant-enabled" type="checkbox"> 启用 AI 总监事</label>
+        <label>触发词（每行一个，最多 20 个）<textarea id="ai-assistant-trigger-prefixes" rows="4" maxlength="659" placeholder="@总监事&#10;/总监事&#10;/饭饭"></textarea></label>
         <label>机器人人设<textarea id="ai-assistant-persona" rows="3" maxlength="99999"></textarea></label>
         <label>系统提示词<textarea id="ai-assistant-system-prompt" rows="5" maxlength="99999"></textarea></label>
         <div class="event-input-grid"><label>超出额度回复<textarea id="ai-assistant-over-limit-reply" rows="3" maxlength="1000"></textarea></label><label>调用失败回复<textarea id="ai-assistant-failure-reply" rows="3" maxlength="1000"></textarea></label></div>

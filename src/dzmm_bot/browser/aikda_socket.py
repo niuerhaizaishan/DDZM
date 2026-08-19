@@ -1,6 +1,6 @@
 from collections import deque
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 import logging
 from threading import Event, Lock, RLock, get_ident
 from typing import Any
@@ -65,11 +65,7 @@ class AikdaSocketGateway:
         self._bot_id: str | None = None
         self._account_display_name: str | None = None
         self._authenticated = False
-        self._shadow_access_token: str | None = None
-        self._shadow_cookie = ""
-        self._disconnect_signal = False
         self._joined = Event()
-        self._reconcile_needed = True
         self._pending: deque[InboundMessage] = deque()
         self._seen_ids: set[tuple[str, str]] = set()
         self._pending_lock = Lock()
@@ -87,9 +83,6 @@ class AikdaSocketGateway:
         self._direct_chatroom_ids: set[str] = set()
         self._joined_direct_chatroom_ids: set[str] = set()
         self._next_direct_room_join_index = 0
-        self._history_reconcile_queue: deque[str] = deque()
-        self._history_retry_at: dict[str, datetime] = {}
-        self._history_failure_count: dict[str, int] = {}
 
     def configure_group_rooms(
         self, targets: tuple[GroupChatTarget, ...]
@@ -125,18 +118,6 @@ class AikdaSocketGateway:
     ) -> None:
         self._message_handler = handler
 
-    def shadow_credentials(self) -> tuple[str, str, str] | None:
-        with self._state_lock:
-            if self._shadow_access_token is None:
-                return None
-            return self._origin, self._shadow_cookie, self._shadow_access_token
-
-    def consume_disconnect_signal(self) -> bool:
-        with self._state_lock:
-            disconnected = self._disconnect_signal
-            self._disconnect_signal = False
-            return disconnected
-
     def read_new(
         self, direct_chatroom_ids: tuple[str, ...] = ()
     ) -> list[InboundMessage]:
@@ -149,15 +130,6 @@ class AikdaSocketGateway:
     ) -> None:
         self._ensure_connected()
         self._set_direct_targets(direct_chatroom_ids)
-        if self._reconcile_needed:
-            self._history_reconcile_queue.extend(
-                (
-                    *sorted(self._group_chatroom_ids),
-                    *sorted(self._direct_chatroom_ids),
-                )
-            )
-            self._reconcile_needed = False
-        self._maintain_history_reconciliation()
 
     def _set_direct_targets(self, direct_chatroom_ids: tuple[str, ...]) -> None:
         targets = set(direct_chatroom_ids)
@@ -425,8 +397,6 @@ class AikdaSocketGateway:
             self._socket.on("disconnect", self._on_disconnect)
         self._joined.clear()
         cookie = self._cookie_provider() if self._cookie_provider is not None else ""
-        self._shadow_access_token = token
-        self._shadow_cookie = cookie
         connect_options: dict[str, Any] = {
             "socketio_path": "ws/matching",
             "auth": {"token": token},
@@ -448,56 +418,6 @@ class AikdaSocketGateway:
             self._joined_group_chatroom_ids.add(self._implicit_group_chatroom_id)
         self._join_configured_group_rooms()
         self._authenticated = True
-        self._reconcile_needed = True
-
-    def _accept_history(
-        self, chatroom_id: str
-    ) -> tuple[bool, list[dict[str, Any]]]:
-        payload = self._request(
-            "chatroom.getMessages", {"chatroomId": chatroom_id}
-        )
-        messages = [
-            item for item in payload.get("messages", []) if isinstance(item, dict)
-        ]
-        seen_before = len(self._seen_ids)
-        for message in messages:
-            self._accept_message(chatroom_id, message)
-        return len(self._seen_ids) > seen_before, messages
-
-    def _maintain_history_reconciliation(self) -> None:
-        with self._state_lock:
-            if not self._history_reconcile_queue:
-                return
-            chatroom_id = None
-            now = self._clock()
-            for _ in range(len(self._history_reconcile_queue)):
-                candidate = self._history_reconcile_queue.popleft()
-                retry_at = self._history_retry_at.get(candidate)
-                if chatroom_id is None and (
-                    retry_at is None or now >= retry_at
-                ):
-                    chatroom_id = candidate
-                    continue
-                self._history_reconcile_queue.append(candidate)
-            if chatroom_id is None:
-                return
-        try:
-            self._accept_history(chatroom_id)
-        except Exception:
-            failure_count = self._history_failure_count.get(chatroom_id, 0) + 1
-            self._history_failure_count[chatroom_id] = failure_count
-            delay = (120, 300, 600)[min(failure_count - 1, 2)]
-            self._history_retry_at[chatroom_id] = self._clock() + timedelta(
-                seconds=delay
-            )
-            with self._state_lock:
-                self._history_reconcile_queue.append(chatroom_id)
-            _LOGGER.exception(
-                "message history maintenance failed chatroom=%s", chatroom_id
-            )
-        else:
-            self._history_failure_count.pop(chatroom_id, None)
-            self._history_retry_at.pop(chatroom_id, None)
 
     def _on_message(self, payload: dict[str, Any]) -> None:
         message = payload.get("message")
@@ -510,14 +430,9 @@ class AikdaSocketGateway:
     def _on_disconnect(self) -> None:
         with self._state_lock:
             self._authenticated = False
-            self._disconnect_signal = True
             self._joined.clear()
             self._joined_group_chatroom_ids.clear()
             self._joined_direct_chatroom_ids.clear()
-            self._reconcile_needed = True
-            self._history_reconcile_queue.clear()
-            self._history_retry_at.clear()
-            self._history_failure_count.clear()
 
     def _accept_message(self, chatroom_id: str | None, message: dict[str, Any]) -> None:
         if message.get("sent_by") == self._bot_id:

@@ -209,12 +209,9 @@ class CoreService:
                     reply if isinstance(reply, CommandReply) else CommandReply(reply)
                 )
             if not replies:
-                mention_content = (
-                    ai_mention_content(
-                        message.content, self._repository.ai_mention_names()
-                    )
-                    if message.content.startswith("@")
-                    else None
+                settings = self._repository.get_ai_assistant_settings()
+                mention_content = ai_mention_content(
+                    message.content, settings.trigger_prefixes
                 )
                 if mention_content is not None:
                     result = self._repository.try_enqueue_ai_request(

@@ -66,14 +66,6 @@ class GroupChatRuntimeResponse(ApiModel):
     last_inbound_at: datetime | None
     last_outbound_at: datetime | None
     last_error_summary: str | None
-    shadow_sync_state: Literal["idle", "healthy", "retrying", "captcha_required"]
-    shadow_cursor_at: datetime | None
-    shadow_cursor_message_id: str | None
-    shadow_last_attempt_at: datetime | None
-    shadow_last_success_at: datetime | None
-    shadow_next_retry_at: datetime | None
-    shadow_failure_count: int
-    shadow_error_summary: str | None
     worker_id: str | None
     updated_at: datetime
 
@@ -126,10 +118,6 @@ class GroupChatTargetResponse(ApiModel):
     group_chat_id: UUID
     chatroom_id: str
     chat_url: str
-    shadow_cursor_at: datetime | None = None
-    shadow_cursor_message_id: str | None = None
-    shadow_next_retry_at: datetime | None = None
-    shadow_failure_count: int = 0
 
 
 class GroupChatRuntimeUpdateRequest(ApiModel):
@@ -144,24 +132,6 @@ class GroupChatRuntimeUpdateRequest(ApiModel):
 class SyncGroupChatRuntimeRequest(ApiModel):
     worker_id: str = Field(min_length=1, max_length=255)
     statuses: list[GroupChatRuntimeUpdateRequest] = Field(max_length=100)
-    now: AwareDatetime
-
-
-class ShadowSyncRuntimeUpdateRequest(ApiModel):
-    group_chat_id: UUID
-    state: Literal["idle", "healthy", "retrying", "captcha_required"]
-    cursor_at: AwareDatetime | None = None
-    cursor_message_id: str | None = Field(default=None, max_length=255)
-    last_attempt_at: AwareDatetime | None = None
-    last_success_at: AwareDatetime | None = None
-    next_retry_at: AwareDatetime | None = None
-    failure_count: int = Field(default=0, ge=0)
-    error_summary: str | None = Field(default=None, max_length=512)
-
-
-class SyncShadowRuntimeRequest(ApiModel):
-    worker_id: str = Field(min_length=1, max_length=255)
-    statuses: list[ShadowSyncRuntimeUpdateRequest] = Field(max_length=100)
     now: AwareDatetime
 
 
@@ -565,6 +535,7 @@ class SetAIRankQuotaRequest(ApiModel):
 
 class AIAssistantSettingsResponse(ApiModel):
     enabled: bool
+    trigger_prefixes: list[str] = Field(min_length=1, max_length=20)
     persona: str
     system_prompt: str
     over_limit_reply: str
@@ -583,6 +554,7 @@ class AIAssistantSettingsResponse(ApiModel):
 
 class SetAIAssistantSettingsRequest(ApiModel):
     enabled: bool
+    trigger_prefixes: list[str] = Field(min_length=1, max_length=20)
     persona: str = Field(min_length=1, max_length=99999)
     system_prompt: str = Field(min_length=1, max_length=99999)
     over_limit_reply: str = Field(min_length=1, max_length=1000)

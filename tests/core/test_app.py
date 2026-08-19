@@ -800,7 +800,7 @@ def test_blame_bomb_session_is_public_and_admin_end_refunds(app_context, headers
     assert repository.find_user("blame-api-2").balance == 100
 
 
-def test_ai_mention_uses_the_current_browser_account_name(app_context, headers):
+def test_ai_mention_uses_only_the_configured_trigger_prefixes(app_context, headers):
     initial = app_context.client.get(
         "/internal/game/ai-assistant/settings", headers=headers
     ).json()
@@ -810,6 +810,7 @@ def test_ai_mention_uses_the_current_browser_account_name(app_context, headers):
         json={
             **initial,
             "enabled": True,
+            "trigger_prefixes": ["@总监事", "/饭饭"],
             "quotas": [
                 {"rank_id": quota["rank_id"], "daily_limit": 1}
                 for quota in initial["quotas"]
@@ -841,9 +842,20 @@ def test_ai_mention_uses_the_current_browser_account_name(app_context, headers):
         "/internal/inbound",
         headers=headers,
         json={
-            "platform_message_id": "renamed-ai-mention",
+            "platform_message_id": "renamed-ai-account-name",
             "sender_platform_id": "renamed-ai-user",
             "content": "@饭饭（小狗青巫）. 你好，摸你屁股",
+            "received_at": NOW.isoformat(),
+            "chatroom_id": "room-ai",
+        },
+    )
+    app_context.client.post(
+        "/internal/inbound",
+        headers=headers,
+        json={
+            "platform_message_id": "configured-ai-trigger",
+            "sender_platform_id": "renamed-ai-user",
+            "content": "/饭饭 你好，摸你屁股",
             "received_at": NOW.isoformat(),
             "chatroom_id": "room-ai",
         },
@@ -867,9 +879,17 @@ def test_ai_assistant_settings_and_lease_api_are_secret_free_and_fenced(
     )
 
     assert initial.status_code == 200
+    assert initial.json()["trigger_prefixes"] == ["@总监事"]
     assert "key" not in initial.text.lower()
     assert len(initial.json()["quotas"]) == 11
     assert initial.json()["max_response_chars"] == 10000
+
+    invalid_trigger = app_context.client.patch(
+        "/internal/game/ai-assistant/settings",
+        headers=headers,
+        json={**initial.json(), "trigger_prefixes": ["总监事"]},
+    )
+    assert invalid_trigger.status_code == 422
 
     configured = app_context.client.patch(
         "/internal/game/ai-assistant/settings",
@@ -1716,34 +1736,11 @@ def test_group_chat_crud_targets_and_runtime_api(app_context, headers):
             "now": NOW.isoformat(),
         },
     )
-    shadow_runtime = app_context.client.post(
-        "/internal/group-chats/shadow-sync-runtime",
-        headers=headers,
-        json={
-            "worker_id": "worker-a",
-            "statuses": [
-                {
-                    "group_chat_id": second["id"],
-                    "state": "captcha_required",
-                    "cursor_at": NOW.isoformat(),
-                    "cursor_message_id": "message-9",
-                    "last_attempt_at": NOW.isoformat(),
-                    "next_retry_at": NOW.isoformat(),
-                    "failure_count": 1,
-                    "error_summary": "captcha_required",
-                }
-            ],
-            "now": NOW.isoformat(),
-        },
-    )
     listed = app_context.client.get("/internal/group-chats", headers=headers)
 
     assert runtime.json() == {"accepted": True}
-    assert shadow_runtime.json() == {"accepted": True}
     listed_by_id = {item["id"]: item for item in listed.json()}
     assert listed_by_id[second["id"]]["runtime"]["connection_state"] == "connected"
-    assert listed_by_id[second["id"]]["runtime"]["shadow_sync_state"] == "captcha_required"
-    assert listed_by_id[second["id"]]["runtime"]["shadow_cursor_message_id"] == "message-9"
     assert listed_by_id[str(primary.id)]["name"] == "主群聊"
 
 

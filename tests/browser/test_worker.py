@@ -11,11 +11,6 @@ from dzmm_bot.browser.bot_api import DzmmBotSendError
 from dzmm_bot.browser.core_client import OutboundClaim, OutboundRecallClaim, WorkerCommand
 from dzmm_bot.browser.aikda_socket import AikdaTransportError
 from dzmm_bot.browser.worker import BrowserWorker
-from dzmm_bot.browser.shadow_sync import (
-    ShadowSyncCursor,
-    ShadowSyncRequest,
-    ShadowSyncResult,
-)
 from dzmm_bot.runtime.contracts import (
     DirectChatRoom,
     GroupChatTarget,
@@ -60,7 +55,6 @@ class FakeGateway:
     maintenance_release: Event | None = None
     configured_groups: tuple[GroupChatTarget, ...] = ()
     close_count: int = 0
-    disconnect_signal: bool = False
 
     def configure_group_rooms(self, targets):
         self.configured_groups = targets
@@ -142,15 +136,6 @@ class FakeGateway:
     def close(self):
         self.close_count += 1
 
-    def shadow_credentials(self):
-        return ("https://www.aikda.com", "session=cookie", "access-token")
-
-    def consume_disconnect_signal(self):
-        value = self.disconnect_signal
-        self.disconnect_signal = False
-        return value
-
-
 @dataclass
 class FakeSession:
     gateway: FakeGateway
@@ -200,29 +185,6 @@ class FakeBotSender:
 
 
 @dataclass
-class FakeShadowRunner:
-    result: ShadowSyncResult | None = None
-    requests: list[ShadowSyncRequest] = field(default_factory=list)
-    busy: bool = False
-
-    def submit(self, request):
-        if self.busy:
-            return False
-        self.requests.append(request)
-        self.busy = True
-        return True
-
-    def take_result(self):
-        result, self.result = self.result, None
-        if result is not None:
-            self.busy = False
-        return result
-
-    def close(self):
-        return None
-
-
-@dataclass
 class FakeCore:
     pending: list[OutboundClaim] = field(default_factory=list)
     pending_recalls: list[OutboundRecallClaim] = field(default_factory=list)
@@ -252,17 +214,12 @@ class FakeCore:
     upload_completion_accepted: bool = True
     group_targets: tuple[GroupChatTarget, ...] = ()
     group_runtime_updates: list[tuple] = field(default_factory=list)
-    shadow_runtime_updates: list[tuple] = field(default_factory=list)
 
     def group_chat_targets(self):
         return self.group_targets
 
     def sync_group_chat_runtime(self, worker_id, updates, now):
         self.group_runtime_updates.append((worker_id, updates, now))
-        return True
-
-    def sync_shadow_runtime(self, worker_id, updates, now):
-        self.shadow_runtime_updates.append((worker_id, updates, now))
         return True
 
     def submit_inbound(self, message):
@@ -451,212 +408,6 @@ def test_worker_adds_and_removes_groups_without_restart():
         and update.connection_state == "disabled"
         for update in all_updates
     )
-
-
-def test_shadow_messages_are_dispatched_while_socket_is_connected():
-    gateway = FakeGateway()
-    core = FakeCore(
-        group_targets=(
-            GroupChatTarget(
-                GROUP_ID,
-                "group-a",
-                "https://www.aikda.com/chat?c=group-a",
-            ),
-        )
-    )
-    cursor = ShadowSyncCursor(GROUP_ID, "group-a", NOW, "message-9")
-    shadow = FakeShadowRunner(
-        result=ShadowSyncResult(
-            "healthy",
-            (
-                InboundMessage(
-                    "message-9", "user-a", "/余额", NOW,
-                    chatroom_id="group-a",
-                ),
-            ),
-            (cursor,),
-        )
-    )
-    worker = BrowserWorker(
-        worker_id="worker-a",
-        core=core,
-        session=FakeSession(gateway),
-        desktop=FakeDesktop(),
-        shadow_runner=shadow,
-        shadow_jitter=lambda: 0,
-        clock=lambda: NOW,
-        sleep=lambda _: None,
-    )
-
-    worker.run_once()
-
-    assert core.submitted_event.wait(1)
-    assert core.submitted_ids == ["message-9"]
-    assert gateway.close_count == 0
-    update = core.shadow_runtime_updates[-1][1][0]
-    assert update.state == "healthy"
-    assert update.cursor_message_id == "message-9"
-
-
-def test_shadow_captcha_keeps_socket_and_retries_after_two_minutes():
-    gateway = FakeGateway()
-    target = GroupChatTarget(
-        GROUP_ID,
-        "group-a",
-        "https://www.aikda.com/chat?c=group-a",
-        shadow_cursor_at=NOW,
-        shadow_cursor_message_id="message-8",
-    )
-    core = FakeCore(group_targets=(target,))
-    shadow = FakeShadowRunner()
-    clock_time = [NOW]
-    worker = BrowserWorker(
-        worker_id="worker-a",
-        core=core,
-        session=FakeSession(gateway),
-        desktop=FakeDesktop(),
-        shadow_runner=shadow,
-        shadow_jitter=lambda: 0,
-        clock=lambda: clock_time[0],
-        sleep=lambda _: None,
-    )
-
-    worker.run_once()
-    assert len(shadow.requests) == 1
-    shadow.result = ShadowSyncResult(
-        "captcha_required",
-        (),
-        shadow.requests[0].cursors,
-        "captcha_required",
-    )
-    worker.run_once()
-
-    update = core.shadow_runtime_updates[-1][1][0]
-    assert update.state == "captcha_required"
-    assert update.cursor_message_id == "message-8"
-    assert update.next_retry_at == NOW + timedelta(seconds=120)
-    assert gateway.close_count == 0
-
-    clock_time[0] = NOW + timedelta(seconds=119)
-    worker.run_once()
-    assert len(shadow.requests) == 1
-    clock_time[0] = NOW + timedelta(seconds=120)
-    worker.run_once()
-    assert len(shadow.requests) == 2
-    shadow.result = ShadowSyncResult(
-        "captcha_required", (), shadow.requests[-1].cursors, "captcha_required"
-    )
-    worker.run_once()
-    assert core.shadow_runtime_updates[-1][1][0].next_retry_at == (
-        NOW + timedelta(seconds=420)
-    )
-    clock_time[0] = NOW + timedelta(seconds=420)
-    worker.run_once()
-    assert len(shadow.requests) == 3
-    shadow.result = ShadowSyncResult(
-        "captcha_required", (), shadow.requests[-1].cursors, "captcha_required"
-    )
-    worker.run_once()
-    assert core.shadow_runtime_updates[-1][1][0].next_retry_at == (
-        NOW + timedelta(seconds=1020)
-    )
-
-
-def test_socket_and_shadow_duplicate_is_dispatched_once():
-    duplicate = InboundMessage(
-        "message-9", "user-a", "/余额", NOW, chatroom_id="group-a"
-    )
-    gateway = FakeGateway(messages=[duplicate])
-    core = FakeCore(
-        group_targets=(
-            GroupChatTarget(
-                GROUP_ID,
-                "group-a",
-                "https://www.aikda.com/chat?c=group-a",
-            ),
-        )
-    )
-    shadow = FakeShadowRunner(
-        result=ShadowSyncResult(
-            "healthy",
-            (duplicate,),
-            (ShadowSyncCursor(GROUP_ID, "group-a", NOW, "message-9"),),
-        )
-    )
-    worker = BrowserWorker(
-        worker_id="worker-a",
-        core=core,
-        session=FakeSession(gateway),
-        desktop=FakeDesktop(),
-        shadow_runner=shadow,
-        shadow_jitter=lambda: 0,
-        clock=lambda: NOW,
-        sleep=lambda _: None,
-    )
-
-    worker.run_once()
-
-    assert core.submitted_event.wait(1)
-    assert core.submitted_ids == ["message-9"]
-
-
-def test_socket_disconnect_gives_shadow_sync_an_immediate_attempt():
-    gateway = FakeGateway(disconnect_signal=True)
-    target = GroupChatTarget(
-        GROUP_ID,
-        "group-a",
-        "https://www.aikda.com/chat?c=group-a",
-        shadow_next_retry_at=NOW + timedelta(minutes=10),
-    )
-    core = FakeCore(group_targets=(target,))
-    shadow = FakeShadowRunner()
-    worker = BrowserWorker(
-        worker_id="worker-a",
-        core=core,
-        session=FakeSession(gateway),
-        desktop=FakeDesktop(),
-        shadow_runner=shadow,
-        shadow_jitter=lambda: 0,
-        clock=lambda: NOW,
-        sleep=lambda _: None,
-    )
-
-    worker.run_once()
-
-    assert len(shadow.requests) == 1
-
-
-def test_shadow_auth_failure_enters_existing_auth_recovery():
-    gateway = FakeGateway()
-    target = GroupChatTarget(
-        GROUP_ID,
-        "group-a",
-        "https://www.aikda.com/chat?c=group-a",
-    )
-    core = FakeCore(group_targets=(target,))
-    shadow = FakeShadowRunner(
-        result=ShadowSyncResult(
-            "auth_required",
-            (),
-            (ShadowSyncCursor(GROUP_ID, "group-a", NOW),),
-            "authentication_required",
-        )
-    )
-    session = FakeSession(gateway)
-    worker = BrowserWorker(
-        worker_id="worker-a",
-        core=core,
-        session=session,
-        desktop=FakeDesktop(),
-        shadow_runner=shadow,
-        clock=lambda: NOW,
-        sleep=lambda _: None,
-    )
-
-    worker.run_once()
-
-    assert worker.login_state == LoginState.AUTH_REQUIRED
-    assert session.stops == 1
 
 
 def test_worker_reads_only_core_selected_direct_rooms(context):

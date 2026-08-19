@@ -1114,57 +1114,6 @@ def test_group_chat_runtime_and_soft_delete(repository, now):
     }
 
 
-def test_shadow_sync_runtime_persists_cursor_across_a_captcha_failure(
-    repository, now
-):
-    from dzmm_bot.runtime import contracts
-
-    update_type = getattr(contracts, "ShadowSyncRuntimeUpdate", None)
-    assert update_type is not None, "shadow sync runtime contract is missing"
-    primary = repository.bootstrap_primary_group(
-        "https://www.aikda.com/chat?c=group-main", now
-    )
-    repository.record_shadow_sync_runtime(
-        "worker-a",
-        (
-            update_type(
-                primary.id,
-                "healthy",
-                cursor_at=now,
-                cursor_message_id="message-9",
-                last_attempt_at=now,
-                last_success_at=now,
-                next_retry_at=now + timedelta(seconds=60),
-            ),
-        ),
-        now,
-    )
-    repository.record_shadow_sync_runtime(
-        "worker-a",
-        (
-            update_type(
-                primary.id,
-                "captcha_required",
-                last_attempt_at=now + timedelta(seconds=60),
-                next_retry_at=now + timedelta(minutes=2),
-                failure_count=1,
-                error_summary="captcha_required",
-            ),
-        ),
-        now + timedelta(seconds=60),
-    )
-
-    target = repository.enabled_group_targets()[0]
-    runtime = repository.group_chat_runtime_states()[0]
-    assert target.shadow_cursor_at == now
-    assert target.shadow_cursor_message_id == "message-9"
-    assert runtime.shadow_sync_state == "captcha_required"
-    assert runtime.shadow_last_success_at == now
-    assert runtime.shadow_next_retry_at == now + timedelta(minutes=2)
-    assert runtime.shadow_failure_count == 1
-    assert runtime.shadow_error_summary == "captcha_required"
-
-
 def test_group_chat_with_active_gameplay_cannot_be_disabled(repository, now):
     from dzmm_bot.core.repository import GroupChatConflict
 

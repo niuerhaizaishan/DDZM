@@ -679,8 +679,9 @@ function closeAiAssistantSettingsModal() { aiAssistantSettingsModal.hidden = tru
 function closeEmployeeMemoryModal() { employeeMemoryModal.hidden = true; }
 
 function renderAiAssistantSettings(settings) {
+  const triggerSummary = settings.trigger_prefixes.map(escapeHtml).join("、");
   document.querySelector("#ai-assistant-settings-card").innerHTML = `
-    <article><span>调用状态</span><strong>${settings.enabled ? "已启用" : "已停用"}</strong><small>仅响应 @总监事 内容</small></article>
+    <article><span>调用状态</span><strong>${settings.enabled ? "已启用" : "已停用"}</strong><small>触发词：${triggerSummary}</small></article>
     <article><span>每日调用上限</span><strong>${settings.quotas.length} 个职位</strong><small>北京时间 00:00 自动重置</small></article>
     <article><span>回复限制</span><strong>${settings.max_response_chars} 字 / ${settings.timeout_seconds} 秒</strong><small>失败与超限回复均可配置</small></article>
     <article><span>玩家印象</span><strong>${settings.memory_enabled ? "自动提炼" : "已停用"}</strong><small>每 ${settings.batch_message_threshold} 条有效普通消息更新；每类最多 ${settings.max_entries_per_category} 条</small></article>`;
@@ -735,6 +736,7 @@ async function openAiAssistantSettingsModal() {
   const settings = aiAssistantSettings || await requestGame("/api/ai-assistant/settings");
   aiAssistantSettings = settings;
   document.querySelector("#ai-assistant-enabled").checked = settings.enabled;
+  document.querySelector("#ai-assistant-trigger-prefixes").value = settings.trigger_prefixes.join("\n");
   document.querySelector("#ai-assistant-persona").value = settings.persona;
   document.querySelector("#ai-assistant-system-prompt").value = settings.system_prompt;
   document.querySelector("#ai-assistant-over-limit-reply").value = settings.over_limit_reply;
@@ -3101,6 +3103,7 @@ aiAssistantSettingsModal.addEventListener("click", async (event) => {
   if (event.target.id !== "save-ai-assistant-settings") return;
   const settings = {
     enabled: document.querySelector("#ai-assistant-enabled").checked,
+    trigger_prefixes: document.querySelector("#ai-assistant-trigger-prefixes").value.split("\n").map((value) => value.trim()).filter(Boolean),
     persona: document.querySelector("#ai-assistant-persona").value,
     system_prompt: document.querySelector("#ai-assistant-system-prompt").value,
     over_limit_reply: document.querySelector("#ai-assistant-over-limit-reply").value,

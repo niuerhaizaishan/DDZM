@@ -447,8 +447,10 @@ def test_service_queues_only_non_command_bot_mentions(session_factory):
     from dzmm_bot.core.repository import CoreRepository
     from dzmm_bot.core.schema import (
         AIAssistantSettingsRecord,
+        AIRankQuotaRecord,
         AIMemoryJobRecord,
         AIRequestRecord,
+        InboundRecord,
     )
     from dzmm_bot.core.service import CoreService
 
@@ -457,18 +459,29 @@ def test_service_queues_only_non_command_bot_mentions(session_factory):
     repository.create_user("sender-1", "小明", now, 0)
     repository.get_ai_assistant_settings()
     with session_factory.begin() as session:
-        session.get(AIAssistantSettingsRecord, 1).enabled = True
+        settings = session.get(AIAssistantSettingsRecord, 1)
+        settings.enabled = True
+        settings.trigger_prefixes = ["@总监事", "/总监事", "/饭饭", "/余额"]
+        for quota in session.scalars(select(AIRankQuotaRecord)):
+            quota.daily_limit = 10
     service = CoreService(repository)
 
-    service.receive_inbound(InboundMessage("ai-command", "sender-1", "/帮助 @总监事", now))
+    service.receive_inbound(InboundMessage("ai-command", "sender-1", "/余额", now))
     service.receive_inbound(InboundMessage("ai-plain", "sender-1", "@总监事 今天适合摸鱼吗？", now))
+    service.receive_inbound(InboundMessage("ai-slash", "sender-1", "/饭饭 明天呢？", now))
+    service.receive_inbound(InboundMessage("ai-boundary", "sender-1", "/饭饭堂 不应命中", now))
     service.receive_inbound(InboundMessage("ai-empty", "sender-1", "@总监事   ", now))
     service.receive_inbound(InboundMessage("ai-platform-empty", "sender-1", "@总监事「Bot」", now))
 
     with session_factory() as session:
-        requests = list(session.scalars(select(AIRequestRecord)))
+        request_message_ids = set(
+            session.scalars(
+                select(InboundRecord.platform_message_id)
+                .join(AIRequestRecord, AIRequestRecord.inbound_message_id == InboundRecord.id)
+            )
+        )
         memory_job = session.scalar(select(AIMemoryJobRecord))
-    assert len(requests) == 1
+    assert request_message_ids == {"ai-plain", "ai-slash"}
     assert memory_job is None
 
 

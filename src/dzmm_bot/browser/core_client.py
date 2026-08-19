@@ -12,7 +12,6 @@ from dzmm_bot.runtime.contracts import (
     GroupChatTarget,
     InboundMessage,
     LoginState,
-    ShadowSyncRuntimeUpdate,
 )
 
 
@@ -83,13 +82,6 @@ class CorePort(Protocol):
         self,
         worker_id: str,
         updates: tuple[GroupChatRuntimeUpdate, ...],
-        now: datetime,
-    ) -> bool: ...
-
-    def sync_shadow_runtime(
-        self,
-        worker_id: str,
-        updates: tuple[ShadowSyncRuntimeUpdate, ...],
         now: datetime,
     ) -> bool: ...
 
@@ -260,12 +252,6 @@ class CoreClient:
                 group_chat_id=UUID(item["group_chat_id"]),
                 chatroom_id=item["chatroom_id"],
                 chat_url=item["chat_url"],
-                shadow_cursor_at=_datetime_or_none(item.get("shadow_cursor_at")),
-                shadow_cursor_message_id=item.get("shadow_cursor_message_id"),
-                shadow_next_retry_at=_datetime_or_none(
-                    item.get("shadow_next_retry_at")
-                ),
-                shadow_failure_count=item.get("shadow_failure_count", 0),
             )
             for item in self._get("/internal/group-chats/targets")
         )
@@ -288,35 +274,6 @@ class CoreClient:
                         "last_inbound_at": _iso_or_none(item.last_inbound_at),
                         "last_outbound_at": _iso_or_none(item.last_outbound_at),
                         "last_error_summary": item.last_error_summary,
-                    }
-                    for item in updates
-                ],
-                "now": now.isoformat(),
-            },
-        )
-        return bool(data["accepted"])
-
-    def sync_shadow_runtime(
-        self,
-        worker_id: str,
-        updates: tuple[ShadowSyncRuntimeUpdate, ...],
-        now: datetime,
-    ) -> bool:
-        data = self._post(
-            "/internal/group-chats/shadow-sync-runtime",
-            {
-                "worker_id": worker_id,
-                "statuses": [
-                    {
-                        "group_chat_id": str(item.group_chat_id),
-                        "state": item.state,
-                        "cursor_at": _iso_or_none(item.cursor_at),
-                        "cursor_message_id": item.cursor_message_id,
-                        "last_attempt_at": _iso_or_none(item.last_attempt_at),
-                        "last_success_at": _iso_or_none(item.last_success_at),
-                        "next_retry_at": _iso_or_none(item.next_retry_at),
-                        "failure_count": item.failure_count,
-                        "error_summary": item.error_summary,
                     }
                     for item in updates
                 ],
@@ -604,7 +561,3 @@ def _claim_payload(worker_id: str, now: datetime, lease_seconds: int) -> dict:
 
 def _iso_or_none(value: datetime | None) -> str | None:
     return None if value is None else value.isoformat()
-
-
-def _datetime_or_none(value: str | None) -> datetime | None:
-    return None if value is None else datetime.fromisoformat(value)

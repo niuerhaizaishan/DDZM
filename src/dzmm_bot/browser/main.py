@@ -1,5 +1,4 @@
 import os
-from random import uniform
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -11,7 +10,6 @@ from dzmm_bot.runtime.settings import Settings
 from .bot_api import DzmmBotSender
 from .core_client import CoreClient
 from .session import BrowserSession
-from .shadow_sync import ShadowSyncRunner
 from .worker import BrowserWorker
 
 
@@ -51,8 +49,6 @@ def create_worker(settings: Settings) -> BrowserWorker:
         clock=lambda: datetime.now(ZoneInfo("Asia/Shanghai")),
         bot_sender=bot_sender,
         outbound_concurrency=settings.outbound_concurrency,
-        shadow_runner=ShadowSyncRunner(),
-        shadow_jitter=lambda: uniform(-5, 5),
     )
     return worker
 

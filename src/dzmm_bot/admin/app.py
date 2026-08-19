@@ -1132,6 +1132,7 @@ def create_app(
     ) -> JSONResponse:
         required = (
             "enabled",
+            "trigger_prefixes",
             "persona",
             "system_prompt",
             "over_limit_reply",
@@ -1147,7 +1148,11 @@ def create_app(
             "max_entries_per_category",
             "candidate_expiry_days",
         )
-        if not all(key in request for key in required) or not isinstance(request["quotas"], list):
+        if (
+            not all(key in request for key in required)
+            or not isinstance(request["trigger_prefixes"], list)
+            or not isinstance(request["quotas"], list)
+        ):
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid settings")
         settings = {key: request[key] for key in required}
         settings["quotas"] = [

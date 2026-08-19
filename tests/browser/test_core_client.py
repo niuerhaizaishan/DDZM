@@ -9,7 +9,6 @@ from dzmm_bot.runtime.contracts import (
     InboundMessage,
     LoginState,
     MessageReference,
-    ShadowSyncRuntimeUpdate,
 )
 
 
@@ -29,9 +28,6 @@ def test_core_client_syncs_group_targets_and_runtime():
                         "group_chat_id": "00000000-0000-0000-0000-000000000101",
                         "chatroom_id": "group-a",
                         "chat_url": "https://www.aikda.com/chat?c=group-a",
-                        "shadow_cursor_at": "2026-08-05T11:59:00+00:00",
-                        "shadow_cursor_message_id": "message-8",
-                        "shadow_next_retry_at": None,
                     }
                 ],
             )
@@ -56,25 +52,8 @@ def test_core_client_syncs_group_targets_and_runtime():
         ),
         now,
     )
-    shadow_accepted = client.sync_shadow_runtime(
-        "worker-a",
-        (
-            ShadowSyncRuntimeUpdate(
-                target.group_chat_id,
-                "healthy",
-                cursor_at=now,
-                cursor_message_id="message-9",
-                last_attempt_at=now,
-                last_success_at=now,
-            ),
-        ),
-        now,
-    )
-
     assert target.chatroom_id == "group-a"
-    assert target.shadow_cursor_message_id == "message-8"
     assert accepted is True
-    assert shadow_accepted is True
     runtime_payload = json.loads(requests[1][2])
     assert runtime_payload["statuses"][0] == {
         "group_chat_id": str(UUID("00000000-0000-0000-0000-000000000101")),
@@ -84,9 +63,6 @@ def test_core_client_syncs_group_targets_and_runtime():
         "last_outbound_at": None,
         "last_error_summary": None,
     }
-    shadow_payload = json.loads(requests[2][2])
-    assert requests[2][1] == "/internal/group-chats/shadow-sync-runtime"
-    assert shadow_payload["statuses"][0]["cursor_message_id"] == "message-9"
 
 
 def test_core_client_heartbeat_reports_actual_and_returns_desired_listener_state():

@@ -141,6 +141,7 @@ class FakeCore:
     ai_assistant_settings: dict = field(
         default_factory=lambda: {
             "enabled": False,
+            "trigger_prefixes": ["@总监事"],
             "persona": "你是摸鱼公司群的美女总监事。",
             "system_prompt": "保持简短。",
             "over_limit_reply": "今日额度已用完。",
@@ -2521,6 +2522,7 @@ def test_admin_serves_and_saves_ai_assistant_settings(client, headers, core):
     response = client.get("/api/ai-assistant/settings", headers=headers)
 
     assert response.status_code == 200
+    assert response.json()["trigger_prefixes"] == ["@总监事"]
     assert "key" not in response.text.lower()
 
     saved = client.patch(
@@ -2533,12 +2535,16 @@ def test_admin_serves_and_saves_ai_assistant_settings(client, headers, core):
         json={
             **{key: value for key, value in response.json().items() if key != "version"},
             "enabled": True,
+            "trigger_prefixes": ["@总监事", "/总监事", "/饭饭"],
         },
     )
 
     assert saved.status_code == 200
     assert saved.json()["enabled"] is True
     assert core.ai_assistant_settings["enabled"] is True
+    assert core.ai_assistant_settings["trigger_prefixes"] == [
+        "@总监事", "/总监事", "/饭饭"
+    ]
     assert all(
         set(quota) == {"rank_id", "daily_limit"}
         for quota in core.ai_assistant_settings_request["quotas"]
@@ -2552,6 +2558,7 @@ def test_admin_exposes_ai_assistant_configuration_surface(client):
     assert 'data-view="ai-assistant"' in page
     assert 'id="ai-assistant-settings-modal"' in page
     assert "每日调用上限" in page
+    assert 'id="ai-assistant-trigger-prefixes"' in page
     assert 'id="ai-assistant-max-chars" type="number" min="1" max="10000"' in page
     assert '"/api/ai-assistant/settings"' in script
 

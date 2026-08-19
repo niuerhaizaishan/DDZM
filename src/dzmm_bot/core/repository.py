@@ -20,7 +20,6 @@ from dzmm_bot.runtime.contracts import (
     GroupChatRuntimeUpdate,
     GroupChatTarget,
     InboundMessage,
-    ShadowSyncRuntimeUpdate,
     WorkerHeartbeat,
 )
 from dzmm_bot.runtime.outbound import (
@@ -209,14 +208,6 @@ class GroupChatRuntimeState:
     last_inbound_at: datetime | None
     last_outbound_at: datetime | None
     last_error_summary: str | None
-    shadow_sync_state: str
-    shadow_cursor_at: datetime | None
-    shadow_cursor_message_id: str | None
-    shadow_last_attempt_at: datetime | None
-    shadow_last_success_at: datetime | None
-    shadow_next_retry_at: datetime | None
-    shadow_failure_count: int
-    shadow_error_summary: str | None
     worker_id: str | None
     updated_at: datetime
 
@@ -284,14 +275,6 @@ def _group_chat_runtime(
         last_inbound_at=record.last_inbound_at,
         last_outbound_at=record.last_outbound_at,
         last_error_summary=record.last_error_summary,
-        shadow_sync_state=record.shadow_sync_state,
-        shadow_cursor_at=record.shadow_cursor_at,
-        shadow_cursor_message_id=record.shadow_cursor_message_id,
-        shadow_last_attempt_at=record.shadow_last_attempt_at,
-        shadow_last_success_at=record.shadow_last_success_at,
-        shadow_next_retry_at=record.shadow_next_retry_at,
-        shadow_failure_count=record.shadow_failure_count,
-        shadow_error_summary=record.shadow_error_summary,
         worker_id=record.worker_id,
         updated_at=record.updated_at,
     )
@@ -1014,6 +997,7 @@ class UndercoverSettings:
 @dataclass(frozen=True)
 class AIAssistantSettings:
     enabled: bool
+    trigger_prefixes: tuple[str, ...]
     persona: str
     system_prompt: str
     over_limit_reply: str
@@ -1803,13 +1787,8 @@ class CoreRepository:
 
     def enabled_group_targets(self) -> tuple[GroupChatTarget, ...]:
         with self._session() as session:
-            records = session.execute(
-                select(GroupChatRecord, GroupChatRuntimeStateRecord)
-                .outerjoin(
-                    GroupChatRuntimeStateRecord,
-                    GroupChatRuntimeStateRecord.group_chat_id
-                    == GroupChatRecord.id,
-                )
+            records = session.scalars(
+                select(GroupChatRecord)
                 .where(
                     GroupChatRecord.deleted_at.is_(None),
                     GroupChatRecord.listening_enabled.is_(True),
@@ -1823,14 +1802,8 @@ class CoreRepository:
                     record.id,
                     record.chatroom_id,
                     record.chat_url,
-                    runtime.shadow_cursor_at if runtime is not None else None,
-                    runtime.shadow_cursor_message_id
-                    if runtime is not None
-                    else None,
-                    runtime.shadow_next_retry_at if runtime is not None else None,
-                    runtime.shadow_failure_count if runtime is not None else 0,
                 )
-                for record, runtime in records
+                for record in records
                 if record.chatroom_id is not None and record.chat_url is not None
             )
 
@@ -1887,50 +1860,6 @@ class CoreRepository:
                 record.last_inbound_at = status.last_inbound_at
                 record.last_outbound_at = status.last_outbound_at
                 record.last_error_summary = error_summary
-                record.worker_id = worker_id
-                record.updated_at = now
-
-    def record_shadow_sync_runtime(
-        self,
-        worker_id: str,
-        statuses: tuple[ShadowSyncRuntimeUpdate, ...],
-        now: datetime,
-    ) -> None:
-        if not worker_id or len(worker_id) > 255:
-            raise ValueError("invalid worker ID")
-        allowed_states = {"idle", "healthy", "retrying", "captcha_required"}
-        with self._session() as session:
-            for status in statuses:
-                if status.state not in allowed_states:
-                    raise ValueError("invalid shadow sync state")
-                error_summary = status.error_summary
-                if error_summary is not None:
-                    error_summary = error_summary.strip()[:512] or None
-                record = session.get(
-                    GroupChatRuntimeStateRecord,
-                    status.group_chat_id,
-                    with_for_update=True,
-                )
-                if record is None:
-                    if session.get(GroupChatRecord, status.group_chat_id) is None:
-                        raise LookupError("group_chat_not_found")
-                    record = GroupChatRuntimeStateRecord(
-                        group_chat_id=status.group_chat_id,
-                        connection_state="pending",
-                        updated_at=now,
-                    )
-                    session.add(record)
-                record.shadow_sync_state = status.state
-                if status.cursor_at is not None:
-                    record.shadow_cursor_at = status.cursor_at
-                if status.cursor_message_id is not None:
-                    record.shadow_cursor_message_id = status.cursor_message_id
-                record.shadow_last_attempt_at = status.last_attempt_at
-                if status.last_success_at is not None:
-                    record.shadow_last_success_at = status.last_success_at
-                record.shadow_next_retry_at = status.next_retry_at
-                record.shadow_failure_count = status.failure_count
-                record.shadow_error_summary = error_summary
                 record.worker_id = worker_id
                 record.updated_at = now
 
@@ -3827,6 +3756,7 @@ class CoreRepository:
         self,
         *,
         enabled: bool,
+        trigger_prefixes: list[str],
         persona: str,
         system_prompt: str,
         over_limit_reply: str,
@@ -3835,6 +3765,7 @@ class CoreRepository:
         timeout_seconds: int,
         quotas: list[tuple[UUID, int]],
     ) -> tuple[AIAssistantSettings, list[AIRankQuota]]:
+        normalized_trigger_prefixes = _normalize_ai_trigger_prefixes(trigger_prefixes)
         quota_by_rank = dict(quotas)
         if len(quota_by_rank) != len(quotas):
             raise ValueError("职位调用次数不能重复")
@@ -3848,6 +3779,7 @@ class CoreRepository:
                 if settings is None:
                     raise RuntimeError("AI 总监事设置消失")
                 settings.enabled = enabled
+                settings.trigger_prefixes = list(normalized_trigger_prefixes)
                 settings.persona = persona.strip()
                 settings.system_prompt = system_prompt.strip()
                 settings.over_limit_reply = over_limit_reply.strip()
@@ -4416,10 +4348,10 @@ class CoreRepository:
                 else None
             )
             game_settings = session.get(GameSettingsRecord, 1)
-            mention_names = self._ai_mention_names(session)
-            user_content = normalize_ai_mention(inbound.content, mention_names)
+            trigger_prefixes = tuple(settings.trigger_prefixes)
+            user_content = normalize_ai_mention(inbound.content, trigger_prefixes)
             history_messages = self._ai_conversation_history(
-                session, record, inbound
+                session, record, inbound, trigger_prefixes
             )
             roster = tuple(
                 SocialEmployee(
@@ -4546,6 +4478,7 @@ class CoreRepository:
         session: Session,
         current_request: AIRequestRecord,
         current_inbound: InboundRecord,
+        trigger_prefixes: tuple[str, ...],
     ) -> tuple[AIConversationMessage, ...]:
         if current_inbound.source_type != "group":
             return ()
@@ -4599,7 +4532,7 @@ class CoreRepository:
                         "user",
                         normalize_ai_mention(
                             historical_inbound.content,
-                            self._ai_mention_names(session),
+                            trigger_prefixes,
                         ),
                     ),
                     AIConversationMessage(
@@ -16236,6 +16169,7 @@ class CoreRepository:
                 AIAssistantSettingsRecord(
                     id=1,
                     enabled=False,
+                    trigger_prefixes=["@总监事"],
                     persona=_DEFAULT_AI_PERSONA,
                     system_prompt=_DEFAULT_AI_SYSTEM_PROMPT,
                     over_limit_reply=_DEFAULT_AI_OVER_LIMIT_REPLY,
@@ -17378,6 +17312,7 @@ def _undercover_settings(record: UndercoverSettingsRecord) -> UndercoverSettings
 def _ai_assistant_settings(record: AIAssistantSettingsRecord) -> AIAssistantSettings:
     return AIAssistantSettings(
         enabled=record.enabled,
+        trigger_prefixes=tuple(record.trigger_prefixes),
         persona=record.persona,
         system_prompt=record.system_prompt,
         over_limit_reply=record.over_limit_reply,
@@ -17385,6 +17320,20 @@ def _ai_assistant_settings(record: AIAssistantSettingsRecord) -> AIAssistantSett
         max_response_chars=record.max_response_chars,
         timeout_seconds=record.timeout_seconds,
     )
+
+
+def _normalize_ai_trigger_prefixes(prefixes: list[str]) -> tuple[str, ...]:
+    normalized = tuple(dict.fromkeys(prefix.strip() for prefix in prefixes))
+    if not 1 <= len(normalized) <= 20:
+        raise ValueError("AI 触发词需要配置 1 到 20 个")
+    if any(
+        not prefix
+        or len(prefix) > 32
+        or prefix[0] not in {"@", "/"}
+        for prefix in normalized
+    ):
+        raise ValueError("AI 触发词必须以 @ 或 / 开头，且不超过 32 个字符")
+    return normalized
 
 
 def _ai_memory_settings(record: AIMemorySettingsRecord) -> AIMemorySettings:

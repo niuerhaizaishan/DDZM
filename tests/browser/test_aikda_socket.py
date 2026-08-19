@@ -239,29 +239,6 @@ def test_live_target_room_text_event_is_read_once(gateway):
     assert adapter.read_new() == []
 
 
-def test_gateway_snapshots_shadow_credentials_and_reports_disconnect():
-    socket = FakeSocket()
-    adapter = AikdaSocketGateway(
-        TARGET_URL,
-        token_provider=lambda: "short-lived-token",
-        cookie_provider=lambda: "session=cookie-value",
-        request=FakeRequest(),
-        socket_factory=lambda: socket,
-        clock=lambda: NOW,
-    )
-
-    adapter.read_new()
-
-    assert adapter.shadow_credentials() == (
-        "https://www.aikda.com",
-        "session=cookie-value",
-        "short-lived-token",
-    )
-    socket.handlers["disconnect"]()
-    assert adapter.consume_disconnect_signal() is True
-    assert adapter.consume_disconnect_signal() is False
-
-
 def test_gateway_classifies_nonconfigured_socket_rooms_as_direct(gateway):
     adapter, socket, _ = gateway
     adapter.configure_group_rooms(
@@ -465,7 +442,7 @@ def test_read_new_does_not_poll_history_after_socket_is_connected(gateway):
     assert request.calls == []
 
 
-def test_recovery_uses_one_history_request_per_room_then_stays_idle(gateway):
+def test_recovery_never_uses_http_history_for_group_or_direct_rooms(gateway):
     adapter, _, request = gateway
     request.messages_by_room = {
         "room-1": [],
@@ -492,12 +469,12 @@ def test_recovery_uses_one_history_request_per_room_then_stays_idle(gateway):
         for procedure, payload in request.calls
         if procedure == "chatroom.getMessages"
     ]
-    assert history_rooms == ["room-1", "direct-1", "direct-2"]
+    assert history_rooms == []
     assert all(procedure != "chat.listAll" for procedure, _ in request.calls)
-    assert [item.platform_message_id for item in recovered] == ["dm-1", "dm-2"]
+    assert recovered == []
 
 
-def test_reconnect_precedes_one_recovery_cycle():
+def test_reconnect_rejoins_socket_without_polling_history():
     socket = FakeSocket()
     request = FakeRequest()
     request.messages_by_room = {"room-1": []}
@@ -513,41 +490,11 @@ def test_reconnect_precedes_one_recovery_cycle():
     adapter.maintain_recovery()
     request.calls.clear()
     socket.handlers["disconnect"]()
-    request.messages_by_room = {
-        "room-1": [message("m-missed", "employee-1", "/帮助")]
-    }
-
     adapter.read_new()
     adapter.maintain_recovery()
-    adapter.maintain_recovery()
-    recovered = adapter.read_new()
 
     assert len(socket.connect_calls) == 2
-    assert request.calls[-1] == (
-        "chatroom.getMessages",
-        {"chatroomId": "room-1"},
-    )
-    assert [item.platform_message_id for item in recovered] == ["m-missed"]
-
-
-def test_failed_recovery_room_does_not_starve_the_next_room(gateway):
-    adapter, _, request = gateway
-    adapter.read_new(("direct-broken",))
-    original_request = adapter._request
-    attempted_rooms = []
-
-    def fail_broken_room(procedure, payload=None):
-        if procedure == "chatroom.getMessages":
-            attempted_rooms.append(payload["chatroomId"])
-        if procedure == "chatroom.getMessages" and payload["chatroomId"] == "room-1":
-            raise RuntimeError("room unavailable")
-        return original_request(procedure, payload)
-
-    adapter._request = fail_broken_room
-    adapter.maintain_recovery(("direct-broken",))
-    adapter.maintain_recovery(("direct-broken",))
-
-    assert attempted_rooms == ["room-1", "direct-broken"]
+    assert all(call[0] != "chatroom.getMessages" for call in request.calls)
 
 
 def test_changing_live_direct_targets_does_not_start_a_history_scan(gateway):
@@ -560,23 +507,6 @@ def test_changing_live_direct_targets_does_not_start_a_history_scan(gateway):
     adapter.maintain_recovery(("direct-1",))
 
     assert all(procedure != "chatroom.getMessages" for procedure, _ in request.calls)
-
-def test_targeted_private_history_recovers_unseen_report_once(gateway):
-    adapter, _, request = gateway
-    request.messages_by_room = {
-        "room-1": [],
-        "direct-1": [message("dm-history", "u-1", "/报数 41")],
-    }
-
-    adapter.read_new(("direct-1",))
-    adapter.maintain_recovery(("direct-1",))
-    adapter.maintain_recovery(("direct-1",))
-    recovered = adapter.read_new(("direct-1",))
-
-    assert [item.platform_message_id for item in recovered] == ["dm-history"]
-    assert recovered[0].source_type == "direct"
-    assert adapter.read_new(("direct-1",)) == []
-
 
 def test_self_events_are_ignored_and_unknown_rooms_are_emitted_as_direct(gateway):
     adapter, socket, _ = gateway
@@ -607,28 +537,6 @@ def test_self_message_arriving_during_connection_is_ignored(gateway):
     }
 
     assert adapter.read_new() == []
-
-
-def test_history_reconciles_unseen_text_messages_in_timestamp_order():
-    """Fails if reconnect history is ignored or returned in API order."""
-    socket = FakeSocket()
-    request = FakeRequest(
-        [
-            message("m-2", "u-2", "/打卡", "2026-08-05T04:00:01Z"),
-            message("m-1", "u-1", "/余额", "2026-08-05T04:00:00Z"),
-        ]
-    )
-    adapter = AikdaSocketGateway(
-        TARGET_URL,
-        token_provider=lambda: "short-lived-token",
-        request=request,
-        socket_factory=lambda: socket,
-        clock=lambda: NOW,
-    )
-
-    adapter.read_new()
-    adapter.maintain_recovery()
-    assert [item.platform_message_id for item in adapter.read_new()] == ["m-1", "m-2"]
 
 
 def test_send_requires_successful_ack(gateway):
