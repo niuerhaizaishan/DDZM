@@ -21,4 +21,18 @@ install -m 644 /opt/dzmm/current/deploy/systemd/dzmm-*.service /etc/systemd/syst
 systemctl daemon-reload
 systemctl enable dzmm-ai-worker.service
 systemctl enable dzmm-ai-memory-worker.service
-systemctl restart dzmm-core.service dzmm-admin-web.service dzmm-browser-worker.service dzmm-ai-worker.service dzmm-ai-memory-worker.service
+systemctl restart dzmm-core.service
+dzmm_core_ready=false
+for _ in $(seq 1 30); do
+  if curl -fsS http://127.0.0.1:18120/healthz >/dev/null; then
+    dzmm_core_ready=true
+    break
+  fi
+  sleep 1
+done
+if [ "$dzmm_core_ready" != true ]; then
+  systemctl status dzmm-core.service --no-pager
+  exit 1
+fi
+systemctl reset-failed dzmm-admin-web.service dzmm-browser-worker.service dzmm-ai-worker.service dzmm-ai-memory-worker.service || true
+systemctl restart dzmm-admin-web.service dzmm-browser-worker.service dzmm-ai-worker.service dzmm-ai-memory-worker.service
