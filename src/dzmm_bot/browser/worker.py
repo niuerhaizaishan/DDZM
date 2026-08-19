@@ -7,7 +7,7 @@ import logging
 from threading import Lock
 from time import monotonic as default_monotonic, sleep as default_sleep
 from typing import Protocol
-from uuid import uuid5
+from uuid import UUID, uuid5
 
 from socketio.exceptions import TimeoutError as SocketTimeoutError
 
@@ -18,6 +18,7 @@ from dzmm_bot.runtime.contracts import (
     InboundMessage,
     LoginState,
     MessageReference,
+    ShadowSyncRuntimeUpdate,
 )
 from dzmm_bot.runtime.outbound import group_message_chunks, requires_bot_group_sender
 
@@ -25,12 +26,19 @@ from .bot_api import DzmmBotSendError
 from .core_client import CorePort, OutboundClaim, WorkerCommand
 from .aikda_socket import AikdaAuthenticationError, AikdaMessageRejectedError
 from .session import BrowserSession, ChatGateway
+from .shadow_sync import (
+    ShadowSyncCursor,
+    ShadowSyncRequest,
+    ShadowSyncResult,
+)
 
 
 _LOGGER = logging.getLogger(__name__)
 _OUTBOUND_BATCH_SIZE = 20
 _OUTBOUND_BATCH_BUDGET_SECONDS = 2.0
 _GROUP_TARGET_SYNC_INTERVAL_SECONDS = 5.0
+_SHADOW_SYNC_INTERVAL_SECONDS = 60
+_SHADOW_CAPTCHA_BACKOFF_SECONDS = (120, 300, 600)
 
 
 class ManualDesktop(Protocol):
@@ -41,6 +49,14 @@ class ManualDesktop(Protocol):
 
 class BotSender(Protocol):
     def send_to(self, chatroom_id: str, text: str) -> str: ...
+
+
+class ShadowRunner(Protocol):
+    def submit(self, request: ShadowSyncRequest) -> bool: ...
+
+    def take_result(self) -> ShadowSyncResult | None: ...
+
+    def close(self) -> None: ...
 
 
 class BrowserWorker:
@@ -57,6 +73,8 @@ class BrowserWorker:
         lease_seconds: int = 30,
         bot_sender: BotSender | None = None,
         outbound_concurrency: int = 4,
+        shadow_runner: ShadowRunner | None = None,
+        shadow_jitter: Callable[[], float] = lambda: 0,
     ) -> None:
         if not 1 <= outbound_concurrency <= 16:
             raise ValueError("outbound_concurrency must be between 1 and 16")
@@ -69,6 +87,8 @@ class BrowserWorker:
         self._sleep = sleep
         self._lease_seconds = lease_seconds
         self._bot_sender = bot_sender
+        self._shadow_runner = shadow_runner
+        self._shadow_jitter = shadow_jitter
         self._gateway: ChatGateway | None = None
         self._listening = True
         self._login_state = LoginState.READY
@@ -92,6 +112,9 @@ class BrowserWorker:
         self._group_connected_at: dict[str, datetime] = {}
         self._group_last_inbound_at: dict[str, datetime] = {}
         self._group_last_outbound_at: dict[str, datetime] = {}
+        self._shadow_cursors: dict[UUID, ShadowSyncCursor] = {}
+        self._shadow_next_attempt_at: dict[UUID, datetime | None] = {}
+        self._shadow_failure_counts: dict[UUID, int] = {}
 
     @property
     def login_state(self) -> LoginState:
@@ -173,6 +196,10 @@ class BrowserWorker:
                     continue
                 self._queue_inbound(message)
                 self._seen_message_ids.add(message.platform_message_id)
+
+        if not self._maintain_shadow_sync(gateway, now):
+            self._core.run_daily_jobs(now)
+            return
 
         self._core.run_daily_jobs(now)
 
@@ -400,9 +427,140 @@ class BrowserWorker:
             for group_id in previous.keys() - current_targets.keys()
         )
         self._group_targets = targets
+        current_group_ids = {target.group_chat_id for target in targets}
+        self._shadow_cursors = {
+            group_id: cursor
+            for group_id, cursor in self._shadow_cursors.items()
+            if group_id in current_group_ids
+        }
+        self._shadow_next_attempt_at = {
+            group_id: retry_at
+            for group_id, retry_at in self._shadow_next_attempt_at.items()
+            if group_id in current_group_ids
+        }
+        for target in targets:
+            self._shadow_cursors.setdefault(
+                target.group_chat_id,
+                ShadowSyncCursor(
+                    target.group_chat_id,
+                    target.chatroom_id,
+                    target.shadow_cursor_at or now,
+                    target.shadow_cursor_message_id,
+                ),
+            )
+            self._shadow_next_attempt_at.setdefault(
+                target.group_chat_id, target.shadow_next_retry_at
+            )
+            self._shadow_failure_counts.setdefault(
+                target.group_chat_id, target.shadow_failure_count
+            )
         if self._gateway is not None:
             self._gateway.configure_group_rooms(targets)
         self._report_group_runtime(now)
+
+    def _maintain_shadow_sync(
+        self, gateway: ChatGateway, now: datetime
+    ) -> bool:
+        runner = self._shadow_runner
+        if runner is None or not self._group_targets:
+            return True
+        result = runner.take_result()
+        if result is not None:
+            self._apply_shadow_result(result, now)
+            if result.status == "auth_required":
+                self._recover_browser_session()
+                return False
+
+        disconnected = False
+        consume_disconnect = getattr(gateway, "consume_disconnect_signal", None)
+        if consume_disconnect is not None:
+            disconnected = bool(consume_disconnect())
+        if disconnected:
+            for target in self._group_targets:
+                self._shadow_next_attempt_at[target.group_chat_id] = now
+
+        due = tuple(
+            self._shadow_cursors[target.group_chat_id]
+            for target in self._group_targets
+            if self._shadow_next_attempt_at.get(target.group_chat_id) is None
+            or now >= self._shadow_next_attempt_at[target.group_chat_id]
+        )
+        if not due:
+            return True
+        credentials = getattr(gateway, "shadow_credentials", lambda: None)()
+        if credentials is None:
+            return True
+        origin, cookie, access_token = credentials
+        runner.submit(
+            ShadowSyncRequest(origin, cookie, access_token, due[:50])
+        )
+        return True
+
+    def _apply_shadow_result(
+        self, result: ShadowSyncResult, now: datetime
+    ) -> None:
+        updates: list[ShadowSyncRuntimeUpdate] = []
+        for cursor in result.cursors:
+            previous = self._shadow_cursors.get(cursor.group_chat_id, cursor)
+            if result.status == "healthy":
+                effective_cursor = cursor
+                failure_count = 0
+                next_attempt = now + timedelta(
+                    seconds=max(
+                        1,
+                        _SHADOW_SYNC_INTERVAL_SECONDS + self._shadow_jitter(),
+                    )
+                )
+                state = "healthy"
+                error_summary = None
+                last_success_at = now
+            else:
+                effective_cursor = previous
+                failure_count = self._shadow_failure_counts.get(
+                    cursor.group_chat_id, 0
+                ) + 1
+                if result.status == "captcha_required":
+                    delay = _SHADOW_CAPTCHA_BACKOFF_SECONDS[
+                        min(
+                            failure_count - 1,
+                            len(_SHADOW_CAPTCHA_BACKOFF_SECONDS) - 1,
+                        )
+                    ]
+                    state = "captcha_required"
+                else:
+                    delay = min(30 * (2 ** (failure_count - 1)), 120)
+                    state = "retrying"
+                next_attempt = now + timedelta(seconds=delay)
+                error_summary = result.error_summary
+                last_success_at = None
+            self._shadow_cursors[cursor.group_chat_id] = effective_cursor
+            self._shadow_failure_counts[cursor.group_chat_id] = failure_count
+            self._shadow_next_attempt_at[cursor.group_chat_id] = next_attempt
+            updates.append(
+                ShadowSyncRuntimeUpdate(
+                    cursor.group_chat_id,
+                    state,
+                    cursor_at=effective_cursor.at,
+                    cursor_message_id=effective_cursor.message_id,
+                    last_attempt_at=now,
+                    last_success_at=last_success_at,
+                    next_retry_at=next_attempt,
+                    failure_count=failure_count,
+                    error_summary=error_summary,
+                )
+            )
+        for message in result.messages:
+            if message.platform_message_id in self._seen_message_ids:
+                continue
+            self._queue_inbound(message)
+            self._seen_message_ids.add(message.platform_message_id)
+        if updates:
+            try:
+                self._core.sync_shadow_runtime(
+                    self._worker_id, tuple(updates), now
+                )
+            except Exception:
+                _LOGGER.exception("shadow sync runtime report failed")
 
     def _report_group_runtime(self, now: datetime) -> None:
         states: dict[str, tuple[str, str | None]] = {}

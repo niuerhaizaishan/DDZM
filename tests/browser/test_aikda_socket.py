@@ -239,6 +239,29 @@ def test_live_target_room_text_event_is_read_once(gateway):
     assert adapter.read_new() == []
 
 
+def test_gateway_snapshots_shadow_credentials_and_reports_disconnect():
+    socket = FakeSocket()
+    adapter = AikdaSocketGateway(
+        TARGET_URL,
+        token_provider=lambda: "short-lived-token",
+        cookie_provider=lambda: "session=cookie-value",
+        request=FakeRequest(),
+        socket_factory=lambda: socket,
+        clock=lambda: NOW,
+    )
+
+    adapter.read_new()
+
+    assert adapter.shadow_credentials() == (
+        "https://www.aikda.com",
+        "session=cookie-value",
+        "short-lived-token",
+    )
+    socket.handlers["disconnect"]()
+    assert adapter.consume_disconnect_signal() is True
+    assert adapter.consume_disconnect_signal() is False
+
+
 def test_gateway_classifies_nonconfigured_socket_rooms_as_direct(gateway):
     adapter, socket, _ = gateway
     adapter.configure_group_rooms(

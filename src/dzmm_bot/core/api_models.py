@@ -129,6 +129,7 @@ class GroupChatTargetResponse(ApiModel):
     shadow_cursor_at: datetime | None = None
     shadow_cursor_message_id: str | None = None
     shadow_next_retry_at: datetime | None = None
+    shadow_failure_count: int = 0
 
 
 class GroupChatRuntimeUpdateRequest(ApiModel):

@@ -1828,6 +1828,7 @@ class CoreRepository:
                     if runtime is not None
                     else None,
                     runtime.shadow_next_retry_at if runtime is not None else None,
+                    runtime.shadow_failure_count if runtime is not None else 0,
                 )
                 for record, runtime in records
                 if record.chatroom_id is not None and record.chat_url is not None
@@ -1925,7 +1926,8 @@ class CoreRepository:
                 if status.cursor_message_id is not None:
                     record.shadow_cursor_message_id = status.cursor_message_id
                 record.shadow_last_attempt_at = status.last_attempt_at
-                record.shadow_last_success_at = status.last_success_at
+                if status.last_success_at is not None:
+                    record.shadow_last_success_at = status.last_success_at
                 record.shadow_next_retry_at = status.next_retry_at
                 record.shadow_failure_count = status.failure_count
                 record.shadow_error_summary = error_summary

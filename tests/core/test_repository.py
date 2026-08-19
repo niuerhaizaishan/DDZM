@@ -1159,6 +1159,7 @@ def test_shadow_sync_runtime_persists_cursor_across_a_captcha_failure(
     assert target.shadow_cursor_at == now
     assert target.shadow_cursor_message_id == "message-9"
     assert runtime.shadow_sync_state == "captcha_required"
+    assert runtime.shadow_last_success_at == now
     assert runtime.shadow_next_retry_at == now + timedelta(minutes=2)
     assert runtime.shadow_failure_count == 1
     assert runtime.shadow_error_summary == "captcha_required"

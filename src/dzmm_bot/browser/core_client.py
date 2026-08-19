@@ -86,6 +86,13 @@ class CorePort(Protocol):
         now: datetime,
     ) -> bool: ...
 
+    def sync_shadow_runtime(
+        self,
+        worker_id: str,
+        updates: tuple[ShadowSyncRuntimeUpdate, ...],
+        now: datetime,
+    ) -> bool: ...
+
     def claim_profile_image_upload(
         self, worker_id: str, now: datetime, lease_seconds: int
     ) -> ProfileImageUploadClaim | None: ...
@@ -258,6 +265,7 @@ class CoreClient:
                 shadow_next_retry_at=_datetime_or_none(
                     item.get("shadow_next_retry_at")
                 ),
+                shadow_failure_count=item.get("shadow_failure_count", 0),
             )
             for item in self._get("/internal/group-chats/targets")
         )

@@ -301,6 +301,7 @@ def create_app(
                 shadow_cursor_at=target.shadow_cursor_at,
                 shadow_cursor_message_id=target.shadow_cursor_message_id,
                 shadow_next_retry_at=target.shadow_next_retry_at,
+                shadow_failure_count=target.shadow_failure_count,
             )
             for target in repository.enabled_group_targets()
         ]
