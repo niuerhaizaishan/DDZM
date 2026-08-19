@@ -480,11 +480,10 @@ class BrowserWorker:
                     outbound.destination_chatroom_id, outbound.text
                 )
             except DzmmBotSendError as error:
-                if "bot is not a member of this chatroom" not in str(error).casefold():
-                    raise
                 _LOGGER.warning(
-                    "Bot is not in group %s; falling back to browser sender",
+                    "Bot API group send failed for %s (%s); falling back to browser sender",
                     outbound.destination_chatroom_id,
+                    error,
                 )
                 platform_message_id = ""
                 for index, chunk in enumerate(group_message_chunks(outbound.text)):

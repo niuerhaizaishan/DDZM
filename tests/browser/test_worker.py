@@ -910,9 +910,9 @@ def test_worker_falls_back_to_browser_chunks_when_bot_is_not_in_group(context):
     assert worker.login_state is LoginState.READY
 
 
-def test_worker_bot_api_failure_does_not_close_browser_session(context):
+def test_worker_falls_back_to_browser_chunks_when_bot_requires_captcha(context):
     _, gateway, session, desktop, core, _ = context
-    bot_sender = FakeBotSender(send_error=DzmmBotSendError("Bot API unavailable"))
+    bot_sender = FakeBotSender(send_error=DzmmBotSendError("captcha_required"))
     worker = BrowserWorker(
         worker_id="worker-a",
         core=core,
@@ -929,9 +929,11 @@ def test_worker_bot_api_failure_does_not_close_browser_session(context):
 
     worker.run_once()
 
-    assert core.failed_event.wait(timeout=1)
-    assert core.failed == [(OUTBOUND_ID, "worker-a", LEASE, NOW)]
-    assert gateway.sent_to == []
+    assert core.confirmed_event.wait(timeout=1)
+    assert bot_sender.sent_to == [("group-2", text)]
+    assert gateway.sent_to == [("group-2", "字" * 1000), ("group-2", "字")]
+    assert core.failed == []
+    assert core.released == []
     assert session.stops == 0
     assert worker.login_state is LoginState.READY
 
