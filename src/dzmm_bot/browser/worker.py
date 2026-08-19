@@ -7,6 +7,7 @@ import logging
 from threading import Lock
 from time import monotonic as default_monotonic, sleep as default_sleep
 from typing import Protocol
+from uuid import uuid5
 
 from socketio.exceptions import TimeoutError as SocketTimeoutError
 
@@ -18,8 +19,9 @@ from dzmm_bot.runtime.contracts import (
     LoginState,
     MessageReference,
 )
-from dzmm_bot.runtime.outbound import requires_bot_group_sender
+from dzmm_bot.runtime.outbound import group_message_chunks, requires_bot_group_sender
 
+from .bot_api import DzmmBotSendError
 from .core_client import CorePort, OutboundClaim, WorkerCommand
 from .aikda_socket import AikdaMessageRejectedError
 from .session import BrowserSession, ChatGateway
@@ -326,6 +328,15 @@ class BrowserWorker:
                 self._clock(),
             )
             return False
+        except DzmmBotSendError as error:
+            _LOGGER.warning("Bot API outbound send failed: %s: %s", outbound.id, error)
+            self._core.mark_outbound_failed(
+                outbound.id,
+                self._worker_id,
+                outbound.lease_token,
+                self._clock(),
+            )
+            return False
         except Exception as error:
             if "请勿发送重复内容" in str(error):
                 _LOGGER.warning("outbound content rejected as duplicate: %s", outbound.id)
@@ -453,9 +464,26 @@ class BrowserWorker:
             and outbound.recall_after_seconds is None
             and requires_bot_group_sender(outbound.text)
         ):
-            return self._bot_sender.send_to(
-                outbound.destination_chatroom_id, outbound.text
-            )
+            try:
+                return self._bot_sender.send_to(
+                    outbound.destination_chatroom_id, outbound.text
+                )
+            except DzmmBotSendError as error:
+                if "bot is not a member of this chatroom" not in str(error).casefold():
+                    raise
+                _LOGGER.warning(
+                    "Bot is not in group %s; falling back to browser sender",
+                    outbound.destination_chatroom_id,
+                )
+                platform_message_id = ""
+                for index, chunk in enumerate(group_message_chunks(outbound.text)):
+                    platform_message_id = gateway.send_to(
+                        outbound.destination_chatroom_id,
+                        chunk,
+                        message_id=str(uuid5(outbound.id, f"browser-fallback:{index}")),
+                        reference=reference if index == 0 else None,
+                    )
+                return platform_message_id
         if (
             outbound.delivery_kind == "group"
             and outbound.group_chat_id is not None

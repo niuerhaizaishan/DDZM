@@ -555,6 +555,44 @@ def test_texas_holdem_hand_starts_only_after_all_private_cards_are_delivered(
     assert f"{summary.current_seat}号" in announcements[0]
 
 
+def test_texas_holdem_initial_notice_explains_current_legal_actions(
+    texas_repository, session_factory, now
+):
+    _prepare_texas_users(texas_repository, now, "texas-p1", "texas-p2")
+    texas_repository.start_texas_holdem_signup(
+        "texas-p1", 20, now, PRIMARY_GROUP_CHAT_ID
+    )
+    texas_repository.join_texas_holdem("texas-p2", now, PRIMARY_GROUP_CHAT_ID)
+    texas_repository.start_texas_holdem_hand(
+        "texas-p1", now, PRIMARY_GROUP_CHAT_ID
+    )
+    _confirm_outbound(texas_repository, "direct-texas-p1", now, 1)
+    _confirm_outbound(texas_repository, "direct-texas-p2", now, 2)
+    summary = texas_repository.texas_holdem_summary(now, PRIMARY_GROUP_CHAT_ID)
+    actor = next(
+        player for player in summary.players
+        if player.seat_number == summary.current_seat
+    )
+    with session_factory() as session:
+        notice = session.scalar(
+            select(OutboundRecord.text).where(
+                OutboundRecord.group_chat_id == PRIMARY_GROUP_CHAT_ID,
+                OutboundRecord.delivery_kind == "group",
+            )
+        )
+
+    assert f"【轮到行动｜翻牌前】\n{actor.seat_number}号 {actor.display_name}" in notice
+    assert "本轮最高下注：2" in notice
+    assert "你已投入：1" in notice
+    assert "需要补齐：1" in notice
+    assert "/跟注 —— 投入1，补到本轮2" in notice
+    assert "/加注 4 —— 最低加到本轮总额4" in notice
+    assert "/全下 —— 投入剩余19" in notice
+    assert "/弃牌 —— 放弃本手，已投入筹码不退" in notice
+    assert "/退出 —— 效果与弃牌相同" in notice
+    assert "请在120秒内行动；超时将自动弃牌。" in notice
+
+
 def test_texas_holdem_randomizes_player_seats_and_button(session_factory, now):
     from dzmm_bot.core.repository import CoreRepository
 
@@ -739,6 +777,37 @@ def test_texas_holdem_check_call_flow_reaches_showdown_and_conserves_money(
     )
 
 
+def test_texas_holdem_action_and_street_transition_include_next_player_guidance(
+    texas_repository, now
+):
+    _start_two_player_texas_hand(texas_repository, now)
+    first = _texas_current_player(texas_repository, now)
+
+    called = _texas_act(texas_repository, first.platform_id, "call", now)
+
+    summary = texas_repository.texas_holdem_summary(now, PRIMARY_GROUP_CHAT_ID)
+    second = next(
+        player for player in summary.players
+        if player.seat_number == summary.current_seat
+    )
+    assert f"【轮到行动｜翻牌前】\n{second.seat_number}号 {second.display_name}" in called.public_message
+    assert "需要补齐：0" in called.public_message
+    assert "/过牌 —— 不投入筹码，轮到下一位" in called.public_message
+    assert "/加注 4 —— 最低加到本轮总额4" in called.public_message
+    assert "/跟注" not in called.public_message
+
+    advanced = _texas_act(texas_repository, second.platform_id, "check", now)
+
+    flop = texas_repository.texas_holdem_summary(now, PRIMARY_GROUP_CHAT_ID)
+    flop_actor = next(
+        player for player in flop.players
+        if player.seat_number == flop.current_seat
+    )
+    assert "进入翻牌：" in advanced.public_message
+    assert f"【轮到行动｜翻牌】\n{flop_actor.seat_number}号 {flop_actor.display_name}" in advanced.public_message
+    assert "/加注 2 —— 最低加到本轮总额2" in advanced.public_message
+
+
 def test_texas_holdem_last_unfolded_player_wins_without_public_hole_cards(
     texas_repository, now
 ):
@@ -750,6 +819,20 @@ def test_texas_holdem_last_unfolded_player_wins_without_public_hole_cards(
 
     assert result.status == "settled"
     assert "底牌" not in result.public_message
+    folding_name = texas_repository.find_user(folding).display_name
+    winner_name = texas_repository.find_user(winner).display_name
+    assert "【摸鱼币流水】" in result.public_message
+    assert (
+        f"{folding_name}：带入20｜牌局投入1｜结算返还19｜净收益 -1"
+        in result.public_message
+    )
+    assert (
+        f"{winner_name}：带入20｜牌局投入2｜结算返还21｜净收益 +1"
+        in result.public_message
+    )
+    assert "系统抽成：0" in result.public_message
+    assert "本局资金总额：40" in result.public_message
+    assert "流水校验：收入与支出平衡" in result.public_message
     assert texas_repository.find_user(folding).balance == 99
     assert texas_repository.find_user(winner).balance == 101
     with texas_repository._session() as session:

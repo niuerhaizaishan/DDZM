@@ -12,7 +12,13 @@ from dzmm_bot.runtime.contracts import InboundMessage, MessageReference
 BEIJING = ZoneInfo("Asia/Shanghai")
 
 
-def _service(*, red_packet_random=None, number_bomb_random=None, texas_holdem_random=None):
+def _service(
+    *,
+    preserve_long_group_messages=False,
+    red_packet_random=None,
+    number_bomb_random=None,
+    texas_holdem_random=None,
+):
     from dzmm_bot.core.commands import GroupCommandHandler
     from dzmm_bot.core.repository import CoreRepository
     from dzmm_bot.core.schema import Base
@@ -23,6 +29,7 @@ def _service(*, red_packet_random=None, number_bomb_random=None, texas_holdem_ra
     factory = sessionmaker(engine, expire_on_commit=False)
     repository = CoreRepository(
         factory,
+        preserve_long_group_messages=preserve_long_group_messages,
         red_packet_random=red_packet_random,
         number_bomb_random=number_bomb_random,
         texas_holdem_random=texas_holdem_random,
@@ -246,7 +253,10 @@ def _group_receive(service, message_id, sender, content, now, chatroom_id):
 
 
 def test_texas_holdem_group_commands_create_join_start_and_deal_privately():
-    service, repository, factory = _service(texas_holdem_random=Random(7))
+    service, repository, factory = _service(
+        preserve_long_group_messages=True,
+        texas_holdem_random=Random(7),
+    )
     now = datetime(2026, 8, 18, 10, 0, tzinfo=BEIJING)
     group = repository.bootstrap_primary_group(
         "https://www.aikda.com/chat?c=texas-command", now
@@ -325,11 +335,15 @@ def test_texas_holdem_group_commands_create_join_start_and_deal_privately():
     acted = _group_receive(
         service, "texas-call", actor.platform_id, "/跟注", now, group.chatroom_id
     )
-    action_reply = "".join(_replies_for(factory, acted.message_id))
+    action_replies = _replies_for(factory, acted.message_id)
+    assert len(action_replies) == 1
+    action_reply = action_replies[0]
     assert f"{actor.seat_number}号 {actor.display_name} 跟注 1" in action_reply
     assert "剩余筹码 18" in action_reply
     assert "当前底池 4 摸鱼币" in action_reply
     assert "下一位" in action_reply
+    assert "【轮到行动｜翻牌前】" in action_reply
+    assert "/过牌 —— 不投入筹码，轮到下一位" in action_reply
 
 
 def test_texas_holdem_look_cards_is_private_only():

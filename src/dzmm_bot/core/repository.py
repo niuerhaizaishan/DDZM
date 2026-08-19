@@ -23,8 +23,7 @@ from dzmm_bot.runtime.contracts import (
     WorkerHeartbeat,
 )
 from dzmm_bot.runtime.outbound import (
-    BOT_GROUP_MAX_CHARS,
-    BOT_GROUP_MAX_NEWLINES,
+    group_message_chunks,
     requires_bot_group_sender,
 )
 
@@ -480,41 +479,6 @@ _DEFAULT_AI_MEMORY_EXTRACTION_PROMPT = (
 _UNDERCOVER_ACTIVE_KEY = "global"
 _UNDERCOVER_CONTINUE_TIMEOUT = timedelta(minutes=20)
 _ROLE_VARIABLE = re.compile(r"\{([^{}]*\S[^{}]*)\}")
-
-
-def _outbound_text_chunks(text: str) -> list[str]:
-    chunks: list[str] = []
-    current: str | None = None
-    for line_number, line in enumerate(text.split("\n")):
-        remaining = line
-        first_piece = True
-        while remaining or first_piece:
-            first_piece = False
-            capacity = BOT_GROUP_MAX_CHARS
-            if current is not None:
-                capacity -= len(current) + (1 if line_number else 0)
-            if capacity <= 0 or (
-                current is not None
-                and line_number
-                and current.count("\n") >= BOT_GROUP_MAX_NEWLINES
-            ):
-                chunks.append(current)
-                current = None
-                continue
-            piece = remaining[:capacity]
-            remaining = remaining[capacity:]
-            if current is None:
-                current = piece
-            elif line_number:
-                current = f"{current}\n{piece}"
-            else:
-                current += piece
-            if remaining:
-                chunks.append(current)
-                current = None
-    if current is not None:
-        chunks.append(current)
-    return chunks
 
 
 def _undercover_card_text(role: str, civilian_word: str, undercover_word: str) -> str:
@@ -5932,16 +5896,11 @@ class CoreRepository:
                 for record, user in rows
             )
             if result is None:
-                current_name = next(
-                    user.display_name
-                    for record, user in rows
-                    if record.seat_number == game.current_seat
-                )
-                action_text = f"当前由 {game.current_seat}号 {current_name} 行动。"
+                action_text = self._texas_action_prompt(session, game, rows)
             else:
                 action_text = "所有可行动玩家均已全下，自动发完公共牌并结算。"
                 if result.public_message:
-                    action_text += "\n" + result.public_message
+                    action_text += "\n\n" + result.public_message
             session.add(
                 OutboundRecord(
                     group_chat_id=game.group_chat_id,
@@ -5951,8 +5910,8 @@ class CoreRepository:
                     text=(
                         "【德州扑克】底牌已全部送达，进入翻牌前。\n"
                         f"座位：{roster}\n"
-                        f"小盲 {game.small_blind_amount}，大盲 {game.big_blind_amount}；"
-                        f"{action_text}"
+                        f"小盲 {game.small_blind_amount}，大盲 {game.big_blind_amount}"
+                        f"\n\n{action_text}"
                     ),
                     created_at=now,
                     updated_at=now,
@@ -5988,6 +5947,79 @@ class CoreRepository:
                 for player, _ in rows
                 if player.raise_open and player.seat_number is not None
             ),
+        )
+
+    def _texas_action_prompt(
+        self,
+        session: Session,
+        game: TexasHoldemGameRecord,
+        rows: list[tuple[TexasHoldemPlayerRecord, UserRecord]],
+    ) -> str:
+        if game.current_seat is None or game.state not in {
+            "preflop", "flop", "turn", "river"
+        }:
+            return ""
+        current = next(
+            (
+                (player, user)
+                for player, user in rows
+                if player.seat_number == game.current_seat
+            ),
+            None,
+        )
+        if current is None:
+            return ""
+        player, user = current
+        to_call = max(0, game.current_bet - player.street_contribution)
+        settings = session.get(GameSettingsRecord, 1)
+        currency = (
+            settings.currency_name if settings is not None else _DEFAULT_CURRENCY_NAME
+        )
+        street_name = {
+            "preflop": "翻牌前",
+            "flop": "翻牌",
+            "turn": "转牌",
+            "river": "河牌",
+        }[game.state]
+        actions: list[str] = []
+        if to_call == 0:
+            actions.append("/过牌 —— 不投入筹码，轮到下一位")
+        elif player.stack <= to_call:
+            actions.append(f"/跟注 —— 投入{player.stack}并全下")
+        else:
+            actions.append(
+                f"/跟注 —— 投入{to_call}，补到本轮{game.current_bet}"
+            )
+        maximum_target = player.street_contribution + player.stack
+        minimum_raise_target = game.current_bet + game.last_full_raise
+        if player.raise_open and maximum_target >= minimum_raise_target:
+            actions.append(
+                f"/加注 {minimum_raise_target} —— "
+                f"最低加到本轮总额{minimum_raise_target}"
+            )
+        if player.stack > 0 and (
+            maximum_target <= game.current_bet or player.raise_open
+        ):
+            actions.append(f"/全下 —— 投入剩余{player.stack}")
+        actions.extend(
+            (
+                "/弃牌 —— 放弃本手，已投入筹码不退",
+                "/退出 —— 效果与弃牌相同",
+            )
+        )
+        timeout_action = "自动弃牌" if to_call else "自动过牌"
+        return (
+            f"【轮到行动｜{street_name}】\n"
+            f"{player.seat_number}号 {user.display_name}\n\n"
+            f"底池：{sum(record.total_contribution for record, _ in rows)}{currency}\n"
+            f"本轮最高下注：{game.current_bet}\n"
+            f"你已投入：{player.street_contribution}\n"
+            f"需要补齐：{to_call}\n"
+            f"剩余筹码：{player.stack}\n\n"
+            "可操作：\n"
+            + "\n".join(actions)
+            + f"\n\n请在{game.action_timeout_seconds_snapshot}秒内行动；"
+            f"超时将{timeout_action}。"
         )
 
     def _texas_layout_for_game(
@@ -6068,9 +6100,11 @@ class CoreRepository:
         ):
             raise RuntimeError("德州扑克筹码不守恒")
         winner_names: list[str] = []
+        payouts: dict[int, int] = {}
         for player, user in rows:
             seat = player.seat_number or 0
             payout = player.stack + winnings[seat]
+            payouts[seat] = payout
             self._apply_balance_change(user, payout, "texas_holdem_settlement", now)
             if winnings[seat] > 0:
                 winner_names.append(user.display_name)
@@ -6109,6 +6143,24 @@ class CoreRepository:
             )
         else:
             message = f"德州扑克结算：{'、'.join(winner_names)}成为最后未弃牌玩家并赢得底池。"
+        flow_lines = []
+        for player, user in rows:
+            payout = payouts[player.seat_number or 0]
+            net = payout - player.original_buy_in
+            net_text = f"+{net}" if net > 0 else str(net)
+            flow_lines.append(
+                f"{user.display_name}：带入{player.original_buy_in}｜"
+                f"牌局投入{player.total_contribution}｜结算返还{payout}｜"
+                f"净收益 {net_text}"
+            )
+        total_funds = sum(player.original_buy_in for player, _ in rows)
+        message += (
+            "\n\n【摸鱼币流水】\n"
+            + "\n".join(flow_lines)
+            + "\n\n系统抽成：0"
+            + f"\n本局资金总额：{total_funds}"
+            + "\n流水校验：收入与支出平衡"
+        )
         return TexasHoldemResult("settled", game.id, len(rows), public_message=message)
 
     def _advance_texas_street(
@@ -6163,6 +6215,8 @@ class CoreRepository:
             public_message=(
                 f"进入{ {'flop': '翻牌', 'turn': '转牌', 'river': '河牌'}[next_street] }："
                 + " ".join(format_card(card) for card in layout.board[:reveal_count])
+                + "\n\n"
+                + self._texas_action_prompt(session, game, rows)
             ),
         )
 
@@ -6258,6 +6312,7 @@ class CoreRepository:
             remaining_stack=player.stack,
             next_seat=game.current_seat,
             total_pot=action_values["total_pot"],
+            public_message=self._texas_action_prompt(session, game, rows),
         )
 
     def act_texas_holdem(
@@ -6433,10 +6488,10 @@ class CoreRepository:
                     allow_expired=True,
                 )
                 label = "超时自动过牌" if action == "check" else "超时弃牌"
-                messages = [f"{user.display_name}{label}。"]
+                message = f"{user.display_name}{label}。"
                 if result.public_message:
-                    messages.append(result.public_message)
-                return messages
+                    message += "\n\n" + result.public_message
+                return [message]
 
     def get_texas_holdem_private_cards(
         self,
@@ -16351,7 +16406,7 @@ class CoreRepository:
                 destination_chatroom_id=destination_chatroom_id,
                 delivery_kind=delivery_kind,
                 has_reference=bool(reference),
-            ) else _outbound_text_chunks(reply)
+            ) else group_message_chunks(reply)
             records = [
                 OutboundRecord(
                     inbound_message_id=inbound_id,
@@ -16403,7 +16458,7 @@ class CoreRepository:
                 destination_chatroom_id=destination_chatroom_id,
                 delivery_kind=delivery_kind,
                 has_reference=False,
-            ) else _outbound_text_chunks(text)
+            ) else group_message_chunks(text)
             records = [
                 OutboundRecord(
                     inbound_message_id=None,

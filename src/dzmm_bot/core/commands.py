@@ -1281,14 +1281,15 @@ class GroupCommandHandler:
             received_at,
             **({} if group_chat_id is None else {"group_chat_id": group_chat_id}),
         )
-        if result.public_message:
-            return result.public_message
         scenario = {
             "signup_left": "texas_signup_left",
             "acted": "texas_folded",
             "settled": "texas_folded",
         }.get(result.status, "texas_cannot_leave")
-        return self._reply("/退出", scenario, received_at)
+        acknowledgement = self._reply("/退出", scenario, received_at)
+        if result.public_message:
+            return acknowledgement + "\n\n" + result.public_message
+        return acknowledgement
 
     def _texas_holdem_action(
         self,
@@ -1343,11 +1344,9 @@ class GroupCommandHandler:
                     ),
                 },
             )
-            return (
-                [acknowledgement, result.public_message]
-                if result.public_message
-                else acknowledgement
-            )
+            if result.public_message:
+                return acknowledgement + "\n\n" + result.public_message
+            return acknowledgement
         reasons = {
             "not_your_turn": "还没轮到你",
             "cannot_check": "当前需要跟注或弃牌",

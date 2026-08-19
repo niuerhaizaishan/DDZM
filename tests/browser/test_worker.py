@@ -7,6 +7,7 @@ from uuid import UUID
 import pytest
 from socketio.exceptions import TimeoutError as SocketTimeoutError
 
+from dzmm_bot.browser.bot_api import DzmmBotSendError
 from dzmm_bot.browser.core_client import OutboundClaim, OutboundRecallClaim, WorkerCommand
 from dzmm_bot.browser.worker import BrowserWorker
 from dzmm_bot.runtime.contracts import (
@@ -181,9 +182,12 @@ class FakeDesktop:
 @dataclass
 class FakeBotSender:
     sent_to: list[tuple[str, str]] = field(default_factory=list)
+    send_error: Exception | None = None
 
     def send_to(self, chatroom_id, text):
         self.sent_to.append((chatroom_id, text))
+        if self.send_error is not None:
+            raise self.send_error
         return f"bot-{len(self.sent_to)}"
 
 
@@ -838,6 +842,68 @@ def test_worker_uses_bot_api_for_group_replies_over_the_newline_limit(context):
     assert bot_sender.sent_to == [("group-1", text)]
     assert gateway.sent == []
     assert core.confirmed == [(OUTBOUND_ID, "worker-a", LEASE, "bot-1", NOW)]
+
+
+def test_worker_falls_back_to_browser_chunks_when_bot_is_not_in_group(context):
+    worker, gateway, session, _, core, _ = context
+    bot_sender = FakeBotSender(
+        send_error=DzmmBotSendError("Bot is not a member of this chatroom")
+    )
+    worker = BrowserWorker(
+        worker_id="worker-a",
+        core=core,
+        session=session,
+        desktop=FakeDesktop(),
+        clock=lambda: NOW,
+        bot_sender=bot_sender,
+    )
+    lines = [f"第{index}行" for index in range(12)]
+    text = "\n".join(lines)
+    core.pending = [OutboundClaim(
+        OUTBOUND_ID, "in-1", text, LEASE,
+        group_chat_id=GROUP_ID, destination_chatroom_id="group-2",
+    )]
+
+    worker.run_once()
+
+    assert core.confirmed_event.wait(timeout=1)
+    assert bot_sender.sent_to == [("group-2", text)]
+    assert gateway.sent_to == [
+        ("group-2", "\n".join(lines[:11])),
+        ("group-2", lines[11]),
+    ]
+    assert len(set(gateway.sent_message_ids)) == 2
+    assert all(gateway.sent_message_ids)
+    assert core.failed == []
+    assert core.released == []
+    assert session.stops == 0
+    assert worker.login_state is LoginState.READY
+
+
+def test_worker_bot_api_failure_does_not_close_browser_session(context):
+    _, gateway, session, desktop, core, _ = context
+    bot_sender = FakeBotSender(send_error=DzmmBotSendError("Bot API unavailable"))
+    worker = BrowserWorker(
+        worker_id="worker-a",
+        core=core,
+        session=session,
+        desktop=desktop,
+        clock=lambda: NOW,
+        bot_sender=bot_sender,
+    )
+    text = "字" * 1001
+    core.pending = [OutboundClaim(
+        OUTBOUND_ID, "in-1", text, LEASE,
+        group_chat_id=GROUP_ID, destination_chatroom_id="group-2",
+    )]
+
+    worker.run_once()
+
+    assert core.failed_event.wait(timeout=1)
+    assert core.failed == [(OUTBOUND_ID, "worker-a", LEASE, NOW)]
+    assert gateway.sent_to == []
+    assert session.stops == 0
+    assert worker.login_state is LoginState.READY
 
 
 def test_worker_keeps_group_replies_within_platform_limits_on_the_browser_gateway(context):
