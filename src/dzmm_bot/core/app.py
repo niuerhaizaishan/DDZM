@@ -11,6 +11,7 @@ from uvicorn import Config, Server
 from dzmm_bot.runtime.contracts import (
     InboundMessage,
     MessageReference,
+    ShadowSyncRuntimeUpdate,
     WorkerHeartbeat,
 )
 from dzmm_bot.runtime.settings import Settings
@@ -90,6 +91,7 @@ from .api_models import (
     UpdateAIPlayerImpressionRequest,
     SetGameSettingsRequest,
     SyncGroupChatRuntimeRequest,
+    SyncShadowRuntimeRequest,
     SetPersonalProfileRequest,
     SetProfileSettingsRequest,
     RandomEventSettingsResponse,
@@ -296,6 +298,9 @@ def create_app(
                 group_chat_id=target.group_chat_id,
                 chatroom_id=target.chatroom_id,
                 chat_url=target.chat_url,
+                shadow_cursor_at=target.shadow_cursor_at,
+                shadow_cursor_message_id=target.shadow_cursor_message_id,
+                shadow_next_retry_at=target.shadow_next_retry_at,
             )
             for target in repository.enabled_group_targets()
         ]
@@ -316,6 +321,37 @@ def create_app(
                         last_inbound_at=item.last_inbound_at,
                         last_outbound_at=item.last_outbound_at,
                         last_error_summary=item.last_error_summary,
+                    )
+                    for item in request.statuses
+                ),
+                request.now,
+            )
+        except LookupError as error:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(error))
+        return AcceptedResponse(accepted=True)
+
+    @app.post(
+        "/internal/group-chats/shadow-sync-runtime",
+        response_model=AcceptedResponse,
+    )
+    def sync_shadow_runtime(
+        request: SyncShadowRuntimeRequest,
+        _: Annotated[None, Depends(authorize)],
+    ) -> AcceptedResponse:
+        try:
+            repository.record_shadow_sync_runtime(
+                request.worker_id,
+                tuple(
+                    ShadowSyncRuntimeUpdate(
+                        group_chat_id=item.group_chat_id,
+                        state=item.state,
+                        cursor_at=item.cursor_at,
+                        cursor_message_id=item.cursor_message_id,
+                        last_attempt_at=item.last_attempt_at,
+                        last_success_at=item.last_success_at,
+                        next_retry_at=item.next_retry_at,
+                        failure_count=item.failure_count,
+                        error_summary=item.error_summary,
                     )
                     for item in request.statuses
                 ),
@@ -2439,6 +2475,14 @@ def _group_chat_response(group, runtime) -> GroupChatResponse:
             last_inbound_at=runtime.last_inbound_at,
             last_outbound_at=runtime.last_outbound_at,
             last_error_summary=runtime.last_error_summary,
+            shadow_sync_state=runtime.shadow_sync_state,
+            shadow_cursor_at=runtime.shadow_cursor_at,
+            shadow_cursor_message_id=runtime.shadow_cursor_message_id,
+            shadow_last_attempt_at=runtime.shadow_last_attempt_at,
+            shadow_last_success_at=runtime.shadow_last_success_at,
+            shadow_next_retry_at=runtime.shadow_next_retry_at,
+            shadow_failure_count=runtime.shadow_failure_count,
+            shadow_error_summary=runtime.shadow_error_summary,
             worker_id=runtime.worker_id,
             updated_at=runtime.updated_at,
         ),

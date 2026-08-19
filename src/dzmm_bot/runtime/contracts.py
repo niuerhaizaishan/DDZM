@@ -45,6 +45,22 @@ class GroupChatTarget:
     group_chat_id: UUID
     chatroom_id: str
     chat_url: str
+    shadow_cursor_at: datetime | None = None
+    shadow_cursor_message_id: str | None = None
+    shadow_next_retry_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class ShadowSyncRuntimeUpdate:
+    group_chat_id: UUID
+    state: str
+    cursor_at: datetime | None = None
+    cursor_message_id: str | None = None
+    last_attempt_at: datetime | None = None
+    last_success_at: datetime | None = None
+    next_retry_at: datetime | None = None
+    failure_count: int = 0
+    error_summary: str | None = None
 
 
 @dataclass(frozen=True)
