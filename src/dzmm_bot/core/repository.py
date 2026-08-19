@@ -4316,7 +4316,8 @@ class CoreRepository:
                 else None
             )
             game_settings = session.get(GameSettingsRecord, 1)
-            user_content = normalize_ai_mention(inbound.content)
+            mention_names = self._ai_mention_names(session)
+            user_content = normalize_ai_mention(inbound.content, mention_names)
             history_messages = self._ai_conversation_history(
                 session, record, inbound
             )
@@ -4440,8 +4441,8 @@ class CoreRepository:
                 timeout_seconds=settings.timeout_seconds,
             )
 
-    @staticmethod
     def _ai_conversation_history(
+        self,
         session: Session,
         current_request: AIRequestRecord,
         current_inbound: InboundRecord,
@@ -4495,7 +4496,11 @@ class CoreRepository:
             messages.extend(
                 (
                     AIConversationMessage(
-                        "user", normalize_ai_mention(historical_inbound.content)
+                        "user",
+                        normalize_ai_mention(
+                            historical_inbound.content,
+                            self._ai_mention_names(session),
+                        ),
                     ),
                     AIConversationMessage(
                         "assistant", historical_request.result_text.strip()
@@ -16891,6 +16896,7 @@ class CoreRepository:
                     login_state=heartbeat.login_state.value,
                     listening=heartbeat.listening,
                     listening_desired=True,
+                    account_display_name=heartbeat.account_display_name,
                     recorded_at=heartbeat.recorded_at,
                 )
                 dialect_name = session.get_bind().dialect.name
@@ -16905,6 +16911,7 @@ class CoreRepository:
                     set_={
                         "login_state": statement.excluded.login_state,
                         "listening": statement.excluded.listening,
+                        "account_display_name": statement.excluded.account_display_name,
                         "recorded_at": statement.excluded.recorded_at,
                     },
                 ).returning(WorkerInstanceRecord.id)
@@ -16913,6 +16920,23 @@ class CoreRepository:
                 if record is None:
                     raise RuntimeError("persisted worker heartbeat disappeared")
                 return record
+
+    def ai_mention_names(self) -> tuple[str, ...]:
+        with self._session() as session:
+            return self._ai_mention_names(session)
+
+    @staticmethod
+    def _ai_mention_names(session: Session) -> tuple[str, ...]:
+        display_name = session.scalar(
+            select(WorkerInstanceRecord.account_display_name)
+            .where(WorkerInstanceRecord.account_display_name.is_not(None))
+            .order_by(
+                WorkerInstanceRecord.recorded_at.desc(),
+                WorkerInstanceRecord.id.desc(),
+            )
+            .limit(1)
+        )
+        return (display_name,) if display_name else ()
 
     def queue_counts(self) -> dict[str, int]:
         with self._session() as session:

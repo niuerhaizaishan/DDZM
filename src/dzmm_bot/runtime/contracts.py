@@ -86,3 +86,4 @@ class WorkerHeartbeat:
     login_state: LoginState
     recorded_at: datetime
     listening: bool = True
+    account_display_name: str | None = None

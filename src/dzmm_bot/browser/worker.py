@@ -517,6 +517,11 @@ class BrowserWorker:
             self._login_state,
             self._listening,
             self._clock(),
+            account_display_name=(
+                None
+                if self._gateway is None
+                else getattr(self._gateway, "account_display_name", None)
+            ),
         )
         self._listening = desired and self._login_state is LoginState.READY
 

@@ -194,6 +194,7 @@ class HeartbeatRequest(ApiModel):
     login_state: LoginState
     recorded_at: AwareDatetime
     listening: bool = True
+    account_display_name: str | None = Field(default=None, min_length=1, max_length=255)
 
 
 class HeartbeatResponse(ApiModel):

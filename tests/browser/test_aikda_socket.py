@@ -873,6 +873,19 @@ def test_joined_event_without_payload_marks_the_gateway_ready(gateway):
     assert adapter.is_authenticated()
 
 
+def test_authenticated_gateway_refreshes_the_current_account_display_name(gateway):
+    adapter, _, request = gateway
+    request.profile = {"id": "bot-1", "fullName": "旧名称"}
+
+    assert adapter.is_authenticated() is True
+    assert adapter.account_display_name == "旧名称"
+
+    request.profile = {"id": "bot-1", "fullName": "饭饭（小狗青巫）."}
+
+    assert adapter.is_authenticated() is True
+    assert adapter.account_display_name == "饭饭（小狗青巫）."
+
+
 def test_authentication_is_lost_when_the_platform_identity_is_unavailable():
     """Fails if a stale socket keeps reporting ready after token expiry."""
     socket = FakeSocket()

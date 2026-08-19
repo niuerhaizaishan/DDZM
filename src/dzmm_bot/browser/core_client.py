@@ -159,6 +159,7 @@ class CorePort(Protocol):
         login_state: LoginState,
         listening: bool,
         recorded_at: datetime,
+        account_display_name: str | None = None,
     ) -> bool: ...
 
     def claim_command(
@@ -480,15 +481,19 @@ class CoreClient:
         login_state: LoginState,
         listening: bool,
         recorded_at: datetime,
+        account_display_name: str | None = None,
     ) -> bool:
+        payload = {
+            "worker_id": worker_id,
+            "login_state": login_state.value,
+            "listening": listening,
+            "recorded_at": recorded_at.isoformat(),
+        }
+        if account_display_name is not None:
+            payload["account_display_name"] = account_display_name
         response = self._post(
             "/internal/heartbeat",
-            {
-                "worker_id": worker_id,
-                "login_state": login_state.value,
-                "listening": listening,
-                "recorded_at": recorded_at.isoformat(),
-            },
+            payload,
         )
         return bool(response["listening_desired"])
 

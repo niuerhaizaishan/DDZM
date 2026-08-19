@@ -721,6 +721,65 @@ def test_blame_bomb_session_is_public_and_admin_end_refunds(app_context, headers
     assert repository.find_user("blame-api-2").balance == 100
 
 
+def test_ai_mention_uses_the_current_browser_account_name(app_context, headers):
+    initial = app_context.client.get(
+        "/internal/game/ai-assistant/settings", headers=headers
+    ).json()
+    app_context.client.patch(
+        "/internal/game/ai-assistant/settings",
+        headers=headers,
+        json={
+            **initial,
+            "enabled": True,
+            "quotas": [
+                {"rank_id": quota["rank_id"], "daily_limit": 1}
+                for quota in initial["quotas"]
+            ],
+        },
+    )
+    app_context.client.post(
+        "/internal/inbound",
+        headers=headers,
+        json={
+            "platform_message_id": "renamed-ai-join",
+            "sender_platform_id": "renamed-ai-user",
+            "content": "/入职 小明",
+            "received_at": NOW.isoformat(),
+        },
+    )
+    heartbeat = app_context.client.post(
+        "/internal/heartbeat",
+        headers=headers,
+        json={
+            "worker_id": "browser-worker",
+            "login_state": "ready",
+            "account_display_name": "饭饭（小狗青巫）.",
+            "recorded_at": NOW.isoformat(),
+        },
+    )
+
+    app_context.client.post(
+        "/internal/inbound",
+        headers=headers,
+        json={
+            "platform_message_id": "renamed-ai-mention",
+            "sender_platform_id": "renamed-ai-user",
+            "content": "@饭饭（小狗青巫）. 你好，摸你屁股",
+            "received_at": NOW.isoformat(),
+            "chatroom_id": "room-ai",
+        },
+    )
+    claim = app_context.client.post(
+        "/internal/ai/claim",
+        headers=headers,
+        json={"worker_id": "ai-1", "now": NOW.isoformat(), "lease_seconds": 90},
+    )
+
+    assert heartbeat.status_code == 200
+    assert claim.status_code == 200
+    assert claim.json()["user_content"] == "你好，摸你屁股"
+
+
 def test_ai_assistant_settings_and_lease_api_are_secret_free_and_fenced(
     app_context, headers
 ):

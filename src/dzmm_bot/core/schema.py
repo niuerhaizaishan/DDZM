@@ -1793,6 +1793,7 @@ class WorkerInstanceRecord(Base):
     listening_desired: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=true()
     )
+    account_display_name: Mapped[str | None] = mapped_column(String(255))
     recorded_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
     version: Mapped[str | None] = mapped_column(String(64))
     browser_state: Mapped[str | None] = mapped_column(String(64))

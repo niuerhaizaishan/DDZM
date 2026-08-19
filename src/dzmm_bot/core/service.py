@@ -4,7 +4,7 @@ from uuid import UUID, uuid4
 
 from dzmm_bot.runtime.contracts import InboundMessage
 
-from .ai_mentions import BOT_MENTION_PREFIX, normalize_ai_mention
+from .ai_mentions import ai_mention_content
 from .repository import CoreRepository
 from .schema import PRIMARY_GROUP_CHAT_ID
 from .random_event_submissions import (
@@ -209,7 +209,13 @@ class CoreService:
                     reply if isinstance(reply, CommandReply) else CommandReply(reply)
                 )
             if not replies:
-                mention_content = _ai_mention_content(message.content)
+                mention_content = (
+                    ai_mention_content(
+                        message.content, self._repository.ai_mention_names()
+                    )
+                    if message.content.startswith("@")
+                    else None
+                )
                 if mention_content is not None:
                     result = self._repository.try_enqueue_ai_request(
                         stored.id,
@@ -372,10 +378,3 @@ def _allows_random_event_command(content: str, event_state: str, settings) -> bo
         else settings.in_progress_allowed_commands
     )
     return command in allowed
-
-
-def _ai_mention_content(content: str) -> str | None:
-    if not content.startswith(BOT_MENTION_PREFIX):
-        return None
-    value = normalize_ai_mention(content)
-    return value or None

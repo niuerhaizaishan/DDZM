@@ -57,6 +57,7 @@ class AikdaSocketGateway:
         self._owner_thread_id = get_ident()
         self._socket = None
         self._bot_id: str | None = None
+        self._account_display_name: str | None = None
         self._authenticated = False
         self._joined = Event()
         self._reconcile_needed = True
@@ -441,12 +442,18 @@ class AikdaSocketGateway:
 
     def is_authenticated(self) -> bool:
         try:
-            if not self._request("user.getMe").get("id"):
+            profile = self._request("user.getMe")
+            if not profile.get("id"):
                 raise RuntimeError("bot identity unavailable")
+            self._account_display_name = _profile_display_name(profile)
             self._ensure_connected()
         except Exception:
             self._authenticated = False
         return self._authenticated
+
+    @property
+    def account_display_name(self) -> str | None:
+        return self._account_display_name
 
     def close(self) -> None:
         with self._state_lock:
@@ -489,6 +496,7 @@ class AikdaSocketGateway:
         bot_id = profile.get("id")
         if not bot_id:
             raise RuntimeError("bot identity unavailable")
+        self._account_display_name = _profile_display_name(profile)
         token = self._token_provider()
         if not token:
             raise RuntimeError("socket token unavailable")
@@ -733,3 +741,10 @@ def _shanghai_time(value: str) -> datetime:
 
 def _utc_iso(value: datetime) -> str:
     return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _profile_display_name(profile: dict[str, Any]) -> str | None:
+    display_name = profile.get("fullName")
+    if not isinstance(display_name, str) or not display_name.strip():
+        return None
+    return display_name.strip()

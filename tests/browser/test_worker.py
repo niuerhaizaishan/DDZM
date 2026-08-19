@@ -29,6 +29,7 @@ GROUP_ID = UUID("00000000-0000-0000-0000-000000000101")
 class FakeGateway:
     messages: list[InboundMessage] = field(default_factory=list)
     authenticated: bool = True
+    account_display_name: str | None = None
     sent: list[str] = field(default_factory=list)
     direct_rooms: list[DirectChatRoom] = field(default_factory=list)
     sent_to: list[tuple[str, str]] = field(default_factory=list)
@@ -262,8 +263,17 @@ class FakeCore:
     def confirm_outbound_recalled(self, message_id, worker_id, lease_token, now):
         self.recalls_confirmed.append((message_id, worker_id, lease_token, now))
 
-    def heartbeat(self, worker_id, login_state, listening, recorded_at):
-        self.heartbeats.append((worker_id, login_state, listening, recorded_at))
+    def heartbeat(
+        self,
+        worker_id,
+        login_state,
+        listening,
+        recorded_at,
+        account_display_name=None,
+    ):
+        self.heartbeats.append(
+            (worker_id, login_state, listening, recorded_at, account_display_name)
+        )
         return self.listening_desired
 
     def claim_command(self, worker_id, now, lease_seconds):
@@ -469,6 +479,21 @@ def test_worker_runs_daily_jobs_after_submitting_messages(context):
     assert core.submitted_ids == ["p-1"]
     assert core.daily_job_times == [NOW]
 
+
+def test_worker_heartbeats_the_current_account_display_name(context):
+    worker, gateway, _, _, core, _ = context
+    gateway.account_display_name = "饭饭（小狗青巫）."
+
+    worker.run_once()
+
+    assert core.heartbeats[-1] == (
+        "worker-a",
+        LoginState.READY,
+        True,
+        NOW,
+        "饭饭（小狗青巫）.",
+    )
+
 def test_worker_confirms_only_after_gateway_send_succeeds(context):
     worker, gateway, session, _, core, _ = context
     core.pending = [OutboundClaim(OUTBOUND_ID, "in-1", "reply", LEASE)]
@@ -497,6 +522,7 @@ def test_read_failure_resets_the_browser_session_and_marks_auth_required(context
         LoginState.AUTH_REQUIRED,
         False,
         NOW,
+        None,
     )
 
 
@@ -529,6 +555,7 @@ def test_worker_applies_persisted_pause_before_reading(context):
         LoginState.READY,
         False,
         NOW,
+        None,
     )
 
 
@@ -1054,7 +1081,7 @@ def test_authentication_loss_transitions_once_and_backs_off_bounded(context):
     assert core.submitted_ids == []
     assert all(
         state is LoginState.AUTH_REQUIRED
-        for _, state, _, _ in core.heartbeats
+        for _, state, _, _, _ in core.heartbeats
     )
     assert sleeps == [1, 2, 2, 2, 2, 2, 2, 2]
 

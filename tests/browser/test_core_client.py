@@ -95,7 +95,9 @@ def test_core_client_heartbeat_reports_actual_and_returns_desired_listener_state
     )
     now = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
 
-    desired = client.heartbeat("worker-a", LoginState.READY, True, now)
+    desired = client.heartbeat(
+        "worker-a", LoginState.READY, True, now, "饭饭（小狗青巫）."
+    )
 
     assert observed == {
         "path": "/internal/heartbeat",
@@ -103,6 +105,7 @@ def test_core_client_heartbeat_reports_actual_and_returns_desired_listener_state
             "worker_id": "worker-a",
             "login_state": "ready",
             "listening": True,
+            "account_display_name": "饭饭（小狗青巫）.",
             "recorded_at": now.isoformat(),
         },
     }

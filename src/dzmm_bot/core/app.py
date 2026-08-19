@@ -655,6 +655,7 @@ def create_app(
                 request.login_state,
                 request.recorded_at,
                 listening=request.listening,
+                account_display_name=request.account_display_name,
             )
         )
         return _heartbeat_response(record)
