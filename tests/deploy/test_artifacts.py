@@ -243,13 +243,17 @@ def test_deployment_runs_migrations_with_the_private_environment():
     assert 'rsync -a --delete --exclude .git --exclude .venv "$dzmm_release_dir/"' in deploy
     assert "chown -R dzmm:dzmm /opt/dzmm/current" in deploy
     assert "runuser -u dzmm -- /opt/dzmm/venv/bin/playwright install chromium" in deploy
+    worker_stop = deploy.index(
+        "systemctl stop dzmm-admin-web.service dzmm-browser-worker.service "
+        "dzmm-ai-worker.service dzmm-ai-memory-worker.service"
+    )
     core_restart = deploy.index("systemctl restart dzmm-core.service")
     core_health = deploy.index("curl -fsS http://127.0.0.1:18120/healthz")
     worker_restart = deploy.index(
         "systemctl restart dzmm-admin-web.service dzmm-browser-worker.service "
         "dzmm-ai-worker.service dzmm-ai-memory-worker.service"
     )
-    assert core_restart < core_health < worker_restart
+    assert worker_stop < core_restart < core_health < worker_restart
 
 
 def test_deployment_starts_a_separate_ai_memory_worker():

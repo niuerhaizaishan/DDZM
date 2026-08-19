@@ -21,6 +21,7 @@ install -m 644 /opt/dzmm/current/deploy/systemd/dzmm-*.service /etc/systemd/syst
 systemctl daemon-reload
 systemctl enable dzmm-ai-worker.service
 systemctl enable dzmm-ai-memory-worker.service
+systemctl stop dzmm-admin-web.service dzmm-browser-worker.service dzmm-ai-worker.service dzmm-ai-memory-worker.service
 systemctl restart dzmm-core.service
 dzmm_core_ready=false
 for _ in $(seq 1 30); do
