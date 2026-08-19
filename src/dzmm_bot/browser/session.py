@@ -17,6 +17,9 @@ from dzmm_bot.dzmm_source import DzmmMessageSource
 from .aikda_socket import AikdaSocketGateway
 
 
+_TRPC_REQUEST_TIMEOUT_MS = 5_000
+
+
 class ChatGateway(Protocol):
     def configure_group_rooms(
         self, targets: tuple[GroupChatTarget, ...]
@@ -175,7 +178,11 @@ class BrowserSession:
     def _request(self, procedure: str, payload: dict | None = None) -> dict:
         return self._active_page().evaluate(
             _TRPC_SCRIPT,
-            {"procedure": procedure, "payload": payload},
+            {
+                "procedure": procedure,
+                "payload": payload,
+                "timeoutMs": _TRPC_REQUEST_TIMEOUT_MS,
+            },
         )
 
     def _upload_image(
@@ -356,14 +363,21 @@ _TOKEN_SCRIPT = """async () => {
 }"""
 
 
-_TRPC_SCRIPT = """async ({ procedure, payload }) => {
+_TRPC_SCRIPT = """async ({ procedure, payload, timeoutMs }) => {
   const input = { json: payload ?? null };
-  const response = await fetch(
-    `/api/trpc/${procedure}?input=${encodeURIComponent(JSON.stringify(input))}`
-  );
-  const body = await response.json();
-  if (!response.ok) {
-    throw new Error(`Aikda ${procedure} request failed`);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(
+      `/api/trpc/${procedure}?input=${encodeURIComponent(JSON.stringify(input))}`,
+      { signal: controller.signal }
+    );
+    const body = await response.json();
+    if (!response.ok) {
+      throw new Error(`Aikda ${procedure} request failed`);
+    }
+    return body?.result?.data?.json ?? body?.json ?? body?.[0]?.result?.data?.json;
+  } finally {
+    clearTimeout(timeout);
   }
-  return body?.result?.data?.json ?? body?.json ?? body?.[0]?.result?.data?.json;
 }"""

@@ -1,8 +1,11 @@
+import json
 from pathlib import Path
+import subprocess
 
 import pytest
 
 from dzmm_bot.browser.session import BrowserSession
+from dzmm_bot.browser import session as session_module
 from dzmm_bot.runtime.contracts import LoginState
 
 
@@ -31,6 +34,34 @@ class FakePage:
 
     def press(self, key):
         self.pressed.append(key)
+
+
+class NodePage(FakePage):
+    def evaluate(self, script, argument):
+        program = f"""
+const request = eval({json.dumps(f"({script})")});
+const keepAlive = setInterval(() => {{}}, 1000);
+global.fetch = (_url, options) => new Promise((_resolve, reject) => {{
+  options?.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+}});
+request({json.dumps(argument)})
+  .then(() => {{ clearInterval(keepAlive); process.exit(0); }})
+  .catch((error) => {{
+    clearInterval(keepAlive);
+    console.error(error.message);
+    process.exit(2);
+  }});
+"""
+        result = subprocess.run(
+            ["node", "-e", program],
+            capture_output=True,
+            text=True,
+            timeout=1,
+            check=False,
+        )
+        if result.returncode:
+            raise RuntimeError(result.stderr.strip())
+        return None
 
 
 class FakeSocket:
@@ -255,6 +286,23 @@ def test_configured_session_uses_socket_gateway_instead_of_dom_chat_controls(tmp
     assert socket.calls[0][0] == "message:send"
     assert platform_id == socket.calls[0][1]["message"]["message_id"]
     assert page.filled == []
+
+
+def test_trpc_request_aborts_a_hung_platform_fetch(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        session_module, "_TRPC_REQUEST_TIMEOUT_MS", 10, raising=False
+    )
+    context = FakeContext("https://chat.example/chat?c=group-1")
+    context.pages = [NodePage(context.pages[0].url)]
+    session = BrowserSession(
+        tmp_path / "profile",
+        "https://chat.example/login",
+        chat_url="https://chat.example/chat?c=group-1",
+    )
+    session._context = context
+
+    with pytest.raises(RuntimeError, match="aborted"):
+        session._request("chatroom.getMessages", {"chatroomId": "group-1"})
 
 
 def test_configured_session_uploads_image_as_multipart_without_hex_encoding(tmp_path):
