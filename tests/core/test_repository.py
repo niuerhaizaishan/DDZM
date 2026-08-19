@@ -8787,6 +8787,29 @@ def test_worker_heartbeat_is_persisted(repository, now):
     assert second.recorded_at == now + timedelta(seconds=5)
 
 
+def test_worker_heartbeat_without_name_preserves_last_valid_name(repository, now):
+    repository.record_worker_heartbeat(
+        WorkerHeartbeat(
+            "worker-a",
+            LoginState.READY,
+            now,
+            account_display_name="饭饭（小狗青巫）.",
+        )
+    )
+
+    updated = repository.record_worker_heartbeat(
+        WorkerHeartbeat(
+            "worker-a",
+            LoginState.READY,
+            now + timedelta(seconds=5),
+            account_display_name=None,
+        )
+    )
+
+    assert updated.account_display_name == "饭饭（小狗青巫）."
+    assert repository.ai_mention_names() == ("饭饭（小狗青巫）.",)
+
+
 def test_resume_listener_command_persists_enabled_choice(repository, now):
     repository.record_worker_heartbeat(
         WorkerHeartbeat("worker-a", LoginState.READY, now, listening=False)

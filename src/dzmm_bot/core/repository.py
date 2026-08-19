@@ -17084,14 +17084,18 @@ class CoreRepository:
                     statement = sqlite_insert(WorkerInstanceRecord).values(**values)
                 else:
                     raise ValueError(f"unsupported database dialect: {dialect_name}")
+                update_values = {
+                    "login_state": statement.excluded.login_state,
+                    "listening": statement.excluded.listening,
+                    "recorded_at": statement.excluded.recorded_at,
+                }
+                if heartbeat.account_display_name is not None:
+                    update_values["account_display_name"] = (
+                        statement.excluded.account_display_name
+                    )
                 upsert = statement.on_conflict_do_update(
                     index_elements=[WorkerInstanceRecord.worker_id],
-                    set_={
-                        "login_state": statement.excluded.login_state,
-                        "listening": statement.excluded.listening,
-                        "account_display_name": statement.excluded.account_display_name,
-                        "recorded_at": statement.excluded.recorded_at,
-                    },
+                    set_=update_values,
                 ).returning(WorkerInstanceRecord.id)
                 record_id = session.scalar(upsert)
                 record = session.get(WorkerInstanceRecord, record_id)
