@@ -618,11 +618,14 @@ class BrowserWorker:
                 self._auth_backoff = 1
                 self._manual_auth_confirmed = True
             elif command.command == "cancel_auth":
-                self._desktop.stop()
-                self._gateway = None
-                self._login_state = LoginState.AUTH_REQUIRED
-                self._listening = True
-                self._manual_auth_confirmed = False
+                try:
+                    self._session.stop()
+                finally:
+                    self._gateway = None
+                    self._desktop.stop()
+                    self._login_state = LoginState.AUTH_REQUIRED
+                    self._listening = True
+                    self._manual_auth_confirmed = False
             elif command.command == "retract_test":
                 gateway = self._ensure_gateway()
                 platform_message_id = gateway.send("【撤回验证】这条消息会立即撤回。")

@@ -155,10 +155,13 @@ def test_stop_closes_the_browser_before_terminating_the_desktop(tmp_path):
     assert events == ["browser", "terminate"]
 
 
-def test_start_rejects_an_existing_desktop_pid_file(tmp_path):
+def test_start_rejects_an_existing_unhealthy_desktop_pid_file(tmp_path):
     factory = ProcessFactory()
     controller = make_controller(
-        tmp_path, factory, process_group_alive=lambda _pgid: True
+        tmp_path,
+        factory,
+        process_group_alive=lambda _pgid: True,
+        readiness_probe=lambda _pids: False,
     )
     pid_file = tmp_path / "runtime" / "auth-desktop.json"
     pid_file.parent.mkdir()
@@ -168,6 +171,25 @@ def test_start_rejects_an_existing_desktop_pid_file(tmp_path):
         controller.start()
 
     assert factory.calls == []
+
+
+def test_start_reuses_an_existing_ready_desktop(tmp_path):
+    factory = ProcessFactory()
+    controller = make_controller(
+        tmp_path,
+        factory,
+        process_alive=lambda _pid: True,
+        process_group_alive=lambda _pgid: True,
+        readiness_probe=lambda _pids: True,
+    )
+    pid_file = tmp_path / "runtime" / "auth-desktop.json"
+    pid_file.parent.mkdir()
+    pid_file.write_text(json.dumps({"pids": [10], "process_groups": [110]}))
+
+    controller.start()
+
+    assert factory.calls == []
+    assert pid_file.exists()
 
 
 def test_controller_exposes_one_asyncio_lock_for_lifecycle(tmp_path):

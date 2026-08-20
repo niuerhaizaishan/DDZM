@@ -1231,7 +1231,81 @@ def test_cancel_auth_closes_desktop_and_restores_the_persisted_browser(context):
     worker.run_once()
 
     assert (desktop.starts, desktop.stops) == (1, 1)
-    assert (session.starts, session.stops) == (1, 1)
+    assert (session.starts, session.stops) == (1, 2)
+    assert worker.login_state is LoginState.READY
+
+
+def test_cancel_auth_stops_the_browser_session_before_the_desktop():
+    events = []
+    gateway = FakeGateway()
+
+    class OrderedSession(FakeSession):
+        def stop(self):
+            events.append("session")
+            super().stop()
+
+    class OrderedDesktop(FakeDesktop):
+        def stop(self):
+            events.append("desktop")
+            super().stop()
+
+    session = OrderedSession(gateway)
+    desktop = OrderedDesktop()
+    core = FakeCore()
+    core.commands = [
+        WorkerCommand(COMMAND_ID, "start_auth", LEASE),
+        WorkerCommand(UUID(int=4), "cancel_auth", UUID(int=5)),
+    ]
+    worker = BrowserWorker(
+        worker_id="worker-a",
+        core=core,
+        session=session,
+        desktop=desktop,
+        clock=lambda: NOW,
+    )
+
+    worker.run_once()
+    events.clear()
+    worker.run_once()
+
+    assert events == ["session", "desktop"]
+
+
+def test_cancel_auth_attempts_desktop_cleanup_when_session_stop_fails():
+    gateway = FakeGateway()
+
+    class FailingSecondStopSession(FakeSession):
+        def stop(self):
+            super().stop()
+            if self.stops == 2:
+                raise RuntimeError("session stop failed")
+
+    session = FailingSecondStopSession(gateway)
+    desktop = FakeDesktop()
+    core = FakeCore()
+    core.commands = [
+        WorkerCommand(COMMAND_ID, "start_auth", LEASE),
+        WorkerCommand(UUID(int=4), "cancel_auth", UUID(int=5)),
+    ]
+    worker = BrowserWorker(
+        worker_id="worker-a",
+        core=core,
+        session=session,
+        desktop=desktop,
+        clock=lambda: NOW,
+    )
+
+    worker.run_once()
+    worker.run_once()
+
+    assert desktop.stops == 1
+    assert core.completions[-1] == (
+        UUID(int=4),
+        "worker-a",
+        UUID(int=5),
+        "failed",
+        NOW,
+    )
     assert worker.login_state is LoginState.READY
 
 

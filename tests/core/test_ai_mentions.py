@@ -23,3 +23,14 @@ def test_ai_at_trigger_strips_the_platform_bot_label():
         ai_mention_content("@总监事「Bot」 今天好吗", ("@总监事",))
         == "今天好吗"
     )
+
+
+def test_ai_trigger_strips_the_platform_display_name_suffix():
+    triggers = ("@饭饭", "/饭饭")
+
+    assert (
+        ai_mention_content("@饭饭（小狗青巫）总监给我炒俩菜", triggers)
+        == "总监给我炒俩菜"
+    )
+    assert ai_mention_content("/饭饭（小狗青巫）.抱抱～", triggers) == ".抱抱～"
+    assert ai_mention_content("/饭饭堂（小狗青巫）.抱抱～", triggers) is None

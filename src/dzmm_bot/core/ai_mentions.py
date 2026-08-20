@@ -38,6 +38,7 @@ def _strip_ai_mention(
                 len(value) == len(item)
                 or value[len(item)].isspace()
                 or value[len(item) :].startswith(BOT_PLATFORM_LABEL)
+                or _has_platform_display_name(value[len(item) :])
             )
         ),
         None,
@@ -47,4 +48,10 @@ def _strip_ai_mention(
     value = value[len(prefix) :]
     if value[: len(BOT_PLATFORM_LABEL)].casefold() == BOT_PLATFORM_LABEL.casefold():
         value = value[len(BOT_PLATFORM_LABEL) :]
+    if _has_platform_display_name(value):
+        value = value[value.index("）") + 1 :]
     return True, value.strip()
+
+
+def _has_platform_display_name(value: str) -> bool:
+    return value.startswith("（") and "）" in value
