@@ -8767,7 +8767,14 @@ def test_worker_command_completion_requires_owner_token_and_live_lease(
 
 
 def test_worker_heartbeat_is_persisted(repository, now):
-    heartbeat = WorkerHeartbeat("worker-a", LoginState.READY, now, listening=True)
+    heartbeat = WorkerHeartbeat(
+        "worker-a",
+        LoginState.READY,
+        now,
+        listening=True,
+        bot_delivery_state="captcha_required",
+        bot_delivery_error="captcha_required",
+    )
 
     first = repository.record_worker_heartbeat(heartbeat)
     repository.enqueue_worker_command("pause_listening")
@@ -8785,6 +8792,8 @@ def test_worker_heartbeat_is_persisted(repository, now):
     assert second.listening is False
     assert second.listening_desired is False
     assert second.recorded_at == now + timedelta(seconds=5)
+    assert second.bot_delivery_state == "unknown"
+    assert second.bot_delivery_error is None
 
 
 def test_worker_heartbeat_without_name_preserves_last_valid_name(repository, now):

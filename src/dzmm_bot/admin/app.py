@@ -48,6 +48,8 @@ _SAFE_STATUS_FIELDS = (
     "last_heartbeat",
     "listening",
     "listening_desired",
+    "bot_delivery_state",
+    "bot_delivery_error",
     "queue_counts",
 )
 _WORKER_COMMANDS = {
@@ -2014,7 +2016,7 @@ def create_app(
         identity: Annotated[AdminIdentity, Depends(authorize)],
         idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     ) -> JSONResponse:
-        _require_login_state(core, "auth_required")
+        _require_verification(core)
         return idempotent_response(
             identity,
             idempotency_key,
@@ -2122,6 +2124,17 @@ def _require_login_state(core: AdminCorePort, expected: str) -> None:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             f"login state must be {expected}",
+        )
+
+
+def _require_verification(core: AdminCorePort) -> None:
+    if core.login_state() == "auth_required":
+        return
+    status_payload = core.status()
+    if status_payload.get("bot_delivery_state") != "captcha_required":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "platform verification is not required",
         )
 
 

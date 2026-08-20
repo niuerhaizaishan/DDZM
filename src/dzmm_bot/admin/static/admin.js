@@ -4,6 +4,7 @@ let identity = JSON.parse(sessionStorage.getItem("dzmm-admin-identity") || "null
 let loginLease = null;
 let configurationVersion = null;
 let currentState = "unknown";
+let currentBotDeliveryState = "unknown";
 let currentListening = null;
 let currentListeningDesired = null;
 let consoleLoading = false;
@@ -1731,22 +1732,46 @@ async function loadGameView(view) {
 function updateControls(state) {
   const isRequired = state === "auth_required";
   const isProgress = state === "auth_in_progress";
+  const verificationRequired = isRequired || currentBotDeliveryState === "captcha_required";
   const hasLease = Boolean(loginLease);
-  document.querySelector("#start-login").disabled = !isRequired || hasLease;
+  document.querySelector("#start-login").disabled = !verificationRequired || hasLease;
   document.querySelector("#open-login-console").disabled = !isProgress || !ownsLoginLease();
   document.querySelector("#finish-login").disabled = !isProgress || !ownsLoginLease();
   document.querySelector("#cancel-login").disabled = !hasLease;
   document.querySelector("#restart-browser").disabled = isProgress;
-  document.querySelector("#step-required").classList.toggle("active", isRequired);
+  document.querySelector("#step-required").classList.toggle("active", verificationRequired && !isProgress);
   document.querySelector("#step-console").classList.toggle("active", isProgress);
-  document.querySelector("#step-finish").classList.toggle("active", state === "ready");
-  loginStep.textContent = isProgress ? "验证进行中" : isRequired ? "需要登录" : state === "ready" ? "已登录" : "等待开始";
+  document.querySelector("#step-finish").classList.toggle("active", state === "ready" && !verificationRequired);
+  loginStep.textContent = isProgress ? "验证进行中" : verificationRequired ? "需要验证" : state === "ready" ? "已登录" : "等待开始";
   const listenerUnknown = typeof currentListeningDesired !== "boolean";
   document.querySelector("#start-listening").disabled = listenerUnknown || currentListeningDesired;
   document.querySelector("#pause-listening").disabled = listenerUnknown || !currentListeningDesired;
   if (!isProgress || !ownsLoginLease()) {
     consolePanel.hidden = true;
     consoleFrame.removeAttribute("src");
+  }
+}
+
+function renderBotDeliveryStatus(status) {
+  currentBotDeliveryState = status.bot_delivery_state || "unknown";
+  const state = document.querySelector("#bot-delivery-state");
+  const help = document.querySelector("#bot-delivery-help");
+  if (currentBotDeliveryState === "ready") {
+    state.textContent = "正常";
+    state.dataset.state = "ready";
+    help.textContent = "长消息优先由 Bot 完整发送。";
+  } else if (currentBotDeliveryState === "captcha_required") {
+    state.textContent = "需要验证";
+    state.dataset.state = "auth_required";
+    help.textContent = "Bot 接口被验证码拦截，已降级为主账号分段发送。";
+  } else if (currentBotDeliveryState === "unconfigured") {
+    state.textContent = "未配置";
+    state.dataset.state = "unknown";
+    help.textContent = "未配置 Bot Token，长消息由主账号分段发送。";
+  } else {
+    state.textContent = "待检测";
+    state.dataset.state = "unknown";
+    help.textContent = "下一条长消息将自动检测 Bot 通道。";
   }
 }
 
@@ -1778,6 +1803,7 @@ function renderListenerStatus(status) {
 
 function renderStatus(status) {
   currentState = status.state || "unknown";
+  renderBotDeliveryStatus(status);
   stateElement.textContent = currentState.replaceAll("_", " ");
   stateElement.dataset.state = currentState;
   stateHelp.textContent = currentState === "auth_required" ? "登录已失效，请启动人工登录" : currentState === "auth_in_progress" ? "请在登录控制台完成验证" : currentState === "ready" ? "浏览器已就绪" : "等待 Worker 心跳";
@@ -1854,7 +1880,7 @@ async function waitForLoginDesktop() {
     await new Promise((resolve) => window.setTimeout(resolve, 500));
     await refresh();
     if (currentState === "auth_in_progress") return true;
-    if (currentState !== "auth_required") break;
+    if (currentState !== "auth_required" && currentBotDeliveryState !== "captcha_required") break;
   }
   setResult("登录桌面启动超时，请刷新状态后重试。", "error");
   return false;

@@ -160,6 +160,8 @@ class CorePort(Protocol):
         listening: bool,
         recorded_at: datetime,
         account_display_name: str | None = None,
+        bot_delivery_state: str = "unknown",
+        bot_delivery_error: str | None = None,
     ) -> bool: ...
 
     def claim_command(
@@ -482,11 +484,15 @@ class CoreClient:
         listening: bool,
         recorded_at: datetime,
         account_display_name: str | None = None,
+        bot_delivery_state: str = "unknown",
+        bot_delivery_error: str | None = None,
     ) -> bool:
         payload = {
             "worker_id": worker_id,
             "login_state": login_state.value,
             "listening": listening,
+            "bot_delivery_state": bot_delivery_state,
+            "bot_delivery_error": bot_delivery_error,
             "recorded_at": recorded_at.isoformat(),
         }
         if account_display_name is not None:

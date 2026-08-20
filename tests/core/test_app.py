@@ -2047,6 +2047,8 @@ def test_heartbeat_updates_login_state_and_health_age(app_context, headers):
             "worker_id": "worker-a",
             "login_state": "ready",
             "listening": False,
+            "bot_delivery_state": "captcha_required",
+            "bot_delivery_error": "captcha_required",
             "recorded_at": (NOW - timedelta(seconds=12)).isoformat(),
         },
     )
@@ -2065,6 +2067,8 @@ def test_heartbeat_updates_login_state_and_health_age(app_context, headers):
         "login_state": "ready",
         "listening": False,
         "listening_desired": True,
+        "bot_delivery_state": "captcha_required",
+        "bot_delivery_error": "captcha_required",
         "recorded_at": "2026-08-04T19:59:48+08:00",
     }
     assert login_state.json() == heartbeat.json()
@@ -2101,6 +2105,8 @@ def test_internal_status_returns_real_queue_counts_and_latest_heartbeat(
             "worker_id": "worker-a",
             "login_state": "auth_required",
             "listening": False,
+            "bot_delivery_state": "captcha_required",
+            "bot_delivery_error": "captcha_required",
             "recorded_at": NOW.isoformat(),
         },
     )
@@ -2113,6 +2119,8 @@ def test_internal_status_returns_real_queue_counts_and_latest_heartbeat(
         "state": "auth_required",
         "listening": False,
         "listening_desired": False,
+        "bot_delivery_state": "captcha_required",
+        "bot_delivery_error": "captcha_required",
         "last_heartbeat": "2026-08-04T20:00:00+08:00",
         "queue_counts": {
             "inbound_accepted": 1,

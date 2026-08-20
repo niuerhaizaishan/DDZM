@@ -95,7 +95,13 @@ def test_core_client_heartbeat_reports_actual_and_returns_desired_listener_state
     now = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
 
     desired = client.heartbeat(
-        "worker-a", LoginState.READY, True, now, "饭饭（小狗青巫）."
+        "worker-a",
+        LoginState.READY,
+        True,
+        now,
+        "饭饭（小狗青巫）.",
+        "captcha_required",
+        "captcha_required",
     )
 
     assert observed == {
@@ -105,6 +111,8 @@ def test_core_client_heartbeat_reports_actual_and_returns_desired_listener_state
             "login_state": "ready",
             "listening": True,
             "account_display_name": "饭饭（小狗青巫）.",
+            "bot_delivery_state": "captcha_required",
+            "bot_delivery_error": "captcha_required",
             "recorded_at": now.isoformat(),
         },
     }

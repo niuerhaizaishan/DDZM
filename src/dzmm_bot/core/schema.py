@@ -1802,6 +1802,10 @@ class WorkerInstanceRecord(Base):
         Boolean, nullable=False, default=True, server_default=true()
     )
     account_display_name: Mapped[str | None] = mapped_column(String(255))
+    bot_delivery_state: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="unknown", server_default="unknown"
+    )
+    bot_delivery_error: Mapped[str | None] = mapped_column(String(255))
     recorded_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
     version: Mapped[str | None] = mapped_column(String(64))
     browser_state: Mapped[str | None] = mapped_column(String(64))

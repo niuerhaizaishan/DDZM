@@ -194,6 +194,7 @@ class FakeCore:
     failed: list[tuple] = field(default_factory=list)
     recalls_confirmed: list[tuple] = field(default_factory=list)
     heartbeats: list[tuple] = field(default_factory=list)
+    bot_delivery_heartbeats: list[tuple] = field(default_factory=list)
     completions: list[tuple] = field(default_factory=list)
     audits: list[tuple] = field(default_factory=list)
     daily_job_times: list[datetime] = field(default_factory=list)
@@ -268,9 +269,14 @@ class FakeCore:
         listening,
         recorded_at,
         account_display_name=None,
+        bot_delivery_state="unknown",
+        bot_delivery_error=None,
     ):
         self.heartbeats.append(
             (worker_id, login_state, listening, recorded_at, account_display_name)
+        )
+        self.bot_delivery_heartbeats.append(
+            (bot_delivery_state, bot_delivery_error)
         )
         return self.listening_desired
 
@@ -929,8 +935,13 @@ def test_worker_falls_back_to_browser_chunks_when_bot_requires_captcha(context):
     worker.run_once()
 
     assert core.confirmed_event.wait(timeout=1)
+    worker.run_once()
     assert bot_sender.sent_to == [("group-2", text)]
     assert gateway.sent_to == [("group-2", "字" * 1000), ("group-2", "字")]
+    assert core.bot_delivery_heartbeats[-1] == (
+        "captcha_required",
+        "captcha_required",
+    )
     assert core.failed == []
     assert core.released == []
     assert session.stops == 0
@@ -1141,6 +1152,36 @@ def test_lifecycle_commands_touch_only_the_expected_processes(
     assert (desktop.starts, desktop.stops) == (desktop_starts, desktop_stops)
 
 
+def test_bot_verification_marks_auth_required_before_starting_desktop(context):
+    _, _, session, _, core, _ = context
+
+    class StateCheckingDesktop(FakeDesktop):
+        worker = None
+
+        def start(self):
+            assert self.worker.login_state is LoginState.AUTH_REQUIRED
+            super().start()
+
+    desktop = StateCheckingDesktop()
+    worker = BrowserWorker(
+        worker_id="worker-a",
+        core=core,
+        session=session,
+        desktop=desktop,
+        clock=lambda: NOW,
+        bot_sender=FakeBotSender(),
+    )
+    desktop.worker = worker
+    core.commands = [WorkerCommand(COMMAND_ID, "start_auth", LEASE)]
+
+    worker.run_once()
+
+    assert worker.login_state is LoginState.AUTH_IN_PROGRESS
+    assert core.completions == [
+        (COMMAND_ID, "worker-a", LEASE, "completed", NOW)
+    ]
+
+
 @pytest.mark.parametrize("command", ["restart_browser", "finish_auth"])
 def test_lifecycle_commands_restore_the_realtime_message_handler(context, command):
     worker, gateway, _, _, core, _ = context
@@ -1149,6 +1190,34 @@ def test_lifecycle_commands_restore_the_realtime_message_handler(context, comman
     worker.run_once()
 
     assert gateway.message_handler == worker._queue_inbound
+
+
+def test_finishing_verification_rechecks_bot_delivery_on_the_next_long_message(context):
+    _, _, session, desktop, core, _ = context
+    bot_sender = FakeBotSender(send_error=DzmmBotSendError("captcha_required"))
+    worker = BrowserWorker(
+        worker_id="worker-a",
+        core=core,
+        session=session,
+        desktop=desktop,
+        clock=lambda: NOW,
+        bot_sender=bot_sender,
+    )
+    core.pending = [OutboundClaim(
+        OUTBOUND_ID,
+        "in-1",
+        "字" * 1001,
+        LEASE,
+        group_chat_id=GROUP_ID,
+        destination_chatroom_id="group-2",
+    )]
+    worker.run_once()
+    assert core.confirmed_event.wait(timeout=1)
+    core.commands = [WorkerCommand(COMMAND_ID, "finish_auth", LEASE)]
+
+    worker.run_once()
+
+    assert core.bot_delivery_heartbeats[-1] == ("unknown", None)
 
 
 def test_cancel_auth_closes_desktop_and_restores_the_persisted_browser(context):

@@ -658,6 +658,8 @@ def create_app(
                 request.recorded_at,
                 listening=request.listening,
                 account_display_name=request.account_display_name,
+                bot_delivery_state=request.bot_delivery_state,
+                bot_delivery_error=request.bot_delivery_error,
             )
         )
         return _heartbeat_response(record)
@@ -679,6 +681,10 @@ def create_app(
             last_heartbeat=None if record is None else record.recorded_at,
             listening=None if record is None else record.listening,
             listening_desired=None if record is None else record.listening_desired,
+            bot_delivery_state=(
+                "unknown" if record is None else record.bot_delivery_state
+            ),
+            bot_delivery_error=None if record is None else record.bot_delivery_error,
             queue_counts=QueueCountsResponse(**repository.queue_counts()),
         )
 
@@ -2462,6 +2468,8 @@ def _heartbeat_response(record: WorkerInstanceRecord) -> HeartbeatResponse:
         recorded_at=record.recorded_at,
         listening=record.listening,
         listening_desired=record.listening_desired,
+        bot_delivery_state=record.bot_delivery_state,
+        bot_delivery_error=record.bot_delivery_error,
     )
 
 

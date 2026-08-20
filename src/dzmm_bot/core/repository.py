@@ -17085,6 +17085,8 @@ class CoreRepository:
                     listening=heartbeat.listening,
                     listening_desired=True,
                     account_display_name=heartbeat.account_display_name,
+                    bot_delivery_state=heartbeat.bot_delivery_state,
+                    bot_delivery_error=heartbeat.bot_delivery_error,
                     recorded_at=heartbeat.recorded_at,
                 )
                 dialect_name = session.get_bind().dialect.name
@@ -17097,6 +17099,8 @@ class CoreRepository:
                 update_values = {
                     "login_state": statement.excluded.login_state,
                     "listening": statement.excluded.listening,
+                    "bot_delivery_state": statement.excluded.bot_delivery_state,
+                    "bot_delivery_error": statement.excluded.bot_delivery_error,
                     "recorded_at": statement.excluded.recorded_at,
                 }
                 if heartbeat.account_display_name is not None:

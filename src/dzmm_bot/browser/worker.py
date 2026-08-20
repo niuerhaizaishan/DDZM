@@ -69,6 +69,9 @@ class BrowserWorker:
         self._sleep = sleep
         self._lease_seconds = lease_seconds
         self._bot_sender = bot_sender
+        self._bot_delivery_status = (
+            ("unknown", None) if bot_sender is not None else ("unconfigured", None)
+        )
         self._gateway: ChatGateway | None = None
         self._listening = True
         self._login_state = LoginState.READY
@@ -476,10 +479,17 @@ class BrowserWorker:
             and requires_bot_group_sender(outbound.text)
         ):
             try:
-                return self._bot_sender.send_to(
+                message_id = self._bot_sender.send_to(
                     outbound.destination_chatroom_id, outbound.text
                 )
+                self._bot_delivery_status = ("ready", None)
+                return message_id
             except DzmmBotSendError as error:
+                if str(error).strip().lower() == "captcha_required":
+                    self._bot_delivery_status = (
+                        "captcha_required",
+                        "captcha_required",
+                    )
                 _LOGGER.warning(
                     "Bot API group send failed for %s (%s); falling back to browser sender",
                     outbound.destination_chatroom_id,
@@ -558,6 +568,8 @@ class BrowserWorker:
                 if self._gateway is None
                 else getattr(self._gateway, "account_display_name", None)
             ),
+            bot_delivery_state=self._bot_delivery_status[0],
+            bot_delivery_error=self._bot_delivery_status[1],
         )
         self._listening = desired and self._login_state is LoginState.READY
 
@@ -588,6 +600,7 @@ class BrowserWorker:
             elif command.command == "start_auth":
                 self._session.stop()
                 self._gateway = None
+                self._login_state = LoginState.AUTH_REQUIRED
                 self._desktop.start()
                 self._login_state = LoginState.AUTH_IN_PROGRESS
                 self._listening = False
@@ -596,6 +609,11 @@ class BrowserWorker:
                 self._gateway = self._configure_gateway(self._session.attach_existing())
                 self._login_state = LoginState.READY
                 self._listening = True
+                self._bot_delivery_status = (
+                    ("unknown", None)
+                    if self._bot_sender is not None
+                    else ("unconfigured", None)
+                )
                 self._auth_loss_reported = False
                 self._auth_backoff = 1
                 self._manual_auth_confirmed = True

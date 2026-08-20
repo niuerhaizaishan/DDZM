@@ -87,3 +87,5 @@ class WorkerHeartbeat:
     recorded_at: datetime
     listening: bool = True
     account_display_name: str | None = None
+    bot_delivery_state: str = "unknown"
+    bot_delivery_error: str | None = None

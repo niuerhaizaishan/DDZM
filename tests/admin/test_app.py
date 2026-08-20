@@ -35,6 +35,8 @@ def assign_super_login_lease(core):
 @dataclass
 class FakeCore:
     login_state_value: str = "ready"
+    bot_delivery_state: str = "unknown"
+    bot_delivery_error: str | None = None
     commands: list[str] = field(default_factory=list)
     command_definitions: list[dict] = field(
         default_factory=lambda: [
@@ -272,6 +274,8 @@ class FakeCore:
             "last_heartbeat": "2026-08-04T12:00:00Z",
             "listening": True,
             "listening_desired": True,
+            "bot_delivery_state": self.bot_delivery_state,
+            "bot_delivery_error": self.bot_delivery_error,
             "queue_counts": {"inbound": 2, "outbound": 1},
             "raw_cookies": "must-not-leak",
             "profile_path": "/secret/profile",
@@ -1962,6 +1966,8 @@ def test_status_returns_only_safe_operational_fields(client, headers):
         "last_heartbeat": "2026-08-04T12:00:00Z",
         "listening": True,
         "listening_desired": True,
+        "bot_delivery_state": "unknown",
+        "bot_delivery_error": None,
         "queue_counts": {"inbound": 2, "outbound": 1},
     }
     assert "cookie" not in response.text.lower()
@@ -2114,6 +2120,26 @@ def test_login_start_creates_only_durable_command_when_auth_required(
 
     assert response.status_code == 202
     assert core.commands == ["start_auth"]
+
+
+def test_login_start_allows_shared_verification_when_bot_requires_captcha(
+    client, headers, core
+):
+    core.login_state_value = "ready"
+    core.bot_delivery_state = "captcha_required"
+    core.bot_delivery_error = "captcha_required"
+
+    response = client.post("/api/login/start", headers=headers)
+
+    assert response.status_code == 202
+    assert core.commands == ["start_auth"]
+
+
+def test_admin_page_shows_bot_delivery_status(client):
+    page = client.get("/")
+
+    assert 'id="bot-delivery-state"' in page.text
+    assert 'id="bot-delivery-help"' in page.text
 
 
 def test_login_start_rejects_other_states(client, headers, core):

@@ -54,7 +54,7 @@ select:hover { border-color: #bdb5ff; }
 .page-heading { display: flex; gap: 28px; align-items: end; justify-content: space-between; margin-bottom: 24px; }
 .page-context, .side-panel > p:not(.eyebrow), .muted { color: var(--muted); }
 .page-context { max-width: 660px; margin-bottom: 0; }
-.status-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 20px; }
+.status-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 20px; }
 .dashboard-layout { display: grid; grid-template-columns: 224px minmax(0, 1fr); gap: 24px; align-items: start; }
 .side-nav-shell { position: sticky; top: 88px; display: grid; gap: 14px; }
 .side-nav { display: grid; gap: 18px; padding: 14px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 8px 24px rgba(25,36,61,.035); }

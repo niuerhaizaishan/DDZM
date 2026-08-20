@@ -201,6 +201,10 @@ class HeartbeatRequest(ApiModel):
     recorded_at: AwareDatetime
     listening: bool = True
     account_display_name: str | None = Field(default=None, min_length=1, max_length=255)
+    bot_delivery_state: Literal[
+        "unconfigured", "unknown", "ready", "captcha_required"
+    ] = "unknown"
+    bot_delivery_error: str | None = Field(default=None, max_length=255)
 
 
 class HeartbeatResponse(ApiModel):
@@ -209,6 +213,8 @@ class HeartbeatResponse(ApiModel):
     recorded_at: datetime
     listening: bool
     listening_desired: bool
+    bot_delivery_state: str
+    bot_delivery_error: str | None
 
 
 class HealthResponse(ApiModel):
@@ -227,6 +233,8 @@ class AdminStatusResponse(ApiModel):
     last_heartbeat: datetime | None
     listening: bool | None
     listening_desired: bool | None
+    bot_delivery_state: str
+    bot_delivery_error: str | None
     queue_counts: QueueCountsResponse
 
 
