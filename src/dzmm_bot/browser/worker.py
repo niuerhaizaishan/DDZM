@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 import logging
-from threading import Lock
+from threading import Event, Lock
 from time import monotonic as default_monotonic, sleep as default_sleep
 from typing import Protocol
 from uuid import uuid5
@@ -95,6 +95,7 @@ class BrowserWorker:
         self._group_connected_at: dict[str, datetime] = {}
         self._group_last_inbound_at: dict[str, datetime] = {}
         self._group_last_outbound_at: dict[str, datetime] = {}
+        self._gateway_reconnect_requested = Event()
 
     @property
     def login_state(self) -> LoginState:
@@ -107,6 +108,7 @@ class BrowserWorker:
     def run_once(self) -> None:
         now = self._clock()
         self._sync_group_targets(now)
+        self._reconnect_gateway_if_requested()
         command = self._core.claim_command(
             self._worker_id, now, self._lease_seconds
         )
@@ -278,7 +280,12 @@ class BrowserWorker:
             if not future.done():
                 continue
             del self._outbound_futures[delivery_key]
-            future.result()
+            try:
+                future.result()
+            except Exception:
+                _LOGGER.exception(
+                    "outbound delivery task failed: %s", delivery_key
+                )
         while len(self._outbound_futures) < self._outbound_concurrency:
             outbound = self._core.claim_outbound(
                 self._worker_id,
@@ -319,7 +326,7 @@ class BrowserWorker:
             platform_sent_id = self._send_outbound(gateway, outbound)
         except SocketTimeoutError:
             _LOGGER.warning("outbound acknowledgement timed out: %s", outbound.id)
-            gateway.close()
+            self._gateway_reconnect_requested.set()
             self._core.release_outbound(
                 outbound.id,
                 self._worker_id,
@@ -358,7 +365,7 @@ class BrowserWorker:
                 )
                 return False
             _LOGGER.exception("outbound send failed: %s", outbound.id)
-            gateway.close()
+            self._gateway_reconnect_requested.set()
             self._core.release_outbound(
                 outbound.id,
                 self._worker_id,
@@ -545,6 +552,17 @@ class BrowserWorker:
             return
         except Exception:
             _LOGGER.exception("message recovery maintenance failed")
+
+    def _reconnect_gateway_if_requested(self) -> None:
+        if not self._gateway_reconnect_requested.is_set():
+            return
+        try:
+            if self._gateway is not None:
+                self._gateway.close()
+        except Exception:
+            _LOGGER.exception("socket reconnect teardown failed")
+        finally:
+            self._gateway_reconnect_requested.clear()
 
     def _ensure_gateway(self) -> ChatGateway:
         if self._gateway is None:

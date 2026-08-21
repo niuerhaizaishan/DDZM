@@ -8,7 +8,11 @@ from zoneinfo import ZoneInfo
 import pytest
 from socketio.exceptions import TimeoutError as SocketTimeoutError
 
-from dzmm_bot.browser.aikda_socket import AikdaSocketGateway, _socket_client
+from dzmm_bot.browser.aikda_socket import (
+    AikdaSocketGateway,
+    AikdaTransportError,
+    _socket_client,
+)
 from dzmm_bot.runtime.contracts import (
     GroupChatTarget,
     InboundMessage,
@@ -133,6 +137,52 @@ class ConcurrentEmitSocket:
         Thread(target=acknowledge).start()
 
 
+class DisconnectCallbackSocket:
+    def __init__(self):
+        self.connected = True
+        self.handlers = {}
+        self.callback_completed_during_disconnect = False
+
+    def on(self, event, handler):
+        self.handlers[event] = handler
+
+    def connect(self, _origin, **_kwargs):
+        self.connected = True
+
+    def disconnect(self):
+        entered = Event()
+        completed = Event()
+
+        def notify():
+            entered.set()
+            self.handlers["disconnect"]()
+            completed.set()
+
+        callback_thread = Thread(target=notify)
+        callback_thread.start()
+        assert entered.wait(timeout=1)
+        self.callback_completed_during_disconnect = completed.wait(timeout=1)
+        self.connected = False
+        callback_thread.join(timeout=1)
+
+
+class ImmediateJoinTimeoutEvent:
+    def __init__(self):
+        self._set = False
+
+    def clear(self):
+        self._set = False
+
+    def set(self):
+        self._set = True
+
+    def is_set(self):
+        return self._set
+
+    def wait(self, timeout=None):
+        return False
+
+
 def test_concurrent_socket_sends_serialize_emit_but_overlap_ack_waits():
     socket = ConcurrentEmitSocket()
     gateway = AikdaSocketGateway(
@@ -189,6 +239,44 @@ def test_concurrent_socket_sends_to_the_same_room_wait_for_the_previous_ack():
         thread.join()
 
     assert socket.max_pending_acknowledgements == 1
+
+
+def test_close_does_not_hold_state_lock_while_waiting_for_disconnect_callback():
+    """Fails if close and the Socket disconnect callback deadlock on state_lock."""
+    socket = DisconnectCallbackSocket()
+    gateway = AikdaSocketGateway(
+        TARGET_URL,
+        token_provider=lambda: "token",
+        request=FakeRequest(),
+        socket_factory=lambda: socket,
+        clock=lambda: NOW,
+    )
+    gateway._socket = socket
+    socket.on("disconnect", gateway._on_disconnect)
+
+    gateway.close()
+
+    assert socket.callback_completed_during_disconnect is True
+    assert gateway._socket is None
+
+
+def test_join_timeout_disconnects_after_releasing_state_lock():
+    """Fails if a reconnect timeout waits on its callback while holding state_lock."""
+    socket = DisconnectCallbackSocket()
+    gateway = AikdaSocketGateway(
+        TARGET_URL,
+        token_provider=lambda: "token",
+        request=FakeRequest(),
+        socket_factory=lambda: socket,
+        clock=lambda: NOW,
+    )
+    gateway._joined = ImmediateJoinTimeoutEvent()
+
+    with pytest.raises(AikdaTransportError, match="socket join timed out"):
+        gateway.read_new()
+
+    assert socket.callback_completed_during_disconnect is True
+    assert gateway._socket is None
 
 
 def test_background_send_does_not_reconnect_through_owner_thread_dependencies():

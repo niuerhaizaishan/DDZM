@@ -9880,7 +9880,11 @@ class CoreRepository:
             self.enqueue_system_outbound(
                 self._undercover_automatic_message(
                     "/谁是卧底", "delivery_failed", now
-                )
+                ),
+                group_chat_id=session_record.group_chat_id,
+                destination_chatroom_id=self.group_chat_destination(
+                    session_record.group_chat_id
+                ),
             )
             return UndercoverGameResult(
                 "delivery_failed", session_id=session_record.id, game_id=game.id
@@ -9912,7 +9916,11 @@ class CoreRepository:
         self.enqueue_system_outbound(
             "【谁是卧底】所有词语已私聊发放，请按座位号依次描述。\n"
             f"{seats}\n"
-            "描述结束后，任意存活玩家发送 /开始投票 或 /投票 序号 开启投票。"
+            "描述结束后，任意存活玩家发送 /开始投票 或 /投票 序号 开启投票。",
+            group_chat_id=session_record.group_chat_id,
+            destination_chatroom_id=self.group_chat_destination(
+                session_record.group_chat_id
+            ),
         )
         return self._undercover_game_result(session, game, "speaking")
 
@@ -16759,9 +16767,13 @@ class CoreRepository:
                             UndercoverSessionRecord, game.session_id, with_for_update=True
                         )
                         if session_record is not None and game.state == "dealing":
-                            self._record_undercover_card_delivery(
-                                session, session_record, game, player, True, now
-                            )
+                            active_token = self._active_session.set(session)
+                            try:
+                                self._record_undercover_card_delivery(
+                                    session, session_record, game, player, True, now
+                                )
+                            finally:
+                                self._active_session.reset(active_token)
             elif record.delivery_kind == "texas_holdem_card":
                 player = session.scalar(
                     select(TexasHoldemPlayerRecord)
@@ -16814,9 +16826,13 @@ class CoreRepository:
                             UndercoverSessionRecord, game.session_id, with_for_update=True
                         )
                         if session_record is not None and game.state == "dealing":
-                            self._record_undercover_card_delivery(
-                                session, session_record, game, player, False, now
-                            )
+                            active_token = self._active_session.set(session)
+                            try:
+                                self._record_undercover_card_delivery(
+                                    session, session_record, game, player, False, now
+                                )
+                            finally:
+                                self._active_session.reset(active_token)
             elif record.delivery_kind == "texas_holdem_card":
                 player = session.scalar(
                     select(TexasHoldemPlayerRecord)

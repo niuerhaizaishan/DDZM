@@ -336,9 +336,14 @@ class AikdaSocketGateway:
 
     def close(self) -> None:
         with self._state_lock:
-            if self._socket is not None:
-                self._socket.disconnect()
+            socket = self._socket
+            self._socket = None
             self._authenticated = False
+            self._joined.clear()
+            self._joined_group_chatroom_ids.clear()
+            self._joined_direct_chatroom_ids.clear()
+        if socket is not None:
+            socket.disconnect()
 
     def _call(self, event: str, payload: dict[str, Any], *, timeout: float):
         if not hasattr(self._socket, "emit"):
@@ -361,8 +366,15 @@ class AikdaSocketGateway:
         return None
 
     def _ensure_connected(self) -> None:
-        with self._state_lock:
-            self._ensure_connected_locked()
+        try:
+            with self._state_lock:
+                self._ensure_connected_locked()
+        except AikdaTransportError:
+            try:
+                self.close()
+            except Exception:
+                _LOGGER.exception("socket cleanup after connection failure failed")
+            raise
 
     def _ensure_connected_locked(self) -> None:
         if self._socket is not None and self._socket.connected and self._joined.is_set():
@@ -412,7 +424,6 @@ class AikdaSocketGateway:
         except Exception as error:
             raise AikdaTransportError(str(error) or type(error).__name__) from error
         if not self._joined.wait(timeout=10):
-            self._socket.disconnect()
             raise AikdaTransportError("socket join timed out")
         if self._implicit_group_chatroom_id in self._group_chatroom_ids:
             self._joined_group_chatroom_ids.add(self._implicit_group_chatroom_id)

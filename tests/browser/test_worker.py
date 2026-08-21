@@ -55,6 +55,7 @@ class FakeGateway:
     maintenance_release: Event | None = None
     configured_groups: tuple[GroupChatTarget, ...] = ()
     close_count: int = 0
+    close_error: Exception | None = None
 
     def configure_group_rooms(self, targets):
         self.configured_groups = targets
@@ -135,6 +136,8 @@ class FakeGateway:
 
     def close(self):
         self.close_count += 1
+        if self.close_error is not None:
+            raise self.close_error
 
 @dataclass
 class FakeSession:
@@ -215,6 +218,7 @@ class FakeCore:
     upload_completion_accepted: bool = True
     group_targets: tuple[GroupChatTarget, ...] = ()
     group_runtime_updates: list[tuple] = field(default_factory=list)
+    confirm_error: Exception | None = None
 
     def group_chat_targets(self):
         return self.group_targets
@@ -243,6 +247,8 @@ class FakeCore:
         return None
 
     def confirm_sent(self, message_id, worker_id, lease_token, platform_sent_id, now):
+        if self.confirm_error is not None:
+            raise self.confirm_error
         self.confirmed.append(
             (message_id, worker_id, lease_token, platform_sent_id, now)
         )
@@ -752,6 +758,56 @@ def test_worker_retries_socket_timeout_with_the_same_platform_message_id(context
 
     assert core.confirmed_event.wait(timeout=1)
     assert gateway.sent_message_ids == [str(OUTBOUND_ID), str(OUTBOUND_ID)]
+
+
+def test_worker_reconnects_socket_on_main_loop_after_outbound_timeout(context):
+    """Fails if a sender thread closes the shared socket itself."""
+    worker, gateway, _, _, core, _ = context
+    core.pending = [OutboundClaim(OUTBOUND_ID, "in-1", "reply", LEASE)]
+    gateway.send_error = SocketTimeoutError()
+
+    worker.run_once()
+    assert core.released_event.wait(timeout=1)
+
+    assert gateway.close_count == 0
+
+    gateway.send_error = None
+    worker.run_once()
+
+    assert gateway.close_count == 1
+    assert len(core.heartbeats) == 2
+
+
+def test_worker_contains_completed_outbound_confirmation_failure(context):
+    """Fails if a completed sender Future can terminate the Worker main loop."""
+    worker, _, _, _, core, _ = context
+    core.pending = [OutboundClaim(OUTBOUND_ID, "in-1", "reply", LEASE)]
+    core.confirm_error = RuntimeError("core confirmation failed")
+
+    worker.run_once()
+    future = next(iter(worker._outbound_futures.values()))
+    with pytest.raises(RuntimeError, match="core confirmation failed"):
+        future.result(timeout=1)
+
+    worker.run_once()
+
+    assert len(core.heartbeats) == 2
+
+
+def test_worker_contains_main_thread_socket_close_failure(context):
+    """Fails if a reconnect teardown exception terminates the Worker loop."""
+    worker, gateway, _, _, core, _ = context
+    core.pending = [OutboundClaim(OUTBOUND_ID, "in-1", "reply", LEASE)]
+    gateway.send_error = SocketTimeoutError()
+
+    worker.run_once()
+    assert core.released_event.wait(timeout=1)
+    gateway.close_error = RuntimeError("disconnect failed")
+
+    worker.run_once()
+
+    assert gateway.close_count == 1
+    assert len(core.heartbeats) == 2
 
 
 def test_worker_drains_at_most_twenty_outbounds_in_order(context):

@@ -5987,6 +5987,126 @@ def test_undercover_cards_are_direct_and_group_opening_waits_for_delivery(
         assert f"{player.seat_number}号 {player.display_name}" in opening.text
 
 
+def test_undercover_card_confirmation_targets_the_session_group(
+    repository, session_factory, now
+):
+    """Fails if the final private-card confirmation enqueues an unscoped group reply."""
+    group = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=undercover-group", now
+    )
+    platform_ids = _prepare_undercover_players(repository, session_factory, now)
+    repository.start_undercover_signup(platform_ids[0], 4, now, group.id)
+    for platform_id in platform_ids[1:]:
+        result = repository.join_undercover(platform_id, now, group.id)
+
+    for index in range(4):
+        claimed = repository.claim_outbound(f"worker-{index}", now, 30)
+        assert claimed is not None
+        assert repository.confirm_sent(
+            claimed.id,
+            f"worker-{index}",
+            claimed.lease_token,
+            f"sent-{index}",
+            now,
+        )
+
+    opening = repository.claim_outbound("worker-group", now, 30)
+
+    assert opening is not None
+    assert opening.delivery_kind == "group"
+    assert opening.group_chat_id == group.id
+    assert opening.destination_chatroom_id == group.chatroom_id
+
+
+def test_undercover_card_failure_notice_targets_the_session_group(
+    repository, session_factory, now
+):
+    """Fails if a failed private-card delivery enqueues an unscoped group reply."""
+    group = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=undercover-group", now
+    )
+    platform_ids = _prepare_undercover_players(repository, session_factory, now)
+    repository.start_undercover_signup(platform_ids[0], 4, now, group.id)
+    for platform_id in platform_ids[1:]:
+        repository.join_undercover(platform_id, now, group.id)
+    claimed = repository.claim_outbound("worker-card", now, 30)
+    assert claimed is not None
+
+    assert repository.mark_outbound_failed(
+        claimed.id, "worker-card", claimed.lease_token, now
+    )
+    notice = repository.claim_outbound("worker-group", now, 30)
+
+    assert notice is not None
+    assert notice.delivery_kind == "group"
+    assert notice.group_chat_id == group.id
+    assert notice.destination_chatroom_id == group.chatroom_id
+
+
+@pytest.mark.parametrize("delivery_succeeded", [True, False])
+def test_undercover_card_notice_rolls_back_with_delivery_state(
+    repository, session_factory, now, monkeypatch, delivery_succeeded
+):
+    """Fails if a card notice commits outside the delivery-state transaction."""
+    group = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=undercover-group", now
+    )
+    platform_ids = _prepare_undercover_players(repository, session_factory, now)
+    repository.start_undercover_signup(platform_ids[0], 4, now, group.id)
+    for platform_id in platform_ids[1:]:
+        repository.join_undercover(platform_id, now, group.id)
+
+    if delivery_succeeded:
+        for index in range(3):
+            card = repository.claim_outbound(f"worker-{index}", now, 30)
+            assert card is not None
+            assert repository.confirm_sent(
+                card.id,
+                f"worker-{index}",
+                card.lease_token,
+                f"sent-{index}",
+                now,
+            )
+    claimed = repository.claim_outbound("worker-final", now, 30)
+    assert claimed is not None
+    original = repository._record_undercover_card_delivery
+
+    def fail_after_notice(*args, **kwargs):
+        original(*args, **kwargs)
+        raise RuntimeError("force outer rollback")
+
+    monkeypatch.setattr(
+        repository, "_record_undercover_card_delivery", fail_after_notice
+    )
+
+    with pytest.raises(RuntimeError, match="force outer rollback"):
+        if delivery_succeeded:
+            repository.confirm_sent(
+                claimed.id,
+                "worker-final",
+                claimed.lease_token,
+                "sent-final",
+                now,
+            )
+        else:
+            repository.mark_outbound_failed(
+                claimed.id, "worker-final", claimed.lease_token, now
+            )
+
+    with session_factory() as session:
+        card_status = session.get(OutboundRecord, claimed.id).status
+        public_notices = list(
+            session.scalars(
+                select(OutboundRecord).where(
+                    OutboundRecord.delivery_kind == "group"
+                )
+            )
+        )
+
+    assert card_status == "leased"
+    assert public_notices == []
+
+
 def test_undercover_first_vote_starts_voting_after_description(repository, session_factory, now):
     from dzmm_bot.core.schema import UndercoverGameRecord
 
