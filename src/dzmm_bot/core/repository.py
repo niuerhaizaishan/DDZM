@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
+import logging
 from random import SystemRandom
 import re
 from secrets import choice, randbelow
@@ -50,6 +51,8 @@ from .ai_knowledge import (
 from .ai_mentions import normalize_ai_mention
 from .dark_market import (
     DarkMarketListingView,
+    calculate_fee,
+    minimum_next_bid,
     normalize_listing_field,
     render_listing_detail,
 )
@@ -193,6 +196,9 @@ from .schema import (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 def format_employee_number(number: int) -> str:
     return f"#{number:04d}"
 
@@ -328,6 +334,11 @@ _BALANCE_SOURCE_LABELS = {
     "texas_holdem_refund": "德州扑克退款",
     "texas_holdem_settlement": "德州扑克结算",
     "texas_holdem_abort_refund": "德州扑克作废退款",
+    "dark_market_bid_hold": "暗网报价冻结",
+    "dark_market_bid_refund": "暗网报价退款",
+    "dark_market_sale_income": "暗网成交收入",
+    "dark_market_sale_fee": "暗网成交手续费",
+    "dark_market_force_refund": "暗网强制下架退款",
 }
 _DEFAULT_RED_PACKET_EXPIRY_MINUTES = 10
 _DEFAULT_RED_PACKET_EMPTY_PROBABILITY_PERCENT = 5
@@ -900,6 +911,21 @@ class DarkMarketListingSummary:
 class DarkMarketListingResult:
     status: str
     listing: DarkMarketListingSummary | None = None
+
+
+@dataclass(frozen=True)
+class DarkMarketBidResult:
+    status: str
+    public_number: int | None = None
+    amount: int = 0
+    frozen_amount: int = 0
+    minimum_amount: int = 0
+
+
+@dataclass(frozen=True)
+class DarkMarketDisclosureResult:
+    status: str
+    candidates: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -5897,6 +5923,425 @@ class CoreRepository:
             return DarkMarketListingResult(
                 "listed", self._dark_market_listing_summary(listing)
             )
+
+    @staticmethod
+    def _dark_market_direct_destination(
+        session: Session, platform_id: str
+    ) -> str | None:
+        return session.scalar(
+            select(DirectChatRecord.chatroom_id).where(
+                DirectChatRecord.platform_user_id == platform_id
+            )
+        )
+
+    def place_dark_market_bid(
+        self,
+        platform_id: str,
+        public_number: int,
+        amount: int,
+        inbound_id: UUID,
+        now: datetime,
+    ) -> DarkMarketBidResult:
+        with self.transaction():
+            with self._session() as session:
+                existing = session.scalar(
+                    select(DarkMarketBidRecord).where(
+                        DarkMarketBidRecord.inbound_message_id == inbound_id
+                    )
+                )
+                if existing is not None:
+                    listing_number = session.scalar(
+                        select(DarkMarketListingRecord.public_number).where(
+                            DarkMarketListingRecord.id == existing.listing_id
+                        )
+                    )
+                    return DarkMarketBidResult(
+                        "accepted",
+                        listing_number,
+                        existing.amount,
+                        existing.amount,
+                    )
+                if not 1 <= amount <= 99999:
+                    return DarkMarketBidResult("invalid_amount")
+                bidder = session.scalar(
+                    select(UserRecord).where(UserRecord.platform_id == platform_id)
+                )
+                if bidder is None:
+                    return DarkMarketBidResult("not_joined")
+                listing = session.scalar(
+                    select(DarkMarketListingRecord)
+                    .where(DarkMarketListingRecord.public_number == public_number)
+                    .with_for_update()
+                )
+                if listing is None:
+                    return DarkMarketBidResult("not_found")
+                if listing.state != "active" or now >= listing.ends_at:
+                    return DarkMarketBidResult("ended", public_number)
+                current = session.scalar(
+                    select(DarkMarketBidRecord)
+                    .where(
+                        DarkMarketBidRecord.listing_id == listing.id,
+                        DarkMarketBidRecord.state == "current",
+                    )
+                    .with_for_update()
+                )
+                minimum_amount = minimum_next_bid(
+                    listing.starting_price,
+                    None if current is None else current.amount,
+                )
+                if amount < minimum_amount:
+                    return DarkMarketBidResult(
+                        "too_low", public_number, minimum_amount=minimum_amount
+                    )
+                user_ids = {bidder.id}
+                if current is not None:
+                    user_ids.add(current.bidder_user_id)
+                users = {
+                    user.id: user
+                    for user in session.scalars(
+                        select(UserRecord)
+                        .where(UserRecord.id.in_(user_ids))
+                        .order_by(UserRecord.id)
+                        .with_for_update()
+                    )
+                }
+                bidder = users[bidder.id]
+                previous_bidder = (
+                    None if current is None else users[current.bidder_user_id]
+                )
+                debit = (
+                    amount - current.amount
+                    if current is not None and current.bidder_user_id == bidder.id
+                    else amount
+                )
+                if bidder.balance < debit:
+                    return DarkMarketBidResult(
+                        "insufficient_balance",
+                        public_number,
+                        minimum_amount=minimum_amount,
+                    )
+                if current is not None:
+                    current.state = "refunded"
+                    current.refunded_at = now
+                    if current.bidder_user_id != bidder.id:
+                        if previous_bidder is None:
+                            raise RuntimeError("暗网原最高报价者不存在")
+                        self._apply_balance_change(
+                            previous_bidder,
+                            current.amount,
+                            "dark_market_bid_refund",
+                            now,
+                        )
+                        direct_chatroom_id = self._dark_market_direct_destination(
+                            session, previous_bidder.platform_id
+                        )
+                        if direct_chatroom_id is not None:
+                            self.enqueue_system_outbound(
+                                f"你对暗网商品 #{public_number} 的报价已被超过，"
+                                f"冻结的 {current.amount} 摸鱼币已退回。",
+                                destination_chatroom_id=direct_chatroom_id,
+                                delivery_kind="direct",
+                            )
+                self._apply_balance_change(
+                    bidder, -debit, "dark_market_bid_hold", now
+                )
+                session.add(
+                    DarkMarketBidRecord(
+                        listing_id=listing.id,
+                        bidder_user_id=bidder.id,
+                        inbound_message_id=inbound_id,
+                        amount=amount,
+                        state="current",
+                        created_at=now,
+                    )
+                )
+                group = session.get(GroupChatRecord, listing.announcement_group_id)
+                if group is None or group.chatroom_id is None:
+                    raise RuntimeError("暗网播报群不存在")
+                self.enqueue_system_outbound(
+                    f"暗网商品 #{public_number} 出现新的最高报价：{amount} 摸鱼币。",
+                    group_chat_id=group.id,
+                    destination_chatroom_id=group.chatroom_id,
+                )
+                return DarkMarketBidResult(
+                    "accepted", public_number, amount, amount, minimum_amount
+                )
+
+    def _settle_dark_market_listing(
+        self, session: Session, listing: DarkMarketListingRecord, now: datetime
+    ) -> None:
+        current = session.scalar(
+            select(DarkMarketBidRecord)
+            .where(
+                DarkMarketBidRecord.listing_id == listing.id,
+                DarkMarketBidRecord.state == "current",
+            )
+            .with_for_update()
+        )
+        group = session.get(GroupChatRecord, listing.announcement_group_id)
+        if group is None or group.chatroom_id is None:
+            raise RuntimeError("暗网播报群不存在")
+        listing.finished_at = now
+        if current is None:
+            listing.state = "unsold"
+            self.enqueue_system_outbound(
+                f"暗网商品 #{listing.public_number} 已流拍。",
+                group_chat_id=group.id,
+                destination_chatroom_id=group.chatroom_id,
+            )
+            return
+        user_ids = {listing.seller_user_id, current.bidder_user_id}
+        users = {
+            user.id: user
+            for user in session.scalars(
+                select(UserRecord)
+                .where(UserRecord.id.in_(user_ids))
+                .order_by(UserRecord.id)
+                .with_for_update()
+            )
+        }
+        seller = users.get(listing.seller_user_id)
+        buyer = users.get(current.bidder_user_id)
+        if seller is None or buyer is None:
+            raise RuntimeError("暗网交易用户不存在")
+        fee = calculate_fee(current.amount, listing.fee_percent_snapshot)
+        self._apply_balance_change(
+            seller, current.amount, "dark_market_sale_income", now
+        )
+        self._apply_balance_change(seller, -fee, "dark_market_sale_fee", now)
+        current.state = "settled"
+        current.settled_at = now
+        listing.state = "sold"
+        listing.buyer_user_id = buyer.id
+        listing.final_amount = current.amount
+        listing.fee_amount = fee
+        disclosure = DarkMarketDisclosureRecord(
+            listing_id=listing.id,
+            seller_user_id=seller.id,
+            buyer_user_id=buyer.id,
+            state="pending",
+            deadline=now + timedelta(minutes=10),
+            created_at=now,
+        )
+        session.add(disclosure)
+        self.enqueue_system_outbound(
+            f"暗网商品 #{listing.public_number} 已成交，成交价 {current.amount} 摸鱼币。",
+            group_chat_id=group.id,
+            destination_chatroom_id=group.chatroom_id,
+        )
+        for user in {seller.id: seller, buyer.id: buyer}.values():
+            direct_chatroom_id = self._dark_market_direct_destination(
+                session, user.platform_id
+            )
+            if direct_chatroom_id is not None:
+                self.enqueue_system_outbound(
+                    f"暗网商品 #{listing.public_number} 已成交。是否公开买卖双方身份？"
+                    "请在 10 分钟内发送 /公开 或 /不公开。",
+                    destination_chatroom_id=direct_chatroom_id,
+                    delivery_kind="direct",
+                )
+
+    def run_dark_market_jobs(self, now: datetime) -> None:
+        with self.transaction():
+            with self._session() as session:
+                session.execute(
+                    delete(DarkMarketDraftRecord).where(
+                        DarkMarketDraftRecord.expires_at <= now
+                    )
+                )
+        with self._session() as session:
+            due_ids = tuple(
+                session.scalars(
+                    select(DarkMarketListingRecord.id)
+                    .where(
+                        DarkMarketListingRecord.state == "active",
+                        DarkMarketListingRecord.ends_at <= now,
+                    )
+                    .order_by(
+                        DarkMarketListingRecord.ends_at,
+                        DarkMarketListingRecord.public_number,
+                    )
+                )
+            )
+        for listing_id in due_ids:
+            try:
+                with self.transaction():
+                    with self._session() as session:
+                        listing = session.get(
+                            DarkMarketListingRecord,
+                            listing_id,
+                            with_for_update=True,
+                        )
+                        if (
+                            listing is not None
+                            and listing.state == "active"
+                            and listing.ends_at <= now
+                        ):
+                            self._settle_dark_market_listing(session, listing, now)
+            except Exception:
+                logger.exception(
+                    "failed to settle dark market listing %s", listing_id
+                )
+        with self._session() as session:
+            disclosure_ids = tuple(
+                session.scalars(
+                    select(DarkMarketDisclosureRecord.id).where(
+                        DarkMarketDisclosureRecord.state == "pending",
+                        DarkMarketDisclosureRecord.deadline <= now,
+                    )
+                )
+            )
+        for disclosure_id in disclosure_ids:
+            with self.transaction():
+                with self._session() as session:
+                    disclosure = session.get(
+                        DarkMarketDisclosureRecord,
+                        disclosure_id,
+                        with_for_update=True,
+                    )
+                    if (
+                        disclosure is not None
+                        and disclosure.state == "pending"
+                        and disclosure.deadline <= now
+                    ):
+                        disclosure.state = "anonymous"
+                        disclosure.finished_at = now
+
+    def force_delist_dark_market_listing(
+        self, listing_id: UUID, now: datetime
+    ) -> DarkMarketListingResult:
+        with self.transaction():
+            with self._session() as session:
+                listing = session.get(
+                    DarkMarketListingRecord, listing_id, with_for_update=True
+                )
+                if listing is None:
+                    return DarkMarketListingResult("not_found")
+                if listing.state != "active":
+                    return DarkMarketListingResult(
+                        "already_ended", self._dark_market_listing_summary(listing)
+                    )
+                current = session.scalar(
+                    select(DarkMarketBidRecord)
+                    .where(
+                        DarkMarketBidRecord.listing_id == listing.id,
+                        DarkMarketBidRecord.state == "current",
+                    )
+                    .with_for_update()
+                )
+                if current is not None:
+                    bidder = session.scalar(
+                        select(UserRecord)
+                        .where(UserRecord.id == current.bidder_user_id)
+                        .with_for_update()
+                    )
+                    if bidder is None:
+                        raise RuntimeError("暗网报价者不存在")
+                    self._apply_balance_change(
+                        bidder,
+                        current.amount,
+                        "dark_market_force_refund",
+                        now,
+                    )
+                    current.state = "refunded"
+                    current.refunded_at = now
+                listing.state = "force_delisted"
+                listing.finished_at = now
+                group = session.get(GroupChatRecord, listing.announcement_group_id)
+                if group is None or group.chatroom_id is None:
+                    raise RuntimeError("暗网播报群不存在")
+                self.enqueue_system_outbound(
+                    f"暗网商品 #{listing.public_number} 已由管理员强制下架。"
+                    + ("最高报价冻结款已退回。" if current is not None else ""),
+                    group_chat_id=group.id,
+                    destination_chatroom_id=group.chatroom_id,
+                )
+                return DarkMarketListingResult(
+                    "force_delisted", self._dark_market_listing_summary(listing)
+                )
+
+    def decide_dark_market_disclosure(
+        self,
+        platform_id: str,
+        public_number: int | None,
+        reveal: bool,
+        inbound_id: UUID,
+        now: datetime,
+    ) -> DarkMarketDisclosureResult:
+        del inbound_id
+        with self.transaction():
+            with self._session() as session:
+                user = session.scalar(
+                    select(UserRecord).where(UserRecord.platform_id == platform_id)
+                )
+                if user is None:
+                    return DarkMarketDisclosureResult("not_joined")
+                query = (
+                    select(DarkMarketDisclosureRecord, DarkMarketListingRecord)
+                    .join(
+                        DarkMarketListingRecord,
+                        DarkMarketListingRecord.id
+                        == DarkMarketDisclosureRecord.listing_id,
+                    )
+                    .where(
+                        DarkMarketDisclosureRecord.state == "pending",
+                        or_(
+                            DarkMarketDisclosureRecord.seller_user_id == user.id,
+                            DarkMarketDisclosureRecord.buyer_user_id == user.id,
+                        ),
+                    )
+                    .order_by(DarkMarketListingRecord.public_number)
+                    .with_for_update()
+                )
+                if public_number is not None:
+                    query = query.where(
+                        DarkMarketListingRecord.public_number == public_number
+                    )
+                rows = list(session.execute(query))
+                if not rows:
+                    return DarkMarketDisclosureResult("no_pending")
+                if public_number is None and len(rows) > 1:
+                    return DarkMarketDisclosureResult(
+                        "choose_listing",
+                        tuple(listing.public_number for _, listing in rows),
+                    )
+                disclosure, listing = rows[0]
+                if disclosure.deadline <= now:
+                    disclosure.state = "anonymous"
+                    disclosure.finished_at = now
+                    return DarkMarketDisclosureResult("expired")
+                is_self_sale = disclosure.seller_user_id == disclosure.buyer_user_id
+                if is_self_sale:
+                    disclosure.seller_choice = reveal
+                    disclosure.buyer_choice = reveal
+                else:
+                    if disclosure.seller_user_id == user.id:
+                        disclosure.seller_choice = reveal
+                    if disclosure.buyer_user_id == user.id:
+                        disclosure.buyer_choice = reveal
+                if not reveal:
+                    disclosure.state = "anonymous"
+                    disclosure.finished_at = now
+                    return DarkMarketDisclosureResult("anonymous")
+                if not (
+                    disclosure.seller_choice is True
+                    and disclosure.buyer_choice is True
+                ):
+                    return DarkMarketDisclosureResult("waiting_other")
+                disclosure.state = "revealed"
+                disclosure.finished_at = now
+                seller = session.get(UserRecord, disclosure.seller_user_id)
+                buyer = session.get(UserRecord, disclosure.buyer_user_id)
+                group = session.get(GroupChatRecord, listing.announcement_group_id)
+                if seller is None or buyer is None or group is None or group.chatroom_id is None:
+                    raise RuntimeError("暗网公开身份数据不完整")
+                self.enqueue_system_outbound(
+                    f"暗网商品 #{listing.public_number} 身份公开："
+                    f"卖家 {seller.display_name}，买家 {buyer.display_name}。",
+                    group_chat_id=group.id,
+                    destination_chatroom_id=group.chatroom_id,
+                )
+                return DarkMarketDisclosureResult("revealed")
 
     def get_texas_holdem_settings(self) -> TexasHoldemSettings:
         with self._session() as session:
@@ -14656,6 +15101,7 @@ class CoreRepository:
     def run_daily_jobs(self, now: datetime) -> None:
         now = now.astimezone(BEIJING)
         should_backfill = self._current_day_history_backfilled != now.date()
+        self.run_dark_market_jobs(now)
         with self.transaction():
             if should_backfill:
                 self._backfill_current_day_history(now)
