@@ -114,6 +114,67 @@ class FakeCore:
             "big_blind_percent": 10,
         }
     )
+    dark_market_settings: dict = field(
+        default_factory=lambda: {
+            "enabled": True,
+            "announcement_group_id": "00000000-0000-0000-0000-000000000001",
+            "duration_hours": 3,
+            "fee_percent": 5,
+            "version": 0,
+            "rank_limits": [
+                {
+                    "rank_id": f"00000000-0000-0000-0000-{level:012d}",
+                    "rank_name": f"职位 {level}",
+                    "level_label": f"LV{level}",
+                    "daily_limit": level if level <= 5 else -1,
+                }
+                for level in range(1, 12)
+            ],
+        }
+    )
+    dark_market_listings: list[dict] = field(
+        default_factory=lambda: [
+            {
+                "id": "00000000-0000-0000-0000-000000000901",
+                "public_number": 1,
+                "seller_platform_id": "seller-platform",
+                "seller_display_name": "后台卖家",
+                "buyer_platform_id": None,
+                "buyer_display_name": None,
+                "current_bidder_platform_id": "buyer-platform",
+                "current_bidder_display_name": "后台买家",
+                "name": "旧怀表",
+                "purpose": "查看时间",
+                "details": "停在午夜",
+                "gender": "private",
+                "starting_price": 10,
+                "duration_hours_snapshot": 3,
+                "fee_percent_snapshot": 5,
+                "state": "active",
+                "ends_at": "2026-08-24T18:00:00+08:00",
+                "final_amount": None,
+                "fee_amount": None,
+                "created_at": "2026-08-24T15:00:00+08:00",
+                "finished_at": None,
+                "disclosure_state": None,
+                "disclosure_deadline": None,
+                "seller_choice": None,
+                "buyer_choice": None,
+                "bids": [
+                    {
+                        "id": "00000000-0000-0000-0000-000000000902",
+                        "bidder_platform_id": "buyer-platform",
+                        "bidder_display_name": "后台买家",
+                        "amount": 20,
+                        "state": "current",
+                        "created_at": "2026-08-24T15:30:00+08:00",
+                        "refunded_at": None,
+                        "settled_at": None,
+                    }
+                ],
+            }
+        ]
+    )
     red_packet_settings: dict = field(
         default_factory=lambda: {
             "expiry_minutes": 10,
@@ -623,6 +684,49 @@ class FakeCore:
     def set_texas_holdem_settings(self, settings):
         self.texas_holdem_settings = settings
         return self.texas_holdem_settings
+
+    def get_dark_market_settings(self):
+        return self.dark_market_settings
+
+    def set_dark_market_settings(self, settings):
+        self.dark_market_settings = {
+            **settings,
+            "version": settings["expected_version"] + 1,
+            "rank_limits": [
+                {
+                    **item,
+                    "rank_name": next(
+                        existing["rank_name"]
+                        for existing in self.dark_market_settings["rank_limits"]
+                        if existing["rank_id"] == item["rank_id"]
+                    ),
+                    "level_label": next(
+                        existing["level_label"]
+                        for existing in self.dark_market_settings["rank_limits"]
+                        if existing["rank_id"] == item["rank_id"]
+                    ),
+                }
+                for item in settings["rank_limits"]
+            ],
+        }
+        self.dark_market_settings.pop("expected_version", None)
+        return self.dark_market_settings
+
+    def list_dark_market_listings(self, status_filter, page, page_size):
+        items = self.dark_market_listings
+        if status_filter:
+            items = [item for item in items if item["state"] == status_filter]
+        return _page(items, page, page_size)
+
+    def get_dark_market_listing(self, listing_id):
+        return next(item for item in self.dark_market_listings if item["id"] == listing_id)
+
+    def force_delist_dark_market_listing(self, listing_id):
+        item = self.get_dark_market_listing(listing_id)
+        if item["state"] != "active":
+            return {"status": "already_ended"}
+        item["state"] = "force_delisted"
+        return {"status": "force_delisted"}
 
     def get_red_packet_settings(self):
         return self.red_packet_settings
@@ -2071,6 +2175,50 @@ def test_concrete_core_client_gets_and_sets_texas_holdem_settings():
     assert methods == ["GET", "PATCH"]
 
 
+def test_concrete_core_client_uses_dark_market_contract_paths():
+    from dzmm_bot.admin.core_client import CoreClient
+
+    calls = []
+
+    def handle(request):
+        calls.append((request.method, request.url.path, dict(request.url.params)))
+        if request.url.path.endswith("/force-delist"):
+            return httpx.Response(200, json={"status": "force_delisted"})
+        if request.url.path.endswith("/settings"):
+            return httpx.Response(200, json={"enabled": True, "version": 0})
+        if request.url.path.endswith("/listings"):
+            return httpx.Response(200, json={"items": [], "total": 0})
+        return httpx.Response(200, json={"id": "listing-1"})
+
+    http_client = httpx.Client(
+        base_url="http://127.0.0.1:18120",
+        headers={"X-Core-Token": "core-secret"},
+        transport=httpx.MockTransport(handle),
+    )
+    core = CoreClient("unused", "unused", client=http_client)
+    core.get_dark_market_settings()
+    core.set_dark_market_settings({"enabled": True, "expected_version": 0})
+    core.list_dark_market_listings("active", 2, 10)
+    core.get_dark_market_listing("listing-1")
+    core.force_delist_dark_market_listing("listing-1")
+
+    assert calls == [
+        ("GET", "/internal/game/dark-market/settings", {}),
+        ("PATCH", "/internal/game/dark-market/settings", {}),
+        (
+            "GET",
+            "/internal/game/dark-market/listings",
+            {"page": "2", "page_size": "10", "status": "active"},
+        ),
+        ("GET", "/internal/game/dark-market/listings/listing-1", {}),
+        (
+            "POST",
+            "/internal/game/dark-market/listings/listing-1/force-delist",
+            {},
+        ),
+    ]
+
+
 def test_novnc_websocket_connector_targets_only_loopback():
     from dzmm_bot.admin.core_client import NoVNCWebSocketConnector
 
@@ -2821,6 +2969,90 @@ def test_admin_rejects_invalid_texas_holdem_settings_before_relay(client, header
 
     assert response.status_code == 422
     assert core.texas_holdem_settings == original
+
+
+def test_admin_proxies_dark_market_settings_history_and_force_delist(
+    client, headers, core
+):
+    initial = client.get("/api/game/dark-market/settings", headers=headers)
+    assert initial.status_code == 200
+    payload = {
+        "enabled": True,
+        "announcement_group_id": "00000000-0000-0000-0000-000000000001",
+        "duration_hours": 4,
+        "fee_percent": 8,
+        "rank_limits": [
+            {"rank_id": item["rank_id"], "daily_limit": 2}
+            for item in initial.json()["rank_limits"]
+        ],
+    }
+    updated = client.patch(
+        "/api/game/dark-market/settings",
+        headers={
+            **headers,
+            "If-Match": str(initial.json()["version"]),
+            "Idempotency-Key": "dark-market-settings-1",
+        },
+        json=payload,
+    )
+    assert updated.status_code == 200
+    assert updated.json()["fee_percent"] == 8
+    assert core.dark_market_settings["duration_hours"] == 4
+
+    listed = client.get(
+        "/api/game/dark-market/listings?status=active&page=1&page_size=20",
+        headers=headers,
+    )
+    assert listed.status_code == 200
+    assert listed.json()["items"][0]["seller_display_name"] == "后台卖家"
+    listing_id = listed.json()["items"][0]["id"]
+    detail = client.get(
+        f"/api/game/dark-market/listings/{listing_id}", headers=headers
+    )
+    assert detail.json()["bids"][0]["bidder_display_name"] == "后台买家"
+
+    removed = client.post(
+        f"/api/game/dark-market/listings/{listing_id}/force-delist",
+        headers={
+            **headers,
+            "If-Match": str(updated.json()["version"]),
+            "Idempotency-Key": "dark-market-delist-1",
+        },
+    )
+    replay = client.post(
+        f"/api/game/dark-market/listings/{listing_id}/force-delist",
+        headers={
+            **headers,
+            "If-Match": str(updated.json()["version"]),
+            "Idempotency-Key": "dark-market-delist-1",
+        },
+    )
+    assert removed.json()["status"] == "force_delisted"
+    assert replay.json() == removed.json()
+
+
+def test_admin_rejects_invalid_dark_market_settings_before_relay(
+    client, headers, core
+):
+    initial = client.get("/api/game/dark-market/settings", headers=headers)
+    original = dict(core.dark_market_settings)
+    response = client.patch(
+        "/api/game/dark-market/settings",
+        headers={
+            **headers,
+            "If-Match": str(initial.json()["version"]),
+            "Idempotency-Key": "dark-market-invalid",
+        },
+        json={
+            "enabled": True,
+            "announcement_group_id": None,
+            "duration_hours": 25,
+            "fee_percent": 0,
+            "rank_limits": [],
+        },
+    )
+    assert response.status_code == 422
+    assert core.dark_market_settings == original
 
 
 def test_admin_proxies_versioned_red_packet_settings_idempotently(

@@ -1,6 +1,6 @@
 from datetime import datetime
 from secrets import compare_digest
-from typing import Annotated, Callable
+from typing import Annotated, Callable, Literal
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response, status
@@ -72,6 +72,13 @@ from .api_models import (
     OutboundRecallClaimResponse,
     NumberBombSettingsResponse,
     TexasHoldemSettingsResponse,
+    DarkMarketSettingsResponse,
+    DarkMarketRankLimitResponse,
+    SetDarkMarketSettingsRequest,
+    DarkMarketListingResponse,
+    DarkMarketBidResponse,
+    PaginatedDarkMarketListingsResponse,
+    DarkMarketForceDelistResponse,
     RedPacketSettingsResponse,
     GameplayParticipantResponse,
     GameplaySummariesResponse,
@@ -1516,6 +1523,125 @@ def create_app(
             **request.model_dump()
         )
         return TexasHoldemSettingsResponse(**settings.__dict__)
+
+    @app.get(
+        "/internal/game/dark-market/settings",
+        response_model=DarkMarketSettingsResponse,
+    )
+    def dark_market_settings(
+        _: Annotated[None, Depends(authorize)],
+    ) -> DarkMarketSettingsResponse:
+        settings = repository.get_dark_market_settings()
+        return DarkMarketSettingsResponse(
+            enabled=settings.enabled,
+            announcement_group_id=settings.announcement_group_id,
+            duration_hours=settings.duration_hours,
+            fee_percent=settings.fee_percent,
+            version=settings.version,
+            rank_limits=[
+                DarkMarketRankLimitResponse(**item.__dict__)
+                for item in settings.rank_limits
+            ],
+        )
+
+    @app.patch(
+        "/internal/game/dark-market/settings",
+        response_model=DarkMarketSettingsResponse,
+    )
+    def set_dark_market_settings(
+        request: SetDarkMarketSettingsRequest,
+        _: Annotated[None, Depends(authorize)],
+    ) -> DarkMarketSettingsResponse:
+        current = repository.get_dark_market_settings()
+        if {item.rank_id for item in request.rank_limits} != {
+            item.rank_id for item in current.rank_limits
+        }:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "需要为每个职位配置上架次数",
+            )
+        try:
+            settings = repository.set_dark_market_settings(
+                enabled=request.enabled,
+                announcement_group_id=request.announcement_group_id,
+                duration_hours=request.duration_hours,
+                fee_percent=request.fee_percent,
+                rank_limits={
+                    item.rank_id: item.daily_limit for item in request.rank_limits
+                },
+                expected_version=request.expected_version,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)
+            ) from exc
+        return DarkMarketSettingsResponse(
+            enabled=settings.enabled,
+            announcement_group_id=settings.announcement_group_id,
+            duration_hours=settings.duration_hours,
+            fee_percent=settings.fee_percent,
+            version=settings.version,
+            rank_limits=[
+                DarkMarketRankLimitResponse(**item.__dict__)
+                for item in settings.rank_limits
+            ],
+        )
+
+    @app.get(
+        "/internal/game/dark-market/listings",
+        response_model=PaginatedDarkMarketListingsResponse,
+    )
+    def dark_market_listings(
+        _: Annotated[None, Depends(authorize)],
+        status_filter: Annotated[
+            Literal["active", "sold", "unsold", "force_delisted"] | None,
+            Query(alias="status"),
+        ] = None,
+        page: Annotated[int, Query(ge=1)] = 1,
+        page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+    ) -> PaginatedDarkMarketListingsResponse:
+        items, total = repository.list_dark_market_listings(
+            status_filter, page, page_size
+        )
+        return PaginatedDarkMarketListingsResponse(
+            items=[DarkMarketListingResponse(**item.__dict__) for item in items],
+            total=total,
+            page=page,
+            page_size=page_size,
+        )
+
+    @app.get(
+        "/internal/game/dark-market/listings/{listing_id}",
+        response_model=DarkMarketListingResponse,
+    )
+    def dark_market_listing(
+        listing_id: UUID,
+        _: Annotated[None, Depends(authorize)],
+    ) -> DarkMarketListingResponse:
+        item = repository.get_dark_market_listing(listing_id)
+        if item is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "暗网商品不存在")
+        return DarkMarketListingResponse(
+            **{
+                **item.__dict__,
+                "bids": [DarkMarketBidResponse(**bid.__dict__) for bid in item.bids],
+            }
+        )
+
+    @app.post(
+        "/internal/game/dark-market/listings/{listing_id}/force-delist",
+        response_model=DarkMarketForceDelistResponse,
+    )
+    def force_delist_dark_market_listing(
+        listing_id: UUID,
+        _: Annotated[None, Depends(authorize)],
+    ) -> DarkMarketForceDelistResponse:
+        result = repository.force_delist_dark_market_listing(
+            listing_id, clock()
+        )
+        if result.status == "not_found":
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "暗网商品不存在")
+        return DarkMarketForceDelistResponse(status=result.status)
 
     @app.patch(
         "/internal/game/number-bomb/settings",

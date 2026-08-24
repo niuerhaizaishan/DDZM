@@ -127,6 +127,18 @@ class AdminCorePort(Protocol):
 
     def set_texas_holdem_settings(self, settings: dict) -> dict: ...
 
+    def get_dark_market_settings(self) -> dict: ...
+
+    def set_dark_market_settings(self, settings: dict) -> dict: ...
+
+    def list_dark_market_listings(
+        self, status_filter: str | None, page: int, page_size: int
+    ) -> dict: ...
+
+    def get_dark_market_listing(self, listing_id: str) -> dict: ...
+
+    def force_delist_dark_market_listing(self, listing_id: str) -> dict: ...
+
     def get_red_packet_settings(self) -> dict: ...
 
     def set_red_packet_settings(self, settings: dict) -> dict: ...
@@ -471,6 +483,34 @@ class CoreClient:
     def set_texas_holdem_settings(self, settings: dict) -> dict:
         response = self._client.patch(
             "/internal/game/texas-holdem/settings", json=settings
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def get_dark_market_settings(self) -> dict:
+        return self._get("/internal/game/dark-market/settings")
+
+    def set_dark_market_settings(self, settings: dict) -> dict:
+        response = self._client.patch(
+            "/internal/game/dark-market/settings", json=settings
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def list_dark_market_listings(
+        self, status_filter: str | None, page: int, page_size: int
+    ) -> dict:
+        params = {"page": page, "page_size": page_size}
+        if status_filter is not None:
+            params["status"] = status_filter
+        return self._get("/internal/game/dark-market/listings", params=params)
+
+    def get_dark_market_listing(self, listing_id: str) -> dict:
+        return self._get(f"/internal/game/dark-market/listings/{listing_id}")
+
+    def force_delist_dark_market_listing(self, listing_id: str) -> dict:
+        response = self._client.post(
+            f"/internal/game/dark-market/listings/{listing_id}/force-delist"
         )
         response.raise_for_status()
         return response.json()

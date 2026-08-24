@@ -1044,6 +1044,142 @@ def create_app(
             scope="texas-holdem-settings",
         )
 
+    @app.get("/api/game/dark-market/settings")
+    def dark_market_settings(
+        _: Annotated[None, Depends(authorize)],
+    ) -> dict:
+        settings = _relay_core(core.get_dark_market_settings)
+        return {
+            **settings,
+            "settings_version": settings["version"],
+            "version": repository.config_version(),
+        }
+
+    @app.patch("/api/game/dark-market/settings")
+    def set_dark_market_settings(
+        request: dict,
+        identity: Annotated[AdminIdentity, Depends(authorize)],
+        idempotency_key: Annotated[
+            str | None, Header(alias="Idempotency-Key")
+        ] = None,
+        if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+    ) -> JSONResponse:
+        required = {
+            "enabled",
+            "announcement_group_id",
+            "duration_hours",
+            "fee_percent",
+            "rank_limits",
+        }
+        if set(request) != required:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid settings"
+            )
+        rank_limits = request["rank_limits"]
+        valid_rank_limits = (
+            isinstance(rank_limits, list)
+            and bool(rank_limits)
+            and all(
+                isinstance(item, dict)
+                and set(item) == {"rank_id", "daily_limit"}
+                and isinstance(item["rank_id"], str)
+                and bool(item["rank_id"])
+                and isinstance(item["daily_limit"], int)
+                and not isinstance(item["daily_limit"], bool)
+                and item["daily_limit"] >= -1
+                for item in rank_limits
+            )
+            and len({item["rank_id"] for item in rank_limits})
+            == len(rank_limits)
+        )
+        group_id = request["announcement_group_id"]
+        if (
+            not isinstance(request["enabled"], bool)
+            or (
+                group_id is not None
+                and (not isinstance(group_id, str) or not group_id)
+            )
+            or (request["enabled"] and group_id is None)
+            or not isinstance(request["duration_hours"], int)
+            or isinstance(request["duration_hours"], bool)
+            or not 1 <= request["duration_hours"] <= 24
+            or not isinstance(request["fee_percent"], int)
+            or isinstance(request["fee_percent"], bool)
+            or not 1 <= request["fee_percent"] <= 100
+            or not valid_rank_limits
+        ):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid settings"
+            )
+
+        def update_settings() -> dict:
+            current = _relay_core(core.get_dark_market_settings)
+            return _relay_core(
+                lambda: core.set_dark_market_settings(
+                    {
+                        **request,
+                        "expected_version": current["version"],
+                    }
+                )
+            )
+
+        return versioned_configuration_response(
+            identity,
+            idempotency_key,
+            if_match,
+            update_settings,
+            scope="dark-market-settings",
+        )
+
+    @app.get("/api/game/dark-market/listings")
+    def dark_market_listings(
+        _: Annotated[None, Depends(authorize)],
+        status_filter: Annotated[str | None, Query(alias="status")] = None,
+        page: Annotated[int, Query(ge=1)] = 1,
+        page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+    ) -> dict:
+        if status_filter not in {
+            None,
+            "active",
+            "sold",
+            "unsold",
+            "force_delisted",
+        }:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid status"
+            )
+        return _relay_core(
+            lambda: core.list_dark_market_listings(
+                status_filter, page, page_size
+            )
+        )
+
+    @app.get("/api/game/dark-market/listings/{listing_id}")
+    def dark_market_listing(
+        listing_id: str,
+        _: Annotated[None, Depends(authorize)],
+    ) -> dict:
+        return _relay_core(lambda: core.get_dark_market_listing(listing_id))
+
+    @app.post("/api/game/dark-market/listings/{listing_id}/force-delist")
+    def force_delist_dark_market_listing(
+        listing_id: str,
+        identity: Annotated[AdminIdentity, Depends(authorize)],
+        idempotency_key: Annotated[
+            str | None, Header(alias="Idempotency-Key")
+        ] = None,
+        if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+    ) -> JSONResponse:
+        return versioned_configuration_response(
+            identity,
+            idempotency_key,
+            if_match,
+            lambda: _relay_core(
+                lambda: core.force_delist_dark_market_listing(listing_id)
+            ),
+            scope="dark-market-force-delist",
+        )
+
     @app.patch("/api/game/red-packet/settings")
     def set_red_packet_settings(
         request: dict,

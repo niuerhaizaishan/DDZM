@@ -384,6 +384,117 @@ def test_texas_holdem_settings_core_api_round_trip_and_validates_ranges(client, 
     ).status_code == 422
 
 
+def test_dark_market_core_api_configures_lists_details_and_force_delists(
+    app_context, headers
+):
+    repository = app_context.repository
+    group = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=dark-api", NOW
+    )
+    repository.create_user("dark-api-seller", "接口卖家", NOW, 100)
+    repository.create_user("dark-api-buyer", "接口买家", NOW, 100)
+    repository.upsert_direct_chats(
+        [
+            ("dark-api-seller", "direct-dark-api-seller"),
+            ("dark-api-buyer", "direct-dark-api-buyer"),
+        ],
+        NOW,
+    )
+    initial = app_context.client.get(
+        "/internal/game/dark-market/settings", headers=headers
+    )
+    assert initial.status_code == 200
+    limits = initial.json()["rank_limits"]
+    payload = {
+        "enabled": True,
+        "announcement_group_id": str(group.id),
+        "duration_hours": 4,
+        "fee_percent": 7,
+        "rank_limits": [
+            {"rank_id": item["rank_id"], "daily_limit": item["daily_limit"]}
+            for item in limits
+        ],
+        "expected_version": initial.json()["version"],
+    }
+    updated = app_context.client.patch(
+        "/internal/game/dark-market/settings", headers=headers, json=payload
+    )
+    assert updated.status_code == 200
+    assert (updated.json()["duration_hours"], updated.json()["fee_percent"]) == (4, 7)
+
+    assert repository.start_dark_market_draft("dark-api-seller", NOW).status == "started"
+    for value in ("旧怀表", "查看时间", "停在午夜", "保密", "10"):
+        repository.advance_dark_market_draft("dark-api-seller", value, NOW)
+    listed = repository.confirm_dark_market_listing("dark-api-seller", UUID(int=99), NOW)
+    assert listed.listing is not None
+    inbound, _ = repository.accept_inbound(
+        InboundMessage(
+            "dark-api-bid",
+            "dark-api-buyer",
+            "/报价 1 20",
+            NOW,
+            source_type="direct",
+            chatroom_id="direct-dark-api-buyer",
+        )
+    )
+    repository.place_dark_market_bid(
+        "dark-api-buyer", 1, 20, inbound.id, NOW
+    )
+
+    listings = app_context.client.get(
+        "/internal/game/dark-market/listings", headers=headers
+    )
+    assert listings.status_code == 200
+    assert listings.json()["total"] == 1
+    summary = listings.json()["items"][0]
+    assert summary["seller_display_name"] == "接口卖家"
+    assert summary["current_bidder_display_name"] == "接口买家"
+    detail = app_context.client.get(
+        f"/internal/game/dark-market/listings/{listed.listing.id}", headers=headers
+    )
+    assert detail.status_code == 200
+    assert detail.json()["bids"][0]["amount"] == 20
+    assert detail.json()["ends_at"] is not None
+
+    removed = app_context.client.post(
+        f"/internal/game/dark-market/listings/{listed.listing.id}/force-delist",
+        headers=headers,
+    )
+    repeated = app_context.client.post(
+        f"/internal/game/dark-market/listings/{listed.listing.id}/force-delist",
+        headers=headers,
+    )
+    assert removed.json()["status"] == "force_delisted"
+    assert repeated.json()["status"] == "already_ended"
+
+
+def test_dark_market_core_api_validates_settings_bounds(app_context, headers):
+    initial = app_context.client.get(
+        "/internal/game/dark-market/settings", headers=headers
+    ).json()
+    base = {
+        "enabled": False,
+        "announcement_group_id": None,
+        "duration_hours": 3,
+        "fee_percent": 5,
+        "rank_limits": [
+            {"rank_id": item["rank_id"], "daily_limit": item["daily_limit"]}
+            for item in initial["rank_limits"]
+        ],
+        "expected_version": initial["version"],
+    }
+    for invalid in (
+        {**base, "duration_hours": 0},
+        {**base, "duration_hours": 25},
+        {**base, "fee_percent": 0},
+        {**base, "fee_percent": 101},
+        {**base, "rank_limits": base["rank_limits"][:-1]},
+    ):
+        assert app_context.client.patch(
+            "/internal/game/dark-market/settings", headers=headers, json=invalid
+        ).status_code == 422
+
+
 def test_red_packet_settings_core_api_validates_bounds(client, headers):
     assert client.get("/internal/game/red-packet/settings").status_code == 401
     initial = client.get(
@@ -1199,7 +1310,7 @@ def test_game_management_lists_commands_employees_and_shop_items(client, headers
 
     assert commands.status_code == 200
     assert {record["command"] for record in commands.json()} == {
-            "/入职", "/我的物品", "/打卡", "/余额", "/修改名称", "/编辑档案", "/编辑档案形象", "/我的档案", "/发奖金", "/发红包", "/抢红包", "/打赏", "/我", "/商店", "/帮助", "/当前游戏", "/加入", "/退出", "/开始", "/跳过", "/摸鱼躲猫猫", "/记忆考核", "/继续", "/收手", "/投降", "/谁是卧底", "/开始投票", "/投票", "/退出谁是卧底", "/结束游戏", "/甩锅游戏", "/甩锅", "/退出甩锅", "/蹦蹦数字炸弹", "/报数", "/德州扑克", "/看牌", "/过牌", "/跟注", "/加注", "/全下", "/弃牌", "/部门", "/部门人数", "/我的部门人数", "/加入部门", "/切换部门", "/部门申请列表", "/同意部门", "/全部同意部门", "/拒绝部门", "/全部拒绝部门", "/职位", "/晋升", "/晋升申请列表", "/同意", "/全部同意", "/拒绝", "/全部拒绝", "/投稿", "/我的投稿", "/撤回投稿", "/上一步", "/取消投稿", "/确认取消投稿", "/确认投稿", "/继续添加", "/事件完成", "/修改身份", "/删除身份", "/修改事件", "/删除事件"
+        "/入职", "/我的物品", "/打卡", "/余额", "/修改名称", "/编辑档案", "/编辑档案形象", "/我的档案", "/发奖金", "/发红包", "/抢红包", "/打赏", "/我", "/商店", "/帮助", "/当前游戏", "/加入", "/退出", "/开始", "/跳过", "/摸鱼躲猫猫", "/记忆考核", "/继续", "/收手", "/投降", "/谁是卧底", "/开始投票", "/投票", "/退出谁是卧底", "/结束游戏", "/甩锅游戏", "/甩锅", "/退出甩锅", "/蹦蹦数字炸弹", "/报数", "/德州扑克", "/看牌", "/过牌", "/跟注", "/加注", "/全下", "/弃牌", "/上架暗网", "/取消上架", "/确认", "/报价", "/公开", "/不公开", "/登陆暗网", "/部门", "/部门人数", "/我的部门人数", "/加入部门", "/切换部门", "/部门申请列表", "/同意部门", "/全部同意部门", "/拒绝部门", "/全部拒绝部门", "/职位", "/晋升", "/晋升申请列表", "/同意", "/全部同意", "/拒绝", "/全部拒绝", "/投稿", "/我的投稿", "/撤回投稿", "/上一步", "/取消投稿", "/确认取消投稿", "/确认投稿", "/继续添加", "/事件完成", "/修改身份", "/删除身份", "/修改事件", "/删除事件"
             }
     command_records = {record["command"]: record for record in commands.json()}
     for command in ("/部门人数", "/我的部门人数"):

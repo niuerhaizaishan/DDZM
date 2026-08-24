@@ -936,6 +936,48 @@ class DarkMarketBrowseResult:
 
 
 @dataclass(frozen=True)
+class DarkMarketAdminBid:
+    id: UUID
+    bidder_platform_id: str
+    bidder_display_name: str
+    amount: int
+    state: str
+    created_at: datetime
+    refunded_at: datetime | None
+    settled_at: datetime | None
+
+
+@dataclass(frozen=True)
+class DarkMarketAdminListing:
+    id: UUID
+    public_number: int
+    seller_platform_id: str
+    seller_display_name: str
+    buyer_platform_id: str | None
+    buyer_display_name: str | None
+    current_bidder_platform_id: str | None
+    current_bidder_display_name: str | None
+    name: str
+    purpose: str
+    details: str
+    gender: str
+    starting_price: int
+    duration_hours_snapshot: int
+    fee_percent_snapshot: int
+    state: str
+    ends_at: datetime
+    final_amount: int | None
+    fee_amount: int | None
+    created_at: datetime
+    finished_at: datetime | None
+    disclosure_state: str | None
+    disclosure_deadline: datetime | None
+    seller_choice: bool | None
+    buyer_choice: bool | None
+    bids: tuple[DarkMarketAdminBid, ...] = ()
+
+
+@dataclass(frozen=True)
 class PrivateGameCandidate:
     index: int
     group_chat_id: UUID
@@ -6371,6 +6413,138 @@ class CoreRepository:
                 return DarkMarketListingResult(
                     "force_delisted", self._dark_market_listing_summary(listing)
                 )
+
+    @staticmethod
+    def _dark_market_admin_listing(
+        session: Session,
+        listing: DarkMarketListingRecord,
+        *,
+        include_bids: bool,
+    ) -> DarkMarketAdminListing:
+        seller = session.get(UserRecord, listing.seller_user_id)
+        buyer = (
+            None
+            if listing.buyer_user_id is None
+            else session.get(UserRecord, listing.buyer_user_id)
+        )
+        current_bid = session.scalar(
+            select(DarkMarketBidRecord).where(
+                DarkMarketBidRecord.listing_id == listing.id,
+                DarkMarketBidRecord.state == "current",
+            )
+        )
+        current_bidder = (
+            None
+            if current_bid is None
+            else session.get(UserRecord, current_bid.bidder_user_id)
+        )
+        disclosure = session.scalar(
+            select(DarkMarketDisclosureRecord).where(
+                DarkMarketDisclosureRecord.listing_id == listing.id
+            )
+        )
+        bid_views: tuple[DarkMarketAdminBid, ...] = ()
+        if include_bids:
+            bid_rows = session.execute(
+                select(DarkMarketBidRecord, UserRecord)
+                .join(UserRecord, UserRecord.id == DarkMarketBidRecord.bidder_user_id)
+                .where(DarkMarketBidRecord.listing_id == listing.id)
+                .order_by(
+                    DarkMarketBidRecord.created_at, DarkMarketBidRecord.id
+                )
+            )
+            bid_views = tuple(
+                DarkMarketAdminBid(
+                    id=bid.id,
+                    bidder_platform_id=user.platform_id,
+                    bidder_display_name=user.display_name,
+                    amount=bid.amount,
+                    state=bid.state,
+                    created_at=bid.created_at,
+                    refunded_at=bid.refunded_at,
+                    settled_at=bid.settled_at,
+                )
+                for bid, user in bid_rows
+            )
+        if seller is None:
+            raise RuntimeError("暗网卖家不存在")
+        return DarkMarketAdminListing(
+            id=listing.id,
+            public_number=listing.public_number,
+            seller_platform_id=seller.platform_id,
+            seller_display_name=seller.display_name,
+            buyer_platform_id=None if buyer is None else buyer.platform_id,
+            buyer_display_name=None if buyer is None else buyer.display_name,
+            current_bidder_platform_id=(
+                None if current_bidder is None else current_bidder.platform_id
+            ),
+            current_bidder_display_name=(
+                None if current_bidder is None else current_bidder.display_name
+            ),
+            name=listing.name,
+            purpose=listing.purpose,
+            details=listing.details,
+            gender=listing.gender,
+            starting_price=listing.starting_price,
+            duration_hours_snapshot=listing.duration_hours_snapshot,
+            fee_percent_snapshot=listing.fee_percent_snapshot,
+            state=listing.state,
+            ends_at=listing.ends_at,
+            final_amount=listing.final_amount,
+            fee_amount=listing.fee_amount,
+            created_at=listing.created_at,
+            finished_at=listing.finished_at,
+            disclosure_state=None if disclosure is None else disclosure.state,
+            disclosure_deadline=None if disclosure is None else disclosure.deadline,
+            seller_choice=None if disclosure is None else disclosure.seller_choice,
+            buyer_choice=None if disclosure is None else disclosure.buyer_choice,
+            bids=bid_views,
+        )
+
+    def list_dark_market_listings(
+        self,
+        status_filter: str | None,
+        page: int,
+        page_size: int,
+    ) -> tuple[list[DarkMarketAdminListing], int]:
+        with self._session() as session:
+            criteria = []
+            if status_filter is not None:
+                criteria.append(DarkMarketListingRecord.state == status_filter)
+            total = int(
+                session.scalar(
+                    select(func.count())
+                    .select_from(DarkMarketListingRecord)
+                    .where(*criteria)
+                )
+                or 0
+            )
+            records = list(
+                session.scalars(
+                    select(DarkMarketListingRecord)
+                    .where(*criteria)
+                    .order_by(DarkMarketListingRecord.public_number.desc())
+                    .offset((page - 1) * page_size)
+                    .limit(page_size)
+                )
+            )
+            return [
+                self._dark_market_admin_listing(
+                    session, record, include_bids=False
+                )
+                for record in records
+            ], total
+
+    def get_dark_market_listing(
+        self, listing_id: UUID
+    ) -> DarkMarketAdminListing | None:
+        with self._session() as session:
+            listing = session.get(DarkMarketListingRecord, listing_id)
+            if listing is None:
+                return None
+            return self._dark_market_admin_listing(
+                session, listing, include_bids=True
+            )
 
     def decide_dark_market_disclosure(
         self,

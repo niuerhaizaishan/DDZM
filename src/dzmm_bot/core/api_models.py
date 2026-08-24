@@ -825,6 +825,94 @@ class SetTexasHoldemSettingsRequest(ApiModel):
         return self
 
 
+class DarkMarketRankLimitResponse(ApiModel):
+    rank_id: UUID
+    rank_name: str
+    level_label: str
+    daily_limit: int = Field(ge=-1)
+
+
+class DarkMarketRankLimitRequest(ApiModel):
+    rank_id: UUID
+    daily_limit: int = Field(ge=-1)
+
+
+class DarkMarketSettingsResponse(ApiModel):
+    enabled: bool
+    announcement_group_id: UUID | None
+    duration_hours: int
+    fee_percent: int
+    version: int
+    rank_limits: list[DarkMarketRankLimitResponse]
+
+
+class SetDarkMarketSettingsRequest(ApiModel):
+    enabled: bool
+    announcement_group_id: UUID | None
+    duration_hours: int = Field(ge=1, le=24)
+    fee_percent: int = Field(ge=1, le=100)
+    rank_limits: list[DarkMarketRankLimitRequest] = Field(min_length=1)
+    expected_version: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def validate_rank_limits(self):
+        rank_ids = [item.rank_id for item in self.rank_limits]
+        if len(rank_ids) != len(set(rank_ids)):
+            raise ValueError("rank limits must be unique")
+        return self
+
+
+class DarkMarketBidResponse(ApiModel):
+    id: UUID
+    bidder_platform_id: str
+    bidder_display_name: str
+    amount: int
+    state: str
+    created_at: AwareDatetime
+    refunded_at: AwareDatetime | None
+    settled_at: AwareDatetime | None
+
+
+class DarkMarketListingResponse(ApiModel):
+    id: UUID
+    public_number: int
+    seller_platform_id: str
+    seller_display_name: str
+    buyer_platform_id: str | None
+    buyer_display_name: str | None
+    current_bidder_platform_id: str | None
+    current_bidder_display_name: str | None
+    name: str
+    purpose: str
+    details: str
+    gender: str
+    starting_price: int
+    duration_hours_snapshot: int
+    fee_percent_snapshot: int
+    state: str
+    ends_at: AwareDatetime
+    final_amount: int | None
+    fee_amount: int | None
+    created_at: AwareDatetime
+    finished_at: AwareDatetime | None
+    disclosure_state: str | None
+    disclosure_deadline: AwareDatetime | None
+    seller_choice: bool | None
+    buyer_choice: bool | None
+    bids: list[DarkMarketBidResponse] = Field(default_factory=list)
+
+
+class PaginatedDarkMarketListingsResponse(ApiModel):
+    items: list[DarkMarketListingResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+class DarkMarketForceDelistResponse(ApiModel):
+    status: str
+
+
 class RedPacketSettingsResponse(ApiModel):
     expiry_minutes: int
     empty_probability_percent: int
