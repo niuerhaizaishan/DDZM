@@ -882,6 +882,208 @@ class TexasHoldemDailyStartRecord(Base):
     count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 
+class DarkMarketSettingsRecord(Base):
+    __tablename__ = "dark_market_settings"
+    __table_args__ = (
+        CheckConstraint(
+            "duration_hours BETWEEN 1 AND 24", name="ck_dark_market_duration_hours"
+        ),
+        CheckConstraint(
+            "fee_percent BETWEEN 1 AND 100", name="ck_dark_market_fee_percent"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    announcement_group_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("group_chats.id")
+    )
+    duration_hours: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    fee_percent: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+class DarkMarketRankLimitRecord(Base):
+    __tablename__ = "dark_market_rank_limits"
+    __table_args__ = (
+        CheckConstraint("daily_limit >= -1", name="ck_dark_market_rank_daily_limit"),
+    )
+
+    rank_id: Mapped[UUID] = mapped_column(ForeignKey("ranks.id"), primary_key=True)
+    daily_limit: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class DarkMarketDraftRecord(Base):
+    __tablename__ = "dark_market_drafts"
+    __table_args__ = (
+        UniqueConstraint("user_id", name="uq_dark_market_drafts_user_id"),
+        CheckConstraint(
+            "step IN ('name', 'purpose', 'details', 'gender', 'starting_price', 'preview')",
+            name="ck_dark_market_draft_step",
+        ),
+        CheckConstraint(
+            "gender IS NULL OR gender IN ('male', 'female', 'private')",
+            name="ck_dark_market_draft_gender",
+        ),
+        CheckConstraint(
+            "starting_price IS NULL OR starting_price BETWEEN 1 AND 99999",
+            name="ck_dark_market_draft_starting_price",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    step: Mapped[str] = mapped_column(String(32), nullable=False)
+    name: Mapped[str | None] = mapped_column(String(30))
+    purpose: Mapped[str | None] = mapped_column(String(100))
+    details: Mapped[str | None] = mapped_column(String(500))
+    gender: Mapped[str | None] = mapped_column(String(16))
+    starting_price: Mapped[int | None] = mapped_column(Integer)
+    expires_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+
+
+class DarkMarketListingRecord(Base):
+    __tablename__ = "dark_market_listings"
+    __table_args__ = (
+        UniqueConstraint(
+            "public_number", name="uq_dark_market_listings_public_number"
+        ),
+        Index("ix_dark_market_listings_due", "state", "ends_at"),
+        CheckConstraint(
+            "state IN ('active', 'sold', 'unsold', 'force_delisted')",
+            name="ck_dark_market_listing_state",
+        ),
+        CheckConstraint(
+            "gender IN ('male', 'female', 'private')",
+            name="ck_dark_market_listing_gender",
+        ),
+        CheckConstraint(
+            "starting_price BETWEEN 1 AND 99999",
+            name="ck_dark_market_listing_starting_price",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    public_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    seller_user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id"), nullable=False
+    )
+    announcement_group_id: Mapped[UUID] = mapped_column(
+        ForeignKey("group_chats.id"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(30), nullable=False)
+    purpose: Mapped[str] = mapped_column(String(100), nullable=False)
+    details: Mapped[str] = mapped_column(String(500), nullable=False)
+    gender: Mapped[str] = mapped_column(String(16), nullable=False)
+    starting_price: Mapped[int] = mapped_column(Integer, nullable=False)
+    duration_hours_snapshot: Mapped[int] = mapped_column(Integer, nullable=False)
+    fee_percent_snapshot: Mapped[int] = mapped_column(Integer, nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    ends_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    buyer_user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))
+    final_amount: Mapped[int | None] = mapped_column(Integer)
+    fee_amount: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+
+
+class DarkMarketBidRecord(Base):
+    __tablename__ = "dark_market_bids"
+    __table_args__ = (
+        UniqueConstraint(
+            "inbound_message_id", name="uq_dark_market_bid_inbound"
+        ),
+        Index("ix_dark_market_bids_listing_created", "listing_id", "created_at"),
+        Index(
+            "ux_dark_market_one_current_bid",
+            "listing_id",
+            unique=True,
+            sqlite_where=text("state = 'current'"),
+            postgresql_where=text("state = 'current'"),
+        ),
+        CheckConstraint(
+            "amount BETWEEN 1 AND 99999", name="ck_dark_market_bid_amount"
+        ),
+        CheckConstraint(
+            "state IN ('current', 'refunded', 'settled')",
+            name="ck_dark_market_bid_state",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    listing_id: Mapped[UUID] = mapped_column(
+        ForeignKey("dark_market_listings.id"), nullable=False
+    )
+    bidder_user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id"), nullable=False
+    )
+    inbound_message_id: Mapped[UUID] = mapped_column(
+        ForeignKey("inbound_messages.id"), nullable=False
+    )
+    amount: Mapped[int] = mapped_column(Integer, nullable=False)
+    state: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    refunded_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    settled_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+
+
+class DarkMarketDisclosureRecord(Base):
+    __tablename__ = "dark_market_disclosures"
+    __table_args__ = (
+        UniqueConstraint(
+            "listing_id", name="uq_dark_market_disclosure_listing"
+        ),
+        CheckConstraint(
+            "state IN ('pending', 'revealed', 'anonymous')",
+            name="ck_dark_market_disclosure_state",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    listing_id: Mapped[UUID] = mapped_column(
+        ForeignKey("dark_market_listings.id"), nullable=False
+    )
+    seller_user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id"), nullable=False
+    )
+    buyer_user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id"), nullable=False
+    )
+    seller_choice: Mapped[bool | None] = mapped_column(Boolean)
+    buyer_choice: Mapped[bool | None] = mapped_column(Boolean)
+    state: Mapped[str] = mapped_column(String(16), nullable=False)
+    deadline: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+
+
+class DarkMarketDailyListingRecord(Base):
+    __tablename__ = "dark_market_daily_listings"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "usage_date", name="uq_dark_market_daily_listing_user_date"
+        ),
+        CheckConstraint("count >= 0", name="ck_dark_market_daily_listing_count"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    usage_date: Mapped[date] = mapped_column(Date, nullable=False)
+    count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+class DarkMarketNumberCounterRecord(Base):
+    __tablename__ = "dark_market_number_counters"
+    __table_args__ = (
+        CheckConstraint("next_number > 0", name="ck_dark_market_next_number"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    next_number: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+
 class HideAndSeekDailyPlayRecord(Base):
     __tablename__ = "hide_and_seek_daily_plays"
     __table_args__ = (UniqueConstraint("user_id", "play_date"),)
