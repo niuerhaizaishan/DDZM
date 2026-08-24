@@ -55,6 +55,7 @@ from .dark_market import (
     minimum_next_bid,
     normalize_listing_field,
     render_listing_detail,
+    render_listing_summary,
 )
 from .group_games import GROUP_GAME_TYPES, normalized_group_game_types
 from .number_bomb import (
@@ -929,6 +930,12 @@ class DarkMarketDisclosureResult:
 
 
 @dataclass(frozen=True)
+class DarkMarketBrowseResult:
+    status: str
+    text: str | None = None
+
+
+@dataclass(frozen=True)
 class PrivateGameCandidate:
     index: int
     group_chat_id: UUID
@@ -1569,6 +1576,13 @@ _COMMAND_DEFINITIONS = (
     ("/加注", "/加注 加到金额", "德州扑克加注到本轮总金额"),
     ("/全下", "/全下", "德州扑克投入剩余全部筹码"),
     ("/弃牌", "/弃牌", "德州扑克放弃本手牌"),
+    ("/上架暗网", "/上架暗网（仅私聊）", "进入暗网商品上架向导"),
+    ("/取消上架", "/取消上架（仅私聊）", "取消未确认的暗网商品草稿"),
+    ("/确认", "/确认（仅私聊）", "确认当前暗网商品草稿并正式上架"),
+    ("/报价", "/报价 商品编号 金额（仅私聊）", "为暗网商品提交匿名报价"),
+    ("/公开", "/公开 [商品编号]（仅私聊）", "同意公开暗网成交双方身份"),
+    ("/不公开", "/不公开 [商品编号]（仅私聊）", "拒绝公开暗网成交双方身份"),
+    ("/登陆暗网", "/登陆暗网 [商品编号]", "在暗网群查看竞价中的商品"),
     ("/投稿", "/投稿 随机事件", "进入随机事件私聊投稿向导"),
     ("/我的投稿", "/我的投稿", "查看自己最近的随机事件投稿状态"),
     ("/撤回投稿", "/撤回投稿 编号", "撤回自己仍在等待审核的随机事件投稿"),
@@ -5801,6 +5815,93 @@ class CoreRepository:
             session.delete(draft)
             return DarkMarketDraftResult("cancelled")
 
+    def dark_market_draft_step(
+        self, platform_id: str, now: datetime
+    ) -> str | None:
+        with self._session() as session:
+            user = session.scalar(
+                select(UserRecord).where(UserRecord.platform_id == platform_id)
+            )
+            if user is None:
+                return None
+            draft = session.scalar(
+                select(DarkMarketDraftRecord).where(
+                    DarkMarketDraftRecord.user_id == user.id
+                )
+            )
+            if draft is None:
+                return None
+            if draft.expires_at <= now:
+                session.delete(draft)
+                return None
+            return draft.step
+
+    def consume_dark_market_draft_text(
+        self, platform_id: str, content: str, now: datetime
+    ) -> DarkMarketDraftResult | None:
+        if not content.strip() or content.lstrip().startswith("/"):
+            return None
+        if self.dark_market_draft_step(platform_id, now) is None:
+            return None
+        return self.advance_dark_market_draft(platform_id, content, now)
+
+    def browse_dark_market(
+        self,
+        group_chat_id: UUID | None,
+        now: datetime,
+        public_number: int | None = None,
+    ) -> DarkMarketBrowseResult:
+        with self._session() as session:
+            self._ensure_dark_market_defaults(session)
+            settings = session.get(DarkMarketSettingsRecord, 1)
+            if (
+                settings is None
+                or settings.announcement_group_id is None
+                or group_chat_id != settings.announcement_group_id
+            ):
+                return DarkMarketBrowseResult("wrong_group")
+            query = (
+                select(DarkMarketListingRecord)
+                .where(
+                    DarkMarketListingRecord.state == "active",
+                    DarkMarketListingRecord.ends_at > now,
+                )
+                .order_by(DarkMarketListingRecord.public_number)
+            )
+            if public_number is not None:
+                query = query.where(
+                    DarkMarketListingRecord.public_number == public_number
+                )
+            listings = list(session.scalars(query))
+            if not listings:
+                return DarkMarketBrowseResult(
+                    "not_found" if public_number is not None else "empty"
+                )
+            lines = []
+            for listing in listings:
+                current_amount = session.scalar(
+                    select(DarkMarketBidRecord.amount).where(
+                        DarkMarketBidRecord.listing_id == listing.id,
+                        DarkMarketBidRecord.state == "current",
+                    )
+                )
+                view = DarkMarketListingView(
+                    public_number=listing.public_number,
+                    name=listing.name,
+                    purpose=listing.purpose,
+                    details=listing.details,
+                    gender=listing.gender,
+                    starting_price=listing.starting_price,
+                    current_price=current_amount,
+                    state=listing.state,
+                )
+                lines.append(
+                    render_listing_detail(view)
+                    if public_number is not None
+                    else render_listing_summary(view)
+                )
+            return DarkMarketBrowseResult("shown", "\n".join(lines))
+
     @staticmethod
     def _dark_market_listing_summary(
         listing: DarkMarketListingRecord,
@@ -5939,11 +6040,22 @@ class CoreRepository:
         platform_id: str,
         public_number: int,
         amount: int,
-        inbound_id: UUID,
+        inbound_id: UUID | str,
         now: datetime,
     ) -> DarkMarketBidResult:
         with self.transaction():
             with self._session() as session:
+                if not isinstance(inbound_id, UUID):
+                    resolved_inbound_id = session.scalar(
+                        select(InboundRecord.id).where(
+                            InboundRecord.platform_message_id == inbound_id,
+                            InboundRecord.sender_platform_id == platform_id,
+                            InboundRecord.source_type == "direct",
+                        )
+                    )
+                    if resolved_inbound_id is None:
+                        raise ValueError("暗网报价入站消息不存在")
+                    inbound_id = resolved_inbound_id
                 existing = session.scalar(
                     select(DarkMarketBidRecord).where(
                         DarkMarketBidRecord.inbound_message_id == inbound_id

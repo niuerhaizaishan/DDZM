@@ -252,6 +252,135 @@ def _group_receive(service, message_id, sender, content, now, chatroom_id):
     )
 
 
+def _direct_receive(service, message_id, sender, content, now, chatroom_id):
+    return service.receive_inbound(
+        InboundMessage(
+            message_id,
+            sender,
+            content,
+            now,
+            source_type="direct",
+            chatroom_id=chatroom_id,
+        )
+    )
+
+
+def _configure_dark_market(repository, group_id):
+    settings = repository.get_dark_market_settings()
+    repository.set_dark_market_settings(
+        enabled=True,
+        announcement_group_id=group_id,
+        duration_hours=3,
+        fee_percent=5,
+        rank_limits={item.rank_id: item.daily_limit for item in settings.rank_limits},
+        expected_version=settings.version,
+    )
+
+
+def test_dark_market_listing_wizard_is_private_and_login_is_group_scoped():
+    service, repository, factory = _service()
+    now = datetime(2026, 8, 24, 10, 0, tzinfo=BEIJING)
+    market = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=dark-command-market", now
+    )
+    other = repository.create_group_chat(
+        "普通群",
+        "https://www.aikda.com/chat?c=dark-command-other",
+        True,
+        True,
+        True,
+        True,
+        now,
+    )
+    repository.create_user("dark-seller", "暗网卖家", now, 100)
+    repository.upsert_direct_chats(
+        [("dark-seller", "direct-dark-seller")], now
+    )
+    _configure_dark_market(repository, market.id)
+
+    wrong_channel = _group_receive(
+        service,
+        "dark-start-group",
+        "dark-seller",
+        "/上架暗网",
+        now,
+        market.chatroom_id,
+    )
+    wrong_group = _group_receive(
+        service,
+        "dark-login-other",
+        "dark-seller",
+        "/登陆暗网",
+        now,
+        other.chatroom_id,
+    )
+
+    assert "私聊" in "".join(_replies_for(factory, wrong_channel.message_id))
+    assert _replies_for(factory, wrong_group.message_id) == [
+        "本群不是暗网交易所入口。"
+    ]
+
+
+def test_dark_market_commands_complete_listing_bid_and_query():
+    service, repository, factory = _service()
+    now = datetime(2026, 8, 24, 10, 0, tzinfo=BEIJING)
+    market = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=dark-command-flow", now
+    )
+    for platform_id, name in (("seller", "卖家"), ("buyer", "买家")):
+        repository.create_user(platform_id, name, now, 100)
+    repository.upsert_direct_chats(
+        [("seller", "direct-seller"), ("buyer", "direct-buyer")], now
+    )
+    _configure_dark_market(repository, market.id)
+
+    messages = [
+        ("start", "/上架暗网"),
+        ("name", "旧钥匙"),
+        ("purpose", "开门"),
+        ("details", "来历不明"),
+        ("gender", "保密"),
+        ("price", "10"),
+        ("confirm", "/确认"),
+    ]
+    last = None
+    for suffix, content in messages:
+        last = _direct_receive(
+            service,
+            f"dark-{suffix}",
+            "seller",
+            content,
+            now,
+            "direct-seller",
+        )
+    assert last is not None
+    assert "上架成功" in "".join(_replies_for(factory, last.message_id))
+
+    bid = _direct_receive(
+        service,
+        "dark-bid",
+        "buyer",
+        "/报价 1 20",
+        now,
+        "direct-buyer",
+    )
+    login = _group_receive(
+        service,
+        "dark-login",
+        "buyer",
+        "/登陆暗网 1",
+        now,
+        market.chatroom_id,
+    )
+
+    assert "报价成功" in "".join(_replies_for(factory, bid.message_id))
+    login_text = "".join(_replies_for(factory, login.message_id))
+    assert "旧钥匙" in login_text
+    assert "当前 20" in login_text
+    assert "卖家" not in login_text
+    assert "截止" not in login_text
+
+
 def test_texas_holdem_group_commands_create_join_start_and_deal_privately():
     service, repository, factory = _service(
         preserve_long_group_messages=True,

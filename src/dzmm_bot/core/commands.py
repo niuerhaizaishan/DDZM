@@ -19,7 +19,7 @@ from .service import CommandReply
 
 _BEIJING = ZoneInfo("Asia/Shanghai")
 _COMMANDS = {
-    "/入职", "/我的物品", "/打卡", "/余额", "/修改名称", "/编辑档案", "/编辑档案形象", "/我的档案", "/发奖金", "/发红包", "/抢红包", "/打赏", "/我", "/商店", "/帮助", "/当前游戏", "/加入", "/退出", "/开始", "/摸鱼躲猫猫", "/记忆考核", "/继续", "/收手", "/投降", "/部门", "/部门人数", "/我的部门人数", "/加入部门", "/切换部门", "/部门申请列表", "/同意部门", "/全部同意部门", "/拒绝部门", "/全部拒绝部门", "/职位", "/晋升", "/晋升申请列表", "/同意", "/全部同意", "/拒绝", "/全部拒绝", "/谁是卧底", "/开始投票", "/投票", "/退出谁是卧底", "/结束游戏", "/甩锅游戏", "/甩锅", "/退出甩锅", "/蹦蹦数字炸弹", "/报数", "/跳过", "/德州扑克", "/看牌", "/过牌", "/跟注", "/加注", "/全下", "/弃牌",
+    "/入职", "/我的物品", "/打卡", "/余额", "/修改名称", "/编辑档案", "/编辑档案形象", "/我的档案", "/发奖金", "/发红包", "/抢红包", "/打赏", "/我", "/商店", "/帮助", "/当前游戏", "/加入", "/退出", "/开始", "/摸鱼躲猫猫", "/记忆考核", "/继续", "/收手", "/投降", "/部门", "/部门人数", "/我的部门人数", "/加入部门", "/切换部门", "/部门申请列表", "/同意部门", "/全部同意部门", "/拒绝部门", "/全部拒绝部门", "/职位", "/晋升", "/晋升申请列表", "/同意", "/全部同意", "/拒绝", "/全部拒绝", "/谁是卧底", "/开始投票", "/投票", "/退出谁是卧底", "/结束游戏", "/甩锅游戏", "/甩锅", "/退出甩锅", "/蹦蹦数字炸弹", "/报数", "/跳过", "/德州扑克", "/看牌", "/过牌", "/跟注", "/加注", "/全下", "/弃牌", "/上架暗网", "/取消上架", "/确认", "/报价", "/公开", "/不公开", "/登陆暗网",
 }
 
 
@@ -64,6 +64,22 @@ class GroupCommandHandler:
             else None
         )
         group_chat_id = None if group is None else group.id
+        if command == "/上架暗网":
+            return self._dark_market_start(message, received_at)
+        if command == "/取消上架":
+            return self._dark_market_cancel(message, received_at)
+        if command == "/确认":
+            return self._dark_market_confirm(message, received_at)
+        if command == "/报价":
+            return self._dark_market_bid(message, content, received_at)
+        if command in {"/公开", "/不公开"}:
+            return self._dark_market_disclose(
+                message, command, content, received_at
+            )
+        if command == "/登陆暗网":
+            return self._dark_market_login(
+                message, content, received_at, group_chat_id
+            )
         if (
             group is not None
             and not group.games_enabled
@@ -424,6 +440,154 @@ class GroupCommandHandler:
                 message.sender_platform_id, received_at, group_chat_id
             )
         return self._help(content, received_at)
+
+    @staticmethod
+    def _dark_market_prompt(step: str | None) -> str:
+        return {
+            "name": "请发送商品名称（1–30 字）。",
+            "purpose": "请发送商品用途（1–100 字）。",
+            "details": "请发送商品详细信息（1–500 字）。",
+            "gender": "请选择匿名性别并发送：男、女或保密。",
+            "starting_price": "请发送起拍价（1–99999 的整数）。",
+            "preview": "草稿已填写完成，请发送 /确认 正式上架。",
+        }.get(step, "请重新发送 /上架暗网。")
+
+    def _dark_market_start(self, message: InboundMessage, received_at):
+        if message.source_type != "direct":
+            return "请私聊总监事发送 /上架暗网。"
+        result = self._repository.start_dark_market_draft(
+            message.sender_platform_id, received_at
+        )
+        if result.status == "not_joined":
+            return "请先用 /入职 名字 加入摸鱼公司。"
+        if result.status == "unavailable":
+            return "暗网交易所暂未开放。"
+        return self._dark_market_prompt(result.step)
+
+    def _dark_market_cancel(self, message: InboundMessage, received_at):
+        if message.source_type != "direct":
+            return "请在私聊中发送 /取消上架。"
+        result = self._repository.cancel_dark_market_draft(
+            message.sender_platform_id, received_at
+        )
+        if result.status == "cancelled":
+            return "暗网上架草稿已取消。"
+        if result.status == "not_joined":
+            return "请先用 /入职 名字 加入摸鱼公司。"
+        return "当前没有可取消的暗网上架草稿。"
+
+    def _dark_market_confirm(self, message: InboundMessage, received_at):
+        if message.source_type != "direct":
+            return "请在私聊中发送 /确认。"
+        result = self._repository.confirm_dark_market_listing(
+            message.sender_platform_id,
+            message.platform_message_id,
+            received_at,
+        )
+        if result.status == "listed" and result.listing is not None:
+            return f"暗网商品 #{result.listing.public_number} 上架成功。"
+        messages = {
+            "not_joined": "请先用 /入职 名字 加入摸鱼公司。",
+            "unavailable": "暗网交易所暂未开放。",
+            "expired": "暗网上架草稿已超时，请重新发送 /上架暗网。",
+            "daily_limit": "你今天的暗网商品上架次数已用完。",
+            "no_draft": "当前没有可确认的完整暗网上架草稿。",
+        }
+        return messages.get(result.status, "暗网商品上架失败，请稍后重试。")
+
+    def _dark_market_bid(
+        self, message: InboundMessage, content: str, received_at
+    ):
+        if message.source_type != "direct":
+            return "请在私聊中发送 /报价 商品编号 金额。"
+        parts = content.split()
+        if (
+            len(parts) != 3
+            or not all(part.isascii() and part.isdigit() for part in parts[1:])
+        ):
+            return "请用 /报价 商品编号 金额，例如 /报价 12 25。"
+        result = self._repository.place_dark_market_bid(
+            message.sender_platform_id,
+            int(parts[1]),
+            int(parts[2]),
+            message.platform_message_id,
+            received_at,
+        )
+        if result.status == "accepted":
+            return (
+                f"暗网商品 #{result.public_number} 报价成功：{result.amount} 摸鱼币，"
+                f"当前冻结 {result.frozen_amount} 摸鱼币。"
+            )
+        messages = {
+            "not_joined": "请先用 /入职 名字 加入摸鱼公司。",
+            "not_found": "未找到该暗网商品。",
+            "ended": "该暗网商品已结束竞价。",
+            "invalid_amount": "报价金额必须是 1–99999 的整数。",
+            "insufficient_balance": "余额不足，无法提交该报价。",
+        }
+        if result.status == "too_low":
+            return f"报价过低，下一次报价至少为 {result.minimum_amount} 摸鱼币。"
+        return messages.get(result.status, "暗网报价失败，请稍后重试。")
+
+    def _dark_market_disclose(
+        self,
+        message: InboundMessage,
+        command: str,
+        content: str,
+        received_at,
+    ):
+        if message.source_type != "direct":
+            return f"请在私聊中发送 {command}。"
+        parts = content.split()
+        if len(parts) > 2 or (
+            len(parts) == 2
+            and (not parts[1].isascii() or not parts[1].isdigit())
+        ):
+            return f"请用 {command} [商品编号]。"
+        result = self._repository.decide_dark_market_disclosure(
+            message.sender_platform_id,
+            None if len(parts) == 1 else int(parts[1]),
+            command == "/公开",
+            message.platform_message_id,
+            received_at,
+        )
+        if result.status == "choose_listing":
+            numbers = "、".join(f"#{number}" for number in result.candidates)
+            return f"你有多笔待确认交易：{numbers}。请在指令后加商品编号。"
+        return {
+            "waiting_other": "你的选择已记录，正在等待另一方确认。",
+            "revealed": "双方均同意，买卖双方身份已在暗网群公开。",
+            "anonymous": "本次交易将保持匿名。",
+            "expired": "公开确认已超时，本次交易保持匿名。",
+            "no_pending": "当前没有需要你确认公开身份的暗网交易。",
+            "not_joined": "请先用 /入职 名字 加入摸鱼公司。",
+        }.get(result.status, "公开选择处理失败，请稍后重试。")
+
+    def _dark_market_login(
+        self,
+        message: InboundMessage,
+        content: str,
+        received_at,
+        group_chat_id,
+    ):
+        if message.source_type != "group":
+            return "请在配置的暗网群中发送 /登陆暗网。"
+        parts = content.split()
+        if len(parts) > 2 or (
+            len(parts) == 2
+            and (not parts[1].isascii() or not parts[1].isdigit())
+        ):
+            return "请用 /登陆暗网 或 /登陆暗网 商品编号。"
+        result = self._repository.browse_dark_market(
+            group_chat_id,
+            received_at,
+            None if len(parts) == 1 else int(parts[1]),
+        )
+        return {
+            "wrong_group": "本群不是暗网交易所入口。",
+            "empty": "暗网交易所当前没有竞价中的商品。",
+            "not_found": "未找到该竞价中的暗网商品。",
+        }.get(result.status, result.text or "暗网交易所查询失败。")
 
     def _red_packet_create(
         self, message, content: str, received_at, group_chat_id=None

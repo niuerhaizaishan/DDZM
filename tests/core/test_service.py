@@ -671,3 +671,78 @@ def test_enqueue_failure_rolls_back_inbound(session_factory, inbound):
     with session_factory() as session:
         assert session.scalar(select(InboundRecord)) is None
         assert session.scalar(select(WorkerCommandRecord)) is None
+
+
+def test_direct_plain_text_advances_only_the_senders_dark_market_draft(
+    session_factory,
+):
+    from dzmm_bot.core.commands import GroupCommandHandler
+    from dzmm_bot.core.repository import CoreRepository
+    from dzmm_bot.core.schema import OutboundRecord, PRIMARY_GROUP_CHAT_ID
+    from dzmm_bot.core.service import CoreService
+
+    repository = CoreRepository(session_factory)
+    now = datetime(2026, 8, 24, 10, 0, tzinfo=UTC)
+    repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=dark-service", now
+    )
+    for platform_id, name in (("draft-a", "草稿甲"), ("draft-b", "草稿乙")):
+        repository.create_user(platform_id, name, now, 100)
+    settings = repository.get_dark_market_settings()
+    repository.set_dark_market_settings(
+        enabled=True,
+        announcement_group_id=PRIMARY_GROUP_CHAT_ID,
+        duration_hours=3,
+        fee_percent=5,
+        rank_limits={item.rank_id: item.daily_limit for item in settings.rank_limits},
+        expected_version=settings.version,
+    )
+    service = CoreService(repository, GroupCommandHandler(repository))
+    for platform_id in ("draft-a", "draft-b"):
+        service.receive_inbound(
+            InboundMessage(
+                f"start-{platform_id}",
+                platform_id,
+                "/上架暗网",
+                now,
+                source_type="direct",
+                chatroom_id=f"direct-{platform_id}",
+            )
+        )
+
+    advanced = service.receive_inbound(
+        InboundMessage(
+            "draft-a-name",
+            "draft-a",
+            "甲的商品",
+            now,
+            source_type="direct",
+            chatroom_id="direct-draft-a",
+        )
+    )
+    unrelated = service.receive_inbound(
+        InboundMessage(
+            "no-draft-plain",
+            "no-draft",
+            "普通私聊",
+            now,
+            source_type="direct",
+            chatroom_id="direct-no-draft",
+        )
+    )
+
+    assert repository.dark_market_draft_step("draft-a", now) == "purpose"
+    assert repository.dark_market_draft_step("draft-b", now) == "name"
+    with session_factory() as session:
+        reply = session.scalar(
+            select(OutboundRecord).where(
+                OutboundRecord.inbound_message_id == advanced.message_id
+            )
+        )
+        no_reply = session.scalar(
+            select(OutboundRecord).where(
+                OutboundRecord.inbound_message_id == unrelated.message_id
+            )
+        )
+    assert "用途" in reply.text
+    assert no_reply is None

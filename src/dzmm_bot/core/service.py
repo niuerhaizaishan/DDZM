@@ -19,6 +19,8 @@ _DIRECT_COMMANDS = {
     "/帮助", "/当前游戏", "/我的档案", "/我的部门人数", "/打卡",
     "/编辑档案", "/编辑档案形象", "/加入", "/退出", "/开始",
     "/答案", "/继续", "/收手", "/投降", "/跳过", "/结束游戏", "/看牌",
+    "/上架暗网", "/取消上架", "/确认", "/报价", "/公开", "/不公开",
+    "/登陆暗网",
 }
 _RANDOM_EVENT_INDEPENDENT_COMMANDS = {
     "/发红包", "/抢红包", "/打赏", "/余额", "/当前游戏"
@@ -110,6 +112,13 @@ class CoreService:
                     direct_reply = self._command_handler.handle(message)
                 elif not message.content.lstrip().startswith("/"):
                     direct_reply = self._submission_handler.handle(message)
+                    if direct_reply is None:
+                        draft_reply = self._repository.consume_dark_market_draft_text(
+                            message.sender_platform_id,
+                            message.content,
+                            message.received_at,
+                        )
+                        direct_reply = self._dark_market_draft_reply(draft_reply)
                 else:
                     return ReceiveResult(stored.id, True)
                 self._enqueue_replies(
@@ -301,6 +310,25 @@ class CoreService:
                     delivery_kind=reply.delivery_kind,
                 )
             return ReceiveResult(stored.id, True)
+
+    @staticmethod
+    def _dark_market_draft_reply(result):
+        if result is None:
+            return None
+        if result.status == "preview":
+            return result.preview_text
+        if result.status == "invalid":
+            return "填写内容不符合要求，请按当前提示重新发送。"
+        if result.status == "expired":
+            return "暗网上架草稿已超时，请重新发送 /上架暗网。"
+        prompts = {
+            "name": "请发送商品名称（1–30 字）。",
+            "purpose": "请发送商品用途（1–100 字）。",
+            "details": "请发送商品详细信息（1–500 字）。",
+            "gender": "请选择匿名性别并发送：男、女或保密。",
+            "starting_price": "请发送起拍价（1–99999 的整数）。",
+        }
+        return prompts.get(result.step)
 
     def _enqueue_replies(
         self,
