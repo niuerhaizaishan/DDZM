@@ -14,6 +14,8 @@ let profileSettings = null;
 let activitySettings = null;
 let numberBombSettings = null;
 let texasHoldemSettings = null;
+let darkMarketSettings = null;
+let darkMarketPage = 1;
 let redPacketSettings = null;
 let currentGameplay = null;
 let gameplayVersion = null;
@@ -86,6 +88,7 @@ const pageContext = {
   undercover: {crumb: "游戏运营 / 谁是卧底", title: "谁是卧底运营", description: "查看公开对局进度，并维护多人推理局的基础规则。"},
   "blame-bomb": {crumb: "游戏运营 / 甩锅游戏", title: "甩锅游戏运营", description: "管理事故卡、逐人数时长规则和当前公开对局。"},
   "texas-holdem": {crumb: "游戏运营 / 德州扑克", title: "德州扑克运营", description: "配置现金桌规则并查看不含底牌的公开牌局状态。"},
+  "dark-market": {crumb: "游戏运营 / 暗网交易所", title: "暗网交易所", description: "配置匿名市场并查看真实交易记录、报价链与结算状态。"},
   "ai-assistant": {crumb: "机器人运营 / AI 总监事", title: "AI 总监事", description: "配置群内 AI 人设、系统提示词与各职位每日调用上限。"},
   settings: {crumb: "玩法与资源 / 玩法配置", title: "玩法配置", description: "集中维护经济、打卡、全勤和日活跃度规则。"},
   commands: {crumb: "玩法与资源 / 指令库", title: "指令库", description: "配置群内指令的启用状态与标准回复模板。"},
@@ -276,6 +279,8 @@ const activityRuleInputs = document.querySelector("#activity-rule-inputs");
 const incomeReportTimeInputs = document.querySelector("#income-report-time-inputs");
 const numberBombSettingsModal = document.querySelector("#number-bomb-settings-modal");
 const texasHoldemSettingsModal = document.querySelector("#texas-holdem-settings-modal");
+const darkMarketSettingsModal = document.querySelector("#dark-market-settings-modal");
+const darkMarketDetailModal = document.querySelector("#dark-market-detail-modal");
 const numberBombEnabled = document.querySelector("#number-bomb-enabled");
 const numberBombSignupMinutes = document.querySelector("#number-bomb-signup-minutes");
 const numberBombReminderSeconds = document.querySelector("#number-bomb-reminder-seconds");
@@ -431,6 +436,14 @@ function closeTexasHoldemSettingsModal() {
   texasHoldemSettingsModal.hidden = true;
 }
 
+function closeDarkMarketSettingsModal() {
+  darkMarketSettingsModal.hidden = true;
+}
+
+function closeDarkMarketDetailModal() {
+  darkMarketDetailModal.hidden = true;
+}
+
 function closeRedPacketSettingsModal() {
   redPacketSettingsModal.hidden = true;
 }
@@ -493,6 +506,39 @@ function renderTexasHoldemSettings(settings) {
     <article><span>报名 / 行动</span><strong>${settings.signup_timeout_seconds} / ${settings.action_timeout_seconds} 秒</strong><small>超时自动处理</small></article>
     <article><span>盲注比例</span><strong>${settings.small_blind_percent}% / ${settings.big_blind_percent}%</strong><small>小盲 / 大盲，按带入金额计算</small></article>
     <article><span>每日发起</span><strong>${settings.daily_start_limit} 次</strong><small>按发起人统计</small></article>`;
+}
+
+function darkMarketStateLabel(state) {
+  return ({active: "竞价中", sold: "已成交", unsold: "已流拍", force_delisted: "强制下架"})[state] || state;
+}
+
+function renderDarkMarketSettings(settings) {
+  const group = groupChats.find((item) => item.id === settings.announcement_group_id);
+  document.querySelector("#dark-market-settings-card").innerHTML = `
+    <article><span>交易所状态</span><strong>${settings.enabled ? "已启用" : "已停用"}</strong><small>停用不影响既有商品</small></article>
+    <article><span>暗网播报群</span><strong>${escapeHtml(group?.name || "未配置")}</strong><small>仅此群可查询并接收公告</small></article>
+    <article><span>交易时长</span><strong>${settings.duration_hours} 小时</strong><small>玩家端不显示精确截止时间</small></article>
+    <article><span>成交手续费</span><strong>${settings.fee_percent}%</strong><small>从卖家成交款中向上取整扣除</small></article>
+    <article><span>职位额度</span><strong>${settings.rank_limits.length} 档</strong><small>${escapeHtml(settings.rank_limits.map((item) => `${item.level_label} ${item.daily_limit < 0 ? "不限" : `${item.daily_limit}次`}`).join(" · "))}</small></article>`;
+}
+
+function renderDarkMarketListings(records) {
+  const container = document.querySelector("#dark-market-listings");
+  container.innerHTML = records.items.map((item) => `
+    <article class="data-row"><div><b>#${item.public_number} ${escapeHtml(item.name)}</b><small>${statusBadge(darkMarketStateLabel(item.state), item.state === "active" ? "success" : "")}</small><small>卖家：${escapeHtml(item.seller_display_name)} · 当前报价者：${escapeHtml(item.current_bidder_display_name || "无")} · 起拍 ${item.starting_price}</small><small>创建：${escapeHtml(formatHeartbeat(item.created_at))} · 截止：${escapeHtml(formatHeartbeat(item.ends_at))}${item.final_amount == null ? "" : ` · 成交 ${item.final_amount} · 手续费 ${item.fee_amount}`}</small></div><div class="command-actions"><button class="secondary" data-dark-market-detail="${escapeHtml(item.id)}" type="button">查看详情</button>${item.state === "active" ? `<button class="danger-button" data-action="force-delist-dark-market" data-listing-id="${escapeHtml(item.id)}" type="button">强制下架</button>` : ""}</div></article>`).join("") || '<p class="muted">没有符合条件的暗网交易记录。</p>';
+  records.pages = Math.max(1, Math.ceil(records.total / records.page_size));
+  renderPagination(document.querySelector("#dark-market-pagination"), records, "笔交易", loadDarkMarketListings);
+}
+
+function renderDarkMarketDetail(item) {
+  const bids = item.bids.length
+    ? item.bids.map((bid, index) => `<article class="data-row"><div><b>${index + 1}. ${escapeHtml(bid.bidder_display_name)} · ${bid.amount} 摸鱼币</b><small>平台 ID：${escapeHtml(bid.bidder_platform_id)} · ${escapeHtml(bid.state)} · ${escapeHtml(formatHeartbeat(bid.created_at))}</small></div></article>`).join("")
+    : '<p class="muted">没有报价记录。</p>';
+  document.querySelector("#dark-market-detail-title").textContent = `暗网商品 #${item.public_number}`;
+  document.querySelector("#dark-market-detail").innerHTML = `
+    <article class="data-row"><div><b>${escapeHtml(item.name)}</b><small>用途：${escapeHtml(item.purpose)}</small><small>信息：${escapeHtml(item.details)}</small><small>匿名性别：${escapeHtml(item.gender)} · 状态：${escapeHtml(darkMarketStateLabel(item.state))}</small></div></article>
+    <article class="data-row"><div><b>卖家：${escapeHtml(item.seller_display_name)}</b><small>平台 ID：${escapeHtml(item.seller_platform_id)}</small><small>买家：${escapeHtml(item.buyer_display_name || "尚未成交")} ${item.buyer_platform_id ? `· ${escapeHtml(item.buyer_platform_id)}` : ""}</small><small>公开状态：${escapeHtml(item.disclosure_state || "无")} · 卖家选择 ${String(item.seller_choice)} · 买家选择 ${String(item.buyer_choice)}</small></div></article>
+    <article class="data-row"><div><b>报价链</b></div></article>${bids}`;
 }
 
 function renderTexasHoldemSession(gameplay) {
@@ -1306,6 +1352,30 @@ async function loadTexasHoldemSettings() {
   return texasHoldemSettings;
 }
 
+async function loadDarkMarketSettings() {
+  if (!groupChats.length) await loadGroupChats();
+  darkMarketSettings = await requestGame("/api/game/dark-market/settings");
+  configurationVersion = darkMarketSettings.version;
+  renderDarkMarketSettings(darkMarketSettings);
+  return darkMarketSettings;
+}
+
+async function loadDarkMarketListings(page = darkMarketPage) {
+  const status = document.querySelector("#dark-market-status-filter").value;
+  const pageSize = Number(document.querySelector("#dark-market-page-size").value);
+  const query = new URLSearchParams({page: String(page), page_size: String(pageSize)});
+  if (status) query.set("status", status);
+  const records = await requestGame(`/api/game/dark-market/listings?${query}`);
+  darkMarketPage = records.page;
+  renderDarkMarketListings(records);
+  return records;
+}
+
+async function loadDarkMarket() {
+  await loadDarkMarketSettings();
+  await loadDarkMarketListings(1);
+}
+
 async function loadRedPacketSettings() {
   redPacketSettings = await requestGame("/api/game/red-packet/settings");
   configurationVersion = redPacketSettings.version;
@@ -1336,6 +1406,19 @@ async function openTexasHoldemSettingsModal() {
   document.querySelector("#texas-holdem-big-blind").value = settings.big_blind_percent;
   texasHoldemSettingsModal.hidden = false;
   document.querySelector("#texas-holdem-minimum-players").focus();
+}
+
+async function openDarkMarketSettingsModal() {
+  const settings = darkMarketSettings || await loadDarkMarketSettings();
+  const availableGroups = groupChats.filter((group) => group.listening_enabled && !group.deleted_at && group.chatroom_id);
+  document.querySelector("#dark-market-enabled").checked = settings.enabled;
+  document.querySelector("#dark-market-group").innerHTML = '<option value="">请选择群聊</option>' + availableGroups.map((group) => `<option value="${escapeHtml(group.id)}">${escapeHtml(group.name)}</option>`).join("");
+  document.querySelector("#dark-market-group").value = settings.announcement_group_id || "";
+  document.querySelector("#dark-market-duration").value = settings.duration_hours;
+  document.querySelector("#dark-market-fee").value = settings.fee_percent;
+  document.querySelector("#dark-market-rank-limits").innerHTML = settings.rank_limits.map((item) => `<label>${escapeHtml(item.rank_name)}（${escapeHtml(item.level_label)}）<input data-dark-market-rank-id="${escapeHtml(item.rank_id)}" type="number" min="-1" value="${item.daily_limit}" required></label>`).join("");
+  darkMarketSettingsModal.hidden = false;
+  document.querySelector("#dark-market-group").focus();
 }
 
 async function openRedPacketSettingsModal() {
@@ -1708,6 +1791,7 @@ async function loadGameView(view) {
       await Promise.all([loadTexasHoldemSettings(), loadCurrentGameplay()]);
       return;
     }
+    if (view === "dark-market") return loadDarkMarket();
     if (view === "ai-assistant") return loadAiAssistant();
     if (view === "commands") {
       const commands = await requestGame("/api/game/commands");
@@ -1973,6 +2057,10 @@ document.querySelector("#edit-profile-settings").addEventListener("click", () =>
 document.querySelector("#edit-activity-settings").addEventListener("click", () => void openActivitySettingsModal());
 document.querySelector("#edit-number-bomb-settings").addEventListener("click", () => void openNumberBombSettingsModal());
 document.querySelector("#edit-texas-holdem-settings").addEventListener("click", () => void openTexasHoldemSettingsModal());
+document.querySelector("#edit-dark-market-settings").addEventListener("click", () => void openDarkMarketSettingsModal());
+document.querySelector("#refresh-dark-market").addEventListener("click", (event) => void runMutation(event.currentTarget, "刷新中…", () => loadDarkMarketListings()));
+document.querySelector("#dark-market-status-filter").addEventListener("change", () => void loadDarkMarketListings(1));
+document.querySelector("#dark-market-page-size").addEventListener("change", () => void loadDarkMarketListings(1));
 document.querySelector("#edit-red-packet-settings").addEventListener("click", () => void openRedPacketSettingsModal());
 document.querySelector("#edit-random-event-settings").addEventListener("click", () => void openRandomEventSettingsModal());
 document.querySelector("#create-random-event-scene").addEventListener("click", () => openRandomEventSceneModal());
@@ -2515,6 +2603,78 @@ texasHoldemSettingsModal.addEventListener("click", async (event) => {
     setResult("德州扑克设置已保存", "success");
   } catch (error) {
     setResult(`保存失败（${error.message}）`, "error");
+  }
+});
+darkMarketSettingsModal.addEventListener("click", async (event) => {
+  if (event.target.closest("[data-close-dark-market-settings-modal]")) {
+    closeDarkMarketSettingsModal();
+    return;
+  }
+  if (event.target.id !== "save-dark-market-settings") return;
+  const rankLimits = [...document.querySelectorAll("[data-dark-market-rank-id]")].map((input) => ({
+    rank_id: input.dataset.darkMarketRankId,
+    daily_limit: Number(input.value),
+  }));
+  const payload = {
+    enabled: document.querySelector("#dark-market-enabled").checked,
+    announcement_group_id: document.querySelector("#dark-market-group").value || null,
+    duration_hours: Number(document.querySelector("#dark-market-duration").value),
+    fee_percent: Number(document.querySelector("#dark-market-fee").value),
+    rank_limits: rankLimits,
+  };
+  const valid = (!payload.enabled || payload.announcement_group_id)
+    && Number.isInteger(payload.duration_hours) && payload.duration_hours >= 1 && payload.duration_hours <= 24
+    && Number.isInteger(payload.fee_percent) && payload.fee_percent >= 1 && payload.fee_percent <= 100
+    && rankLimits.length && rankLimits.every((item) => Number.isInteger(item.daily_limit) && item.daily_limit >= -1);
+  if (!valid) {
+    setResult("暗网交易所设置无效，请检查群聊、时长、手续费和职位额度", "error");
+    return;
+  }
+  try {
+    await runMutation(event.target, "保存中…", async () => {
+      darkMarketSettings = await requestGame("/api/game/dark-market/settings", {
+        method: "PATCH",
+        headers: {"Content-Type": "application/json", ...configurationHeaders()},
+        body: JSON.stringify(payload),
+      });
+      configurationVersion = darkMarketSettings.version;
+      renderDarkMarketSettings(darkMarketSettings);
+      closeDarkMarketSettingsModal();
+    });
+    setResult("暗网交易所设置已保存", "success");
+  } catch (error) {
+    setResult(`保存失败（${error.message}）`, "error");
+  }
+});
+darkMarketDetailModal.addEventListener("click", (event) => {
+  if (event.target.closest("[data-close-dark-market-detail-modal]")) closeDarkMarketDetailModal();
+});
+document.querySelector("#dark-market-listings").addEventListener("click", async (event) => {
+  const detailButton = event.target.closest("[data-dark-market-detail]");
+  if (detailButton) {
+    try {
+      const item = await requestGame(`/api/game/dark-market/listings/${detailButton.dataset.darkMarketDetail}`);
+      renderDarkMarketDetail(item);
+      darkMarketDetailModal.hidden = false;
+    } catch (error) {
+      setResult(`读取失败（${error.message}）`, "error");
+    }
+    return;
+  }
+  const delistButton = event.target.closest('[data-action="force-delist-dark-market"]');
+  if (!delistButton || !window.confirm("确定强制下架该商品并退还当前最高报价吗？")) return;
+  try {
+    await runMutation(delistButton, "下架中…", async () => {
+      const response = await requestGame(`/api/game/dark-market/listings/${delistButton.dataset.listingId}/force-delist`, {
+        method: "POST",
+        headers: configurationHeaders(),
+      });
+      configurationVersion = response.version;
+      await loadDarkMarketListings();
+    });
+    setResult("暗网商品已强制下架", "success");
+  } catch (error) {
+    setResult(`下架失败（${error.message}）`, "error");
   }
 });
 redPacketSettingsModal.addEventListener("click", async (event) => {
@@ -3377,6 +3537,8 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !activitySettingsModal.hidden) closeActivitySettingsModal();
   if (event.key === "Escape" && !numberBombSettingsModal.hidden) closeNumberBombSettingsModal();
   if (event.key === "Escape" && !texasHoldemSettingsModal.hidden) closeTexasHoldemSettingsModal();
+  if (event.key === "Escape" && !darkMarketSettingsModal.hidden) closeDarkMarketSettingsModal();
+  if (event.key === "Escape" && !darkMarketDetailModal.hidden) closeDarkMarketDetailModal();
   if (event.key === "Escape" && !randomEventSettingsModal.hidden) closeRandomEventSettingsModal();
   if (event.key === "Escape" && !randomEventSceneModal.hidden) closeRandomEventSceneModal();
   if (event.key === "Escape" && !randomEventTimeModal.hidden) closeRandomEventTimeModal();

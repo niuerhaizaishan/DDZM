@@ -31,3 +31,16 @@ def test_packaged_admin_assets_include_multi_group_surface():
     assert 'id="group-chats-view"' in page
     assert 'id="group-chat-modal"' in page
     assert 'id="employee-group-message-filter"' in page
+
+
+def test_admin_bundle_contains_dark_market_controls():
+    root = Path(__file__).resolve().parents[2]
+    page = (root / "src/dzmm_bot/admin/templates/index.html").read_text()
+    script = (root / "src/dzmm_bot/admin/static/admin.js").read_text()
+
+    assert 'data-view="dark-market"' in page
+    assert 'id="dark-market-settings-card"' in page
+    assert 'id="dark-market-listings"' in page
+    assert 'id="dark-market-settings-modal"' in page
+    assert "/api/game/dark-market/listings" in script
+    assert "force-delist-dark-market" in script
