@@ -48,6 +48,11 @@ from .ai_knowledge import (
 )
 
 from .ai_mentions import normalize_ai_mention
+from .dark_market import (
+    DarkMarketListingView,
+    normalize_listing_field,
+    render_listing_detail,
+)
 from .group_games import GROUP_GAME_TYPES, normalized_group_game_types
 from .number_bomb import (
     NUMBER_BOMB_MULTIPLIER_TENTHS,
@@ -106,6 +111,14 @@ from .schema import (
     DailyActivityRecord,
     DailyAIUsageRecord,
     DailyCheckinRecord,
+    DarkMarketBidRecord,
+    DarkMarketDailyListingRecord,
+    DarkMarketDisclosureRecord,
+    DarkMarketDraftRecord,
+    DarkMarketListingRecord,
+    DarkMarketNumberCounterRecord,
+    DarkMarketRankLimitRecord,
+    DarkMarketSettingsRecord,
     DirectChatRecord,
     EmployeeNumberCounterRecord,
     GameSettingsRecord,
@@ -845,6 +858,48 @@ class TexasHoldemSummary:
     to_call: int = 0
     legal_actions: tuple[str, ...] = ()
     players: tuple[TexasHoldemPlayerView, ...] = ()
+
+
+@dataclass(frozen=True)
+class DarkMarketRankLimit:
+    rank_id: UUID
+    rank_name: str
+    level_label: str
+    daily_limit: int
+
+
+@dataclass(frozen=True)
+class DarkMarketSettings:
+    enabled: bool
+    announcement_group_id: UUID | None
+    duration_hours: int
+    fee_percent: int
+    version: int
+    rank_limits: tuple[DarkMarketRankLimit, ...]
+
+
+@dataclass(frozen=True)
+class DarkMarketDraftResult:
+    status: str
+    step: str | None = None
+    preview_text: str | None = None
+
+
+@dataclass(frozen=True)
+class DarkMarketListingSummary:
+    id: UUID
+    public_number: int
+    announcement_group_id: UUID
+    starting_price: int
+    fee_percent_snapshot: int
+    state: str
+    ends_at: datetime
+
+
+@dataclass(frozen=True)
+class DarkMarketListingResult:
+    status: str
+    listing: DarkMarketListingSummary | None = None
 
 
 @dataclass(frozen=True)
@@ -5470,6 +5525,378 @@ class CoreRepository:
                 return (
                     message,
                 )
+
+    @staticmethod
+    def _default_dark_market_limit(rank: RankRecord) -> int:
+        if rank.is_board:
+            return -1
+        return min((rank.sort_order + 1) // 2, 5)
+
+    @classmethod
+    def _ensure_dark_market_defaults(cls, session: Session) -> None:
+        if session.get(DarkMarketSettingsRecord, 1) is None:
+            session.add(
+                DarkMarketSettingsRecord(
+                    id=1,
+                    enabled=True,
+                    announcement_group_id=None,
+                    duration_hours=3,
+                    fee_percent=5,
+                    version=0,
+                )
+            )
+        ranks = list(session.scalars(select(RankRecord).order_by(RankRecord.sort_order)))
+        existing = set(session.scalars(select(DarkMarketRankLimitRecord.rank_id)))
+        session.add_all(
+            DarkMarketRankLimitRecord(
+                rank_id=rank.id,
+                daily_limit=cls._default_dark_market_limit(rank),
+            )
+            for rank in ranks
+            if rank.id not in existing
+        )
+        if session.get(DarkMarketNumberCounterRecord, 1) is None:
+            session.add(DarkMarketNumberCounterRecord(id=1, next_number=1))
+        session.flush()
+
+    @staticmethod
+    def _dark_market_settings(
+        session: Session, record: DarkMarketSettingsRecord
+    ) -> DarkMarketSettings:
+        rows = session.execute(
+            select(DarkMarketRankLimitRecord, RankRecord)
+            .join(RankRecord, RankRecord.id == DarkMarketRankLimitRecord.rank_id)
+            .order_by(RankRecord.sort_order)
+        ).all()
+        return DarkMarketSettings(
+            enabled=record.enabled,
+            announcement_group_id=record.announcement_group_id,
+            duration_hours=record.duration_hours,
+            fee_percent=record.fee_percent,
+            version=record.version,
+            rank_limits=tuple(
+                DarkMarketRankLimit(
+                    rank_id=rank.id,
+                    rank_name=rank.name,
+                    level_label=rank.level_label,
+                    daily_limit=limit.daily_limit,
+                )
+                for limit, rank in rows
+            ),
+        )
+
+    def get_dark_market_settings(self) -> DarkMarketSettings:
+        with self._session() as session:
+            self._ensure_dark_market_defaults(session)
+            record = session.get(DarkMarketSettingsRecord, 1)
+            if record is None:
+                raise RuntimeError("暗网设置初始化失败")
+            return self._dark_market_settings(session, record)
+
+    def set_dark_market_settings(
+        self,
+        *,
+        enabled: bool,
+        announcement_group_id: UUID | None,
+        duration_hours: int,
+        fee_percent: int,
+        rank_limits: dict[UUID, int],
+        expected_version: int,
+    ) -> DarkMarketSettings:
+        if not 1 <= duration_hours <= 24:
+            raise ValueError("交易时长必须为 1–24 小时")
+        if not 1 <= fee_percent <= 100:
+            raise ValueError("手续费必须为 1–100%")
+        if any(limit < -1 for limit in rank_limits.values()):
+            raise ValueError("每日上架次数不能小于 -1")
+        with self._session() as session:
+            self._ensure_dark_market_defaults(session)
+            record = session.get(DarkMarketSettingsRecord, 1, with_for_update=True)
+            if record is None:
+                raise RuntimeError("暗网设置初始化失败")
+            if record.version != expected_version:
+                raise ValueError("configuration was updated by another administrator")
+            actual_rank_ids = set(session.scalars(select(RankRecord.id)))
+            if set(rank_limits) != actual_rank_ids:
+                raise ValueError("需要为每个职位配置上架次数")
+            if announcement_group_id is not None:
+                group = session.scalar(
+                    select(GroupChatRecord).where(
+                        GroupChatRecord.id == announcement_group_id,
+                        GroupChatRecord.deleted_at.is_(None),
+                        GroupChatRecord.listening_enabled.is_(True),
+                    )
+                )
+                if group is None or group.chatroom_id is None:
+                    raise ValueError("暗网群聊不可用")
+            elif enabled:
+                raise ValueError("暗网群聊不可用")
+            record.enabled = enabled
+            record.announcement_group_id = announcement_group_id
+            record.duration_hours = duration_hours
+            record.fee_percent = fee_percent
+            record.version += 1
+            for rank_id, daily_limit in rank_limits.items():
+                limit = session.get(
+                    DarkMarketRankLimitRecord, rank_id, with_for_update=True
+                )
+                if limit is None:
+                    raise RuntimeError("暗网职位额度消失")
+                limit.daily_limit = daily_limit
+            session.flush()
+            return self._dark_market_settings(session, record)
+
+    @staticmethod
+    def _active_dark_market_configuration(
+        session: Session,
+    ) -> tuple[DarkMarketSettingsRecord, GroupChatRecord] | None:
+        settings = session.get(DarkMarketSettingsRecord, 1)
+        if (
+            settings is None
+            or not settings.enabled
+            or settings.announcement_group_id is None
+        ):
+            return None
+        group = session.scalar(
+            select(GroupChatRecord).where(
+                GroupChatRecord.id == settings.announcement_group_id,
+                GroupChatRecord.deleted_at.is_(None),
+                GroupChatRecord.listening_enabled.is_(True),
+            )
+        )
+        if group is None or group.chatroom_id is None:
+            return None
+        return settings, group
+
+    def start_dark_market_draft(
+        self, platform_id: str, now: datetime
+    ) -> DarkMarketDraftResult:
+        with self._session() as session:
+            self._ensure_dark_market_defaults(session)
+            if self._active_dark_market_configuration(session) is None:
+                return DarkMarketDraftResult("unavailable")
+            user = session.scalar(
+                select(UserRecord).where(UserRecord.platform_id == platform_id)
+            )
+            if user is None:
+                return DarkMarketDraftResult("not_joined")
+            draft = session.scalar(
+                select(DarkMarketDraftRecord)
+                .where(DarkMarketDraftRecord.user_id == user.id)
+                .with_for_update()
+            )
+            if draft is not None and draft.expires_at > now:
+                return DarkMarketDraftResult("resumed", draft.step)
+            if draft is not None:
+                session.delete(draft)
+                session.flush()
+            session.add(
+                DarkMarketDraftRecord(
+                    user_id=user.id,
+                    step="name",
+                    expires_at=now + timedelta(minutes=30),
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            return DarkMarketDraftResult("started", "name")
+
+    @staticmethod
+    def _dark_market_preview(draft: DarkMarketDraftRecord) -> str:
+        gender = {"male": "男", "female": "女", "private": "保密"}[draft.gender or "private"]
+        return (
+            "暗网商品预览\n"
+            f"名称：{draft.name}\n用途：{draft.purpose}\n"
+            f"详细信息：{draft.details}\n匿名性别：{gender}\n"
+            f"起拍价：{draft.starting_price} 摸鱼币\n"
+            "发送 /确认 正式上架，或 /取消上架 放弃草稿。"
+        )
+
+    def advance_dark_market_draft(
+        self, platform_id: str, content: str, now: datetime
+    ) -> DarkMarketDraftResult:
+        transitions = {
+            "name": "purpose",
+            "purpose": "details",
+            "details": "gender",
+            "gender": "starting_price",
+            "starting_price": "preview",
+        }
+        with self._session() as session:
+            user = session.scalar(
+                select(UserRecord).where(UserRecord.platform_id == platform_id)
+            )
+            if user is None:
+                return DarkMarketDraftResult("not_joined")
+            draft = session.scalar(
+                select(DarkMarketDraftRecord)
+                .where(DarkMarketDraftRecord.user_id == user.id)
+                .with_for_update()
+            )
+            if draft is None:
+                return DarkMarketDraftResult("no_draft")
+            if draft.expires_at <= now:
+                session.delete(draft)
+                return DarkMarketDraftResult("expired")
+            if draft.step == "preview":
+                return DarkMarketDraftResult(
+                    "preview", "preview", self._dark_market_preview(draft)
+                )
+            try:
+                value = normalize_listing_field(draft.step, content)
+            except ValueError:
+                return DarkMarketDraftResult("invalid", draft.step)
+            setattr(draft, draft.step, value)
+            draft.step = transitions[draft.step]
+            draft.expires_at = now + timedelta(minutes=30)
+            draft.updated_at = now
+            if draft.step == "preview":
+                return DarkMarketDraftResult(
+                    "preview", "preview", self._dark_market_preview(draft)
+                )
+            return DarkMarketDraftResult("advanced", draft.step)
+
+    def cancel_dark_market_draft(
+        self, platform_id: str, now: datetime
+    ) -> DarkMarketDraftResult:
+        with self._session() as session:
+            user = session.scalar(
+                select(UserRecord).where(UserRecord.platform_id == platform_id)
+            )
+            if user is None:
+                return DarkMarketDraftResult("not_joined")
+            draft = session.scalar(
+                select(DarkMarketDraftRecord)
+                .where(DarkMarketDraftRecord.user_id == user.id)
+                .with_for_update()
+            )
+            if draft is None:
+                return DarkMarketDraftResult("no_draft")
+            session.delete(draft)
+            return DarkMarketDraftResult("cancelled")
+
+    @staticmethod
+    def _dark_market_listing_summary(
+        listing: DarkMarketListingRecord,
+    ) -> DarkMarketListingSummary:
+        return DarkMarketListingSummary(
+            id=listing.id,
+            public_number=listing.public_number,
+            announcement_group_id=listing.announcement_group_id,
+            starting_price=listing.starting_price,
+            fee_percent_snapshot=listing.fee_percent_snapshot,
+            state=listing.state,
+            ends_at=listing.ends_at,
+        )
+
+    def confirm_dark_market_listing(
+        self, platform_id: str, inbound_id: UUID, now: datetime
+    ) -> DarkMarketListingResult:
+        del inbound_id
+        with self._session() as session:
+            self._ensure_dark_market_defaults(session)
+            configuration = self._active_dark_market_configuration(session)
+            if configuration is None:
+                return DarkMarketListingResult("unavailable")
+            settings, group = configuration
+            user = session.scalar(
+                select(UserRecord)
+                .where(UserRecord.platform_id == platform_id)
+                .with_for_update()
+            )
+            if user is None:
+                return DarkMarketListingResult("not_joined")
+            draft = session.scalar(
+                select(DarkMarketDraftRecord)
+                .where(DarkMarketDraftRecord.user_id == user.id)
+                .with_for_update()
+            )
+            if draft is None or draft.step != "preview":
+                return DarkMarketListingResult("no_draft")
+            if draft.expires_at <= now:
+                session.delete(draft)
+                return DarkMarketListingResult("expired")
+            if user.rank_id is None:
+                return DarkMarketListingResult("not_joined")
+            rank_limit = session.get(
+                DarkMarketRankLimitRecord, user.rank_id, with_for_update=True
+            )
+            if rank_limit is None:
+                raise RuntimeError("暗网职位额度消失")
+            usage_date = now.astimezone(BEIJING).date()
+            usage = session.scalar(
+                select(DarkMarketDailyListingRecord)
+                .where(
+                    DarkMarketDailyListingRecord.user_id == user.id,
+                    DarkMarketDailyListingRecord.usage_date == usage_date,
+                )
+                .with_for_update()
+            )
+            used_count = 0 if usage is None else usage.count
+            if rank_limit.daily_limit >= 0 and used_count >= rank_limit.daily_limit:
+                return DarkMarketListingResult("daily_limit")
+            counter = session.get(
+                DarkMarketNumberCounterRecord, 1, with_for_update=True
+            )
+            if counter is None:
+                raise RuntimeError("暗网商品编号计数器消失")
+            if None in (
+                draft.name,
+                draft.purpose,
+                draft.details,
+                draft.gender,
+                draft.starting_price,
+            ):
+                raise RuntimeError("暗网商品草稿不完整")
+            listing = DarkMarketListingRecord(
+                public_number=counter.next_number,
+                seller_user_id=user.id,
+                announcement_group_id=group.id,
+                name=draft.name,
+                purpose=draft.purpose,
+                details=draft.details,
+                gender=draft.gender,
+                starting_price=draft.starting_price,
+                duration_hours_snapshot=settings.duration_hours,
+                fee_percent_snapshot=settings.fee_percent,
+                state="active",
+                ends_at=now + timedelta(hours=settings.duration_hours),
+                created_at=now,
+            )
+            counter.next_number += 1
+            if usage is None:
+                usage = DarkMarketDailyListingRecord(
+                    user_id=user.id,
+                    usage_date=usage_date,
+                    count=1,
+                )
+                session.add(usage)
+            else:
+                usage.count += 1
+            session.add(listing)
+            session.delete(draft)
+            session.flush()
+            public_view = DarkMarketListingView(
+                public_number=listing.public_number,
+                name=listing.name,
+                purpose=listing.purpose,
+                details=listing.details,
+                gender=listing.gender,
+                starting_price=listing.starting_price,
+                current_price=None,
+                state=listing.state,
+            )
+            public_text = render_listing_detail(public_view).removeprefix(
+                f"#{listing.public_number} "
+            )
+            self.enqueue_system_outbound(
+                f"暗网新商品 #{listing.public_number}\n{public_text}",
+                group_chat_id=group.id,
+                destination_chatroom_id=group.chatroom_id,
+            )
+            return DarkMarketListingResult(
+                "listed", self._dark_market_listing_summary(listing)
+            )
 
     def get_texas_holdem_settings(self) -> TexasHoldemSettings:
         with self._session() as session:
