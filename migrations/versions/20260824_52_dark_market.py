@@ -14,6 +14,12 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    inspector = sa.inspect(op.get_bind())
+    if not all(
+        inspector.has_table(table_name)
+        for table_name in ("group_chats", "ranks", "users", "inbound_messages")
+    ):
+        return
     op.create_table(
         "dark_market_settings",
         sa.Column("id", sa.Integer(), nullable=False),
@@ -246,6 +252,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    if not sa.inspect(op.get_bind()).has_table("dark_market_settings"):
+        return
     op.drop_table("dark_market_number_counters")
     op.drop_table("dark_market_daily_listings")
     op.drop_table("dark_market_disclosures")
