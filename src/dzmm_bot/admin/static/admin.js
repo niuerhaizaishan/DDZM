@@ -738,7 +738,7 @@ function renderAiKnowledgeCards() {
   const topicLabels = {
     economy: "金币与余额", departments: "部门", ranks: "职位与晋升", shop: "商店与物品",
     checkin_activity: "打卡与活跃度", random_events: "随机事件", hide_and_seek: "摸鱼躲猫猫",
-    memory_assessment: "记忆考核", undercover: "谁是卧底", blame_bomb: "甩锅游戏", number_bomb: "蹦蹦数字炸弹", texas_holdem: "德州扑克",
+    memory_assessment: "记忆考核", undercover: "谁是卧底", blame_bomb: "甩锅游戏", number_bomb: "蹦蹦数字炸弹", texas_holdem: "德州扑克", dark_market: "暗网交易所",
     commands_help: "指令帮助", player_activity: "个人游戏经历",
   };
   document.querySelector("#ai-knowledge-card-list").innerHTML = aiKnowledgeCards.length

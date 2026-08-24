@@ -381,6 +381,34 @@ def test_dark_market_commands_complete_listing_bid_and_query():
     assert "截止" not in login_text
 
 
+def test_help_dark_market_lists_exact_commands_and_anonymity_rules():
+    service, repository, factory = _service()
+    now = datetime(2026, 8, 24, 10, 0, tzinfo=BEIJING)
+    repository.create_user("dark-help", "暗网新手", now, 100)
+
+    result = _receive(
+        service,
+        "dark-help-message",
+        "dark-help",
+        "/帮助 暗网交易所",
+        now,
+    )
+    text = "".join(_replies_for(factory, result.message_id))
+
+    for command in (
+        "/上架暗网",
+        "/取消上架",
+        "/确认",
+        "/报价 商品编号 金额",
+        "/登陆暗网",
+        "/公开",
+        "/不公开",
+    ):
+        assert command in text
+    assert "双方都同意" in text
+    assert "不显示" in text
+
+
 def test_texas_holdem_group_commands_create_join_start_and_deal_privately():
     service, repository, factory = _service(
         preserve_long_group_messages=True,

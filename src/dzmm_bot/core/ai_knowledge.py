@@ -6,7 +6,7 @@ from uuid import UUID
 KNOWLEDGE_TOPICS = (
     "economy", "departments", "ranks", "shop", "checkin_activity",
     "random_events", "hide_and_seek", "memory_assessment", "undercover",
-    "blame_bomb", "number_bomb", "texas_holdem", "commands_help", "player_activity",
+    "blame_bomb", "number_bomb", "texas_holdem", "dark_market", "commands_help", "player_activity",
 )
 
 TOPIC_COMMANDS = {
@@ -22,6 +22,7 @@ TOPIC_COMMANDS = {
     "blame_bomb": ("/甩锅游戏", "/加入", "/退出", "/甩锅", "/结束游戏"),
     "number_bomb": ("/蹦蹦数字炸弹", "/加入", "/开始", "/报数", "/跳过", "/退出", "/继续", "/结束游戏"),
     "texas_holdem": ("/德州扑克", "/加入", "/开始", "/看牌", "/过牌", "/跟注", "/加注", "/全下", "/弃牌", "/退出"),
+    "dark_market": ("/上架暗网", "/取消上架", "/确认", "/报价", "/登陆暗网", "/公开", "/不公开"),
     "commands_help": (),
     "player_activity": ("/我",),
 }
@@ -42,6 +43,7 @@ _TOPIC_ALIASES = {
         "报数", "真心话", "大冒险",
     ),
     "texas_holdem": ("德州扑克", "德州", "盲注", "跟注", "加注", "全下", "弃牌"),
+    "dark_market": ("暗网交易所", "暗网", "上架暗网", "报价", "流拍"),
     "commands_help": ("指令", "命令", "帮助", "怎么操作"),
     "player_activity": ("战绩", "玩过", "赢过", "输了", "参加过"),
 }
