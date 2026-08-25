@@ -44,6 +44,11 @@ def test_admin_bundle_contains_dark_market_controls():
     assert 'id="dark-market-settings-modal"' in page
     assert "/api/game/dark-market/listings" in script
     assert "force-delist-dark-market" in script
+    assert 'awaiting_receipt: "待确认收货"' in script
+    assert 'complained: "已投诉"' in script
+    assert "seller_employee_number" in script
+    assert "receipt_deadline" in script
+    assert "receipt_resolved_at" in script
 
 
 def test_admin_bundle_contains_shop_card_controls():

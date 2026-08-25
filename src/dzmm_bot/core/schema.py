@@ -955,8 +955,12 @@ class DarkMarketListingRecord(Base):
             "public_number", name="uq_dark_market_listings_public_number"
         ),
         Index("ix_dark_market_listings_due", "state", "ends_at"),
+        Index(
+            "ix_dark_market_listings_receipt_due", "state", "receipt_deadline"
+        ),
         CheckConstraint(
-            "state IN ('active', 'sold', 'unsold', 'force_delisted')",
+            "state IN ('active', 'awaiting_receipt', 'sold', 'complained', "
+            "'unsold', 'force_delisted')",
             name="ck_dark_market_listing_state",
         ),
         CheckConstraint(
@@ -989,6 +993,9 @@ class DarkMarketListingRecord(Base):
     buyer_user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))
     final_amount: Mapped[int | None] = mapped_column(Integer)
     fee_amount: Mapped[int | None] = mapped_column(Integer)
+    receipt_started_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    receipt_deadline: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    receipt_resolved_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
     created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
     finished_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
 

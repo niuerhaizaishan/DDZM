@@ -20,7 +20,13 @@ from .service import CommandReply
 
 _BEIJING = ZoneInfo("Asia/Shanghai")
 _COMMANDS = {
-    "/入职", "/我的物品", "/购买", "/使用", "/邀请参与", "/取消使用", "/同意使用", "/拒绝使用", "/打卡", "/余额", "/修改名称", "/编辑档案", "/编辑档案形象", "/我的档案", "/发奖金", "/发红包", "/抢红包", "/打赏", "/我", "/商店", "/帮助", "/当前游戏", "/加入", "/退出", "/开始", "/摸鱼躲猫猫", "/记忆考核", "/继续", "/收手", "/投降", "/部门", "/部门人数", "/我的部门人数", "/加入部门", "/切换部门", "/部门申请列表", "/同意部门", "/全部同意部门", "/拒绝部门", "/全部拒绝部门", "/职位", "/晋升", "/晋升申请列表", "/同意", "/全部同意", "/拒绝", "/全部拒绝", "/谁是卧底", "/开始投票", "/投票", "/退出谁是卧底", "/结束游戏", "/甩锅游戏", "/甩锅", "/退出甩锅", "/蹦蹦数字炸弹", "/报数", "/跳过", "/德州扑克", "/看牌", "/过牌", "/跟注", "/加注", "/全下", "/弃牌", "/上架暗网", "/取消上架", "/确认", "/报价", "/公开", "/不公开", "/登陆暗网",
+    "/入职", "/我的物品", "/购买", "/使用", "/邀请参与", "/取消使用", "/同意使用", "/拒绝使用", "/打卡", "/余额", "/修改名称", "/编辑档案", "/编辑档案形象", "/我的档案", "/发奖金", "/发红包", "/抢红包", "/打赏", "/我", "/商店", "/帮助", "/当前游戏", "/加入", "/退出", "/开始", "/摸鱼躲猫猫", "/记忆考核", "/继续", "/收手", "/投降", "/部门", "/部门人数", "/我的部门人数", "/加入部门", "/切换部门", "/部门申请列表", "/同意部门", "/全部同意部门", "/拒绝部门", "/全部拒绝部门", "/职位", "/晋升", "/晋升申请列表", "/同意", "/全部同意", "/拒绝", "/全部拒绝", "/谁是卧底", "/开始投票", "/投票", "/退出谁是卧底", "/结束游戏", "/甩锅游戏", "/甩锅", "/退出甩锅", "/蹦蹦数字炸弹", "/报数", "/跳过", "/德州扑克", "/看牌", "/过牌", "/跟注", "/加注", "/全下", "/弃牌", "/上架暗网", "/取消上架", "/确认", "/报价", "/公开", "/不公开", "/查看暗网", "/确认收货", "/投诉",
+}
+
+_DARK_MARKET_QUERY_ALIASES = {
+    "/登陆暗网": "/查看暗网",
+    "/登录暗网": "/查看暗网",
+    "/暗网": "/查看暗网",
 }
 
 
@@ -40,6 +46,7 @@ class GroupCommandHandler:
         if not content:
             return None
         command = content.split(maxsplit=1)[0]
+        command = _DARK_MARKET_QUERY_ALIASES.get(command, command)
         if command == "/摸鱼躲猫猫":
             return None
         if command in {"/开始摸鱼躲藏", "/躲"}:
@@ -77,7 +84,11 @@ class GroupCommandHandler:
             return self._dark_market_disclose(
                 message, command, content, received_at
             )
-        if command == "/登陆暗网":
+        if command in {"/确认收货", "/投诉"}:
+            return self._dark_market_receipt(
+                message, command, content, received_at
+            )
+        if command == "/查看暗网":
             return self._dark_market_login(
                 message, content, received_at, group_chat_id
             )
@@ -580,13 +591,13 @@ class GroupCommandHandler:
         group_chat_id,
     ):
         if message.source_type != "group":
-            return self._reply("/登陆暗网", "group_only", received_at)
+            return self._reply("/查看暗网", "group_only", received_at)
         parts = content.split()
         if len(parts) > 2 or (
             len(parts) == 2
             and (not parts[1].isascii() or not parts[1].isdigit())
         ):
-            return self._reply("/登陆暗网", "usage", received_at)
+            return self._reply("/查看暗网", "usage", received_at)
         result = self._repository.browse_dark_market(
             group_chat_id,
             received_at,
@@ -594,12 +605,49 @@ class GroupCommandHandler:
         )
         if result.status == "shown":
             return self._reply(
-                "/登陆暗网",
+                "/查看暗网",
                 "shown",
                 received_at,
                 {"{商品列表}": result.text or ""},
             )
-        return self._reply("/登陆暗网", result.status, received_at)
+        return self._reply("/查看暗网", result.status, received_at)
+
+    def _dark_market_receipt(
+        self,
+        message: InboundMessage,
+        command: str,
+        content: str,
+        received_at,
+    ):
+        if message.source_type != "direct":
+            return self._reply(command, "private_only", received_at)
+        parts = content.split()
+        if len(parts) > 2 or (
+            len(parts) == 2
+            and (not parts[1].isascii() or not parts[1].isdigit())
+        ):
+            return self._reply(command, "usage", received_at)
+        result = self._repository.resolve_dark_market_receipt(
+            message.sender_platform_id,
+            None if len(parts) == 1 else int(parts[1]),
+            "confirm" if command == "/确认收货" else "complain",
+            message.platform_message_id,
+            received_at,
+        )
+        if result.status == "choose_listing":
+            numbers = "、".join(f"#{number}" for number in result.candidates)
+            return self._reply(
+                command,
+                "choose_listing",
+                received_at,
+                {"{商品编号列表}": numbers},
+            )
+        return self._reply(
+            command,
+            result.status,
+            received_at,
+            {"{商品编号}": result.public_number or ""},
+        )
 
     def _red_packet_create(
         self, message, content: str, received_at, group_chat_id=None
@@ -3034,7 +3082,9 @@ class GroupCommandHandler:
                     ("/取消上架", "私聊 /取消上架：取消尚未确认的上架草稿"),
                     ("/确认", "私聊 /确认：正式上架当前完整草稿；上架后不能撤回"),
                     ("/报价", "私聊 /报价 商品编号 金额：匿名报价并冻结相应摸鱼币"),
-                    ("/登陆暗网", "/登陆暗网 [商品编号]：仅在配置的暗网群查询商品；不显示精确结算时间"),
+                    ("/查看暗网", "/查看暗网 [商品编号]：仅在配置的暗网群查询商品；不显示精确结算时间"),
+                    ("/确认收货", "私聊 /确认收货 [商品编号]：确认收到拍下的商品"),
+                    ("/投诉", "私聊 /投诉 [商品编号]：未收到商品时退款并处罚卖家"),
                     ("/公开", "私聊 /公开 [商品编号]：只有双方都同意才公开买卖双方身份"),
                     ("/不公开", "私聊 /不公开 [商品编号]：拒绝公开，本次交易双方保持匿名"),
                 ),

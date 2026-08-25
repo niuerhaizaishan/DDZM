@@ -288,7 +288,9 @@ def test_bid_rejects_low_amount_insufficient_balance_and_deadline(repository, no
     assert _balance(repository, "buyer-a") == 100
 
 
-def test_sale_is_conservative_and_fee_rounds_up(repository, now) -> None:
+def test_auction_end_holds_funds_and_privately_exchanges_counterpart_identity(
+    repository, now
+) -> None:
     listing = _active_listing(repository, now)
     repository.place_dark_market_bid(
         "buyer-a", listing.public_number, 21,
@@ -298,13 +300,77 @@ def test_sale_is_conservative_and_fee_rounds_up(repository, now) -> None:
     repository.run_dark_market_jobs(listing.ends_at)
 
     assert _balance(repository, "buyer-a") == 79
-    assert _balance(repository, "seller") == 119
+    assert _balance(repository, "seller") == 100
     with repository._session() as session:
         stored = session.scalar(
             select(DarkMarketListingRecord).where(
                 DarkMarketListingRecord.id == listing.id
             )
         )
+        disclosure = session.scalar(
+            select(DarkMarketDisclosureRecord).where(
+                DarkMarketDisclosureRecord.listing_id == listing.id
+            )
+        )
+        direct_messages = list(
+            session.scalars(
+                select(OutboundRecord)
+                .where(OutboundRecord.delivery_kind == "direct")
+                .order_by(OutboundRecord.destination_chatroom_id)
+            )
+        )
+    assert stored is not None
+    assert stored.state == "awaiting_receipt"
+    assert stored.final_amount == 21
+    assert stored.fee_amount is None
+    assert stored.receipt_started_at == listing.ends_at
+    assert stored.receipt_deadline == listing.ends_at + timedelta(hours=72)
+    assert stored.receipt_resolved_at is None
+    assert disclosure is None
+    assert len(direct_messages) == 2
+    seller_message = next(
+        message
+        for message in direct_messages
+        if message.destination_chatroom_id == "direct-seller"
+    )
+    buyer_message = next(
+        message
+        for message in direct_messages
+        if message.destination_chatroom_id == "direct-buyer-a"
+    )
+    assert "买家甲（#0002）" in seller_message.text
+    assert "真实卖家（#0001）" in buyer_message.text
+    assert "/确认收货 1" in buyer_message.text
+    assert "/投诉 1" in buyer_message.text
+    assert repository.direct_inbound_chatroom_ids(listing.ends_at) == (
+        "direct-buyer-a",
+    )
+
+
+def test_buyer_confirmation_pays_seller_fee_and_starts_disclosure(
+    repository, now
+) -> None:
+    listing = _active_listing(repository, now)
+    repository.place_dark_market_bid(
+        "buyer-a", listing.public_number, 21,
+        _inbound_id(repository, "buyer-a", "/报价 1 21", now), now,
+    )
+    repository.run_dark_market_jobs(listing.ends_at)
+    confirmed_at = listing.ends_at + timedelta(hours=1)
+
+    result = repository.resolve_dark_market_receipt(
+        "buyer-a",
+        listing.public_number,
+        "confirm",
+        _inbound_id(repository, "buyer-a", "/确认收货 1", confirmed_at),
+        confirmed_at,
+    )
+
+    assert result.status == "confirmed"
+    assert _balance(repository, "buyer-a") == 79
+    assert _balance(repository, "seller") == 119
+    with repository._session() as session:
+        stored = session.get(DarkMarketListingRecord, listing.id)
         ledger = session.execute(
             select(BalanceTransactionRecord.amount, BalanceTransactionRecord.source)
             .where(BalanceTransactionRecord.source.like("dark_market_sale_%"))
@@ -316,9 +382,172 @@ def test_sale_is_conservative_and_fee_rounds_up(repository, now) -> None:
         )
     assert stored is not None
     assert (stored.state, stored.final_amount, stored.fee_amount) == ("sold", 21, 2)
+    assert stored.receipt_resolved_at == confirmed_at
     assert set(ledger) == {(21, "dark_market_sale_income"), (-2, "dark_market_sale_fee")}
     assert disclosure is not None
-    assert disclosure.deadline == listing.ends_at + timedelta(minutes=10)
+    assert disclosure.deadline == confirmed_at + timedelta(minutes=10)
+
+
+def test_buyer_complaint_refunds_escrow_and_fines_seller_below_zero(
+    repository, now
+) -> None:
+    listing = _active_listing(repository, now)
+    repository.place_dark_market_bid(
+        "buyer-a", listing.public_number, 21,
+        _inbound_id(repository, "buyer-a", "/报价 1 21", now), now,
+    )
+    repository.run_dark_market_jobs(listing.ends_at)
+    with repository.transaction():
+        with repository._session() as session:
+            seller = session.scalar(
+                select(UserRecord).where(UserRecord.platform_id == "seller")
+            )
+            assert seller is not None
+            seller.balance = 5
+    complained_at = listing.ends_at + timedelta(hours=1)
+
+    result = repository.resolve_dark_market_receipt(
+        "buyer-a",
+        listing.public_number,
+        "complain",
+        _inbound_id(repository, "buyer-a", "/投诉 1", complained_at),
+        complained_at,
+    )
+
+    assert result.status == "complained"
+    assert _balance(repository, "buyer-a") == 100
+    assert _balance(repository, "seller") == -16
+    with repository._session() as session:
+        stored = session.get(DarkMarketListingRecord, listing.id)
+        disclosure = session.scalar(
+            select(DarkMarketDisclosureRecord).where(
+                DarkMarketDisclosureRecord.listing_id == listing.id
+            )
+        )
+        ledger = set(
+            session.execute(
+                select(
+                    BalanceTransactionRecord.amount,
+                    BalanceTransactionRecord.source,
+                ).where(
+                    BalanceTransactionRecord.source.like(
+                        "dark_market_complaint_%"
+                    )
+                )
+            ).all()
+        )
+        notices = list(
+            session.scalars(
+                select(OutboundRecord.text).where(
+                    OutboundRecord.delivery_kind == "group",
+                    OutboundRecord.text.like("%公开通报批评%"),
+                )
+            )
+        )
+    assert stored is not None
+    assert stored.state == "complained"
+    assert stored.receipt_resolved_at == complained_at
+    assert stored.fee_amount is None
+    assert disclosure is None
+    assert ledger == {
+        (21, "dark_market_complaint_refund"),
+        (-21, "dark_market_complaint_penalty"),
+    }
+    assert len(notices) == 1
+    assert "真实卖家（#0001）" in notices[0]
+    assert "买家甲" not in notices[0]
+
+
+def test_receipt_auto_confirms_at_exact_72_hour_deadline(repository, now) -> None:
+    listing = _active_listing(repository, now)
+    repository.place_dark_market_bid(
+        "buyer-a", listing.public_number, 21,
+        _inbound_id(repository, "buyer-a", "/报价 1 21", now), now,
+    )
+    repository.run_dark_market_jobs(listing.ends_at)
+    deadline = listing.ends_at + timedelta(hours=72)
+
+    repository.run_dark_market_jobs(deadline - timedelta(microseconds=1))
+    assert _balance(repository, "seller") == 100
+    repository.run_dark_market_jobs(deadline)
+
+    assert _balance(repository, "seller") == 119
+    with repository._session() as session:
+        stored = session.get(DarkMarketListingRecord, listing.id)
+        disclosure = session.scalar(
+            select(DarkMarketDisclosureRecord).where(
+                DarkMarketDisclosureRecord.listing_id == listing.id
+            )
+        )
+    assert stored is not None
+    assert stored.state == "sold"
+    assert stored.receipt_resolved_at == deadline
+    assert disclosure is not None
+    assert disclosure.deadline == deadline + timedelta(minutes=10)
+
+
+def test_receipt_requires_buyer_and_item_number_when_multiple_are_pending(
+    repository, now
+) -> None:
+    first = _active_listing(repository, now)
+    repository.place_dark_market_bid(
+        "buyer-a", first.public_number, 20,
+        _inbound_id(repository, "buyer-a", "/报价 1 20", now), now,
+    )
+    repository.create_user("seller-b", "卖家乙", now, 100)
+    repository.upsert_direct_chats([("seller-b", "direct-seller-b")], now)
+    _complete_draft(repository, "seller-b", now)
+    second_result = repository.confirm_dark_market_listing("seller-b", uuid4(), now)
+    assert second_result.listing is not None
+    second = second_result.listing
+    repository.place_dark_market_bid(
+        "buyer-a", second.public_number, 22,
+        _inbound_id(repository, "buyer-a", f"/报价 {second.public_number} 22", now),
+        now,
+    )
+    repository.run_dark_market_jobs(first.ends_at)
+
+    choose = repository.resolve_dark_market_receipt(
+        "buyer-a", None, "confirm",
+        _inbound_id(repository, "buyer-a", "/确认收货", first.ends_at),
+        first.ends_at,
+    )
+    unauthorized = repository.resolve_dark_market_receipt(
+        "buyer-b", first.public_number, "confirm",
+        _inbound_id(repository, "buyer-b", "/确认收货 1", first.ends_at),
+        first.ends_at,
+    )
+    confirmed = repository.resolve_dark_market_receipt(
+        "buyer-a", first.public_number, "confirm",
+        _inbound_id(repository, "buyer-a", "/确认收货 1", first.ends_at),
+        first.ends_at,
+    )
+    repeated = repository.resolve_dark_market_receipt(
+        "buyer-a", first.public_number, "complain",
+        _inbound_id(repository, "buyer-a", "/投诉 1", first.ends_at),
+        first.ends_at,
+    )
+
+    assert choose.status == "choose_listing"
+    assert choose.candidates == (first.public_number, second.public_number)
+    assert unauthorized.status == "not_buyer"
+    assert confirmed.status == "confirmed"
+    assert repeated.status == "already_resolved"
+
+
+def test_receipt_direct_room_expires_at_exact_deadline(repository, now) -> None:
+    listing = _active_listing(repository, now)
+    repository.place_dark_market_bid(
+        "buyer-a", listing.public_number, 20,
+        _inbound_id(repository, "buyer-a", "/报价 1 20", now), now,
+    )
+    repository.run_dark_market_jobs(listing.ends_at)
+    deadline = listing.ends_at + timedelta(hours=72)
+
+    assert repository.direct_inbound_chatroom_ids(
+        deadline - timedelta(microseconds=1)
+    ) == ("direct-buyer-a",)
+    assert repository.direct_inbound_chatroom_ids(deadline) == ()
 
 
 def test_seller_self_sale_still_pays_fee(repository, now) -> None:
@@ -329,6 +558,25 @@ def test_seller_self_sale_still_pays_fee(repository, now) -> None:
     )
 
     repository.run_dark_market_jobs(listing.ends_at)
+
+    with repository._session() as session:
+        direct_messages = list(
+            session.scalars(
+                select(OutboundRecord).where(
+                    OutboundRecord.delivery_kind == "direct"
+                )
+            )
+        )
+    assert len(direct_messages) == 1
+    assert "自己的商品" in direct_messages[0].text
+
+    repository.resolve_dark_market_receipt(
+        "seller",
+        listing.public_number,
+        "confirm",
+        _inbound_id(repository, "seller", "/确认收货 1", listing.ends_at),
+        listing.ends_at,
+    )
 
     assert _balance(repository, "seller") == 99
     with repository._session() as session:
@@ -364,6 +612,13 @@ def test_disclosure_requires_both_parties_and_self_sale_only_one(repository, now
         _inbound_id(repository, "buyer-a", "/报价 1 20", now), now,
     )
     repository.run_dark_market_jobs(listing.ends_at)
+    repository.resolve_dark_market_receipt(
+        "buyer-a",
+        listing.public_number,
+        "confirm",
+        _inbound_id(repository, "buyer-a", "/确认收货 1", listing.ends_at),
+        listing.ends_at,
+    )
 
     assert set(repository.direct_inbound_chatroom_ids(listing.ends_at)) == {
         "direct-seller",
@@ -404,6 +659,13 @@ def test_disclosure_timeout_keeps_both_identities_anonymous(repository, now) -> 
         _inbound_id(repository, "buyer-a", "/报价 1 20", now), now,
     )
     repository.run_dark_market_jobs(listing.ends_at)
+    repository.resolve_dark_market_receipt(
+        "buyer-a",
+        listing.public_number,
+        "confirm",
+        _inbound_id(repository, "buyer-a", "/确认收货 1", listing.ends_at),
+        listing.ends_at,
+    )
 
     repository.run_dark_market_jobs(listing.ends_at + timedelta(minutes=10))
 
@@ -425,6 +687,13 @@ def test_daily_jobs_run_global_dark_market_settlement(repository, now) -> None:
     )
 
     repository.run_daily_jobs(listing.ends_at)
+
+    with repository._session() as session:
+        stored = session.get(DarkMarketListingRecord, listing.id)
+    assert stored is not None
+    assert stored.state == "awaiting_receipt"
+
+    repository.run_daily_jobs(listing.ends_at + timedelta(hours=72))
 
     with repository._session() as session:
         stored = session.get(DarkMarketListingRecord, listing.id)

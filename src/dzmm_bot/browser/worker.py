@@ -35,6 +35,8 @@ _DIRECT_ENTRY_COMMANDS = {
     "/报价",
     "/公开",
     "/不公开",
+    "/确认收货",
+    "/投诉",
 }
 _OUTBOUND_BATCH_SIZE = 20
 _OUTBOUND_BATCH_BUDGET_SECONDS = 2.0

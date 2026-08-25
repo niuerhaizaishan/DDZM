@@ -371,21 +371,84 @@ def test_dark_market_commands_complete_listing_bid_and_query():
         now,
         "direct-buyer",
     )
-    login = _group_receive(
+    assert "报价成功" in "".join(_replies_for(factory, bid.message_id))
+    for index, command in enumerate(
+        ("/查看暗网 1", "/登陆暗网 1", "/登录暗网 1", "/暗网 1")
+    ):
+        login = _group_receive(
+            service,
+            f"dark-login-{index}",
+            "buyer",
+            command,
+            now,
+            market.chatroom_id,
+        )
+        login_text = "".join(_replies_for(factory, login.message_id))
+        assert "旧钥匙" in login_text
+        assert "当前 20" in login_text
+        assert "卖家" not in login_text
+        assert "截止" not in login_text
+
+
+def test_dark_market_receipt_commands_are_private_and_confirm_the_order():
+    service, repository, factory = _service()
+    now = datetime(2026, 8, 24, 10, 0, tzinfo=BEIJING)
+    market = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=dark-receipt-command", now
+    )
+    for platform_id, name in (("seller", "卖家"), ("buyer", "买家")):
+        repository.create_user(platform_id, name, now, 100)
+    repository.upsert_direct_chats(
+        [("seller", "direct-seller"), ("buyer", "direct-buyer")], now
+    )
+    _configure_dark_market(repository, market.id)
+    for suffix, content in (
+        ("start", "/上架暗网"),
+        ("name", "旧钥匙"),
+        ("purpose", "开门"),
+        ("details", "来历不明"),
+        ("gender", "保密"),
+        ("price", "10"),
+        ("confirm", "/确认"),
+    ):
+        _direct_receive(
+            service,
+            f"dark-receipt-{suffix}",
+            "seller",
+            content,
+            now,
+            "direct-seller",
+        )
+    _direct_receive(
         service,
-        "dark-login",
+        "dark-receipt-bid",
         "buyer",
-        "/登陆暗网 1",
+        "/报价 1 20",
         now,
+        "direct-buyer",
+    )
+    repository.run_dark_market_jobs(now + timedelta(hours=3))
+
+    group_attempt = _group_receive(
+        service,
+        "dark-receipt-group-confirm",
+        "buyer",
+        "/确认收货 1",
+        now + timedelta(hours=4),
         market.chatroom_id,
     )
+    confirmed = _direct_receive(
+        service,
+        "dark-receipt-direct-confirm",
+        "buyer",
+        "/确认收货 1",
+        now + timedelta(hours=4),
+        "direct-buyer",
+    )
 
-    assert "报价成功" in "".join(_replies_for(factory, bid.message_id))
-    login_text = "".join(_replies_for(factory, login.message_id))
-    assert "旧钥匙" in login_text
-    assert "当前 20" in login_text
-    assert "卖家" not in login_text
-    assert "截止" not in login_text
+    assert "私聊" in "".join(_replies_for(factory, group_attempt.message_id))
+    assert "确认收货成功" in "".join(_replies_for(factory, confirmed.message_id))
+    assert repository.get_user_profile("seller").user.balance == 119
 
 
 def test_help_dark_market_lists_exact_commands_and_anonymity_rules():
@@ -407,11 +470,14 @@ def test_help_dark_market_lists_exact_commands_and_anonymity_rules():
         "/取消上架",
         "/确认",
         "/报价 商品编号 金额",
-        "/登陆暗网",
+        "/查看暗网",
         "/公开",
         "/不公开",
+        "/确认收货",
+        "/投诉",
     ):
         assert command in text
+    assert "/登陆暗网" not in text
     assert "双方都同意" in text
     assert "不显示" in text
 

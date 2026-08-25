@@ -512,12 +512,31 @@ TEMPLATE_DEFINITIONS = (
             TemplateDefinition(command, "not_joined", "未入职", "请先用 /入职 名字 加入摸鱼公司。", ("{日期}",)),
         )
     ),
-    TemplateDefinition("/登陆暗网", "group_only", "仅限暗网群", "请在配置的暗网群中发送 /登陆暗网。", ("{日期}",)),
-    TemplateDefinition("/登陆暗网", "usage", "查询格式", "请用 /登陆暗网 或 /登陆暗网 商品编号。", ("{日期}",)),
-    TemplateDefinition("/登陆暗网", "wrong_group", "群聊不匹配", "本群不是暗网交易所入口。", ("{日期}",)),
-    TemplateDefinition("/登陆暗网", "empty", "暂无商品", "暗网交易所当前没有竞价中的商品。", ("{日期}",)),
-    TemplateDefinition("/登陆暗网", "not_found", "商品不存在", "未找到该竞价中的暗网商品。", ("{日期}",)),
-    TemplateDefinition("/登陆暗网", "shown", "查询成功", "{商品列表}", ("{商品列表}", "{日期}")),
+    TemplateDefinition("/查看暗网", "group_only", "仅限暗网群", "请在配置的暗网群中发送 /查看暗网。", ("{日期}",)),
+    TemplateDefinition("/查看暗网", "usage", "查询格式", "请用 /查看暗网 或 /查看暗网 商品编号。", ("{日期}",)),
+    TemplateDefinition("/查看暗网", "wrong_group", "群聊不匹配", "本群不是暗网交易所入口。", ("{日期}",)),
+    TemplateDefinition("/查看暗网", "empty", "暂无商品", "暗网交易所当前没有竞价中的商品。", ("{日期}",)),
+    TemplateDefinition("/查看暗网", "not_found", "商品不存在", "未找到该竞价中的暗网商品。", ("{日期}",)),
+    TemplateDefinition("/查看暗网", "shown", "查询成功", "{商品列表}", ("{商品列表}", "{日期}")),
+    *(
+        definition
+        for command, success_scenario, success_title, success_text in (
+            ("/确认收货", "confirmed", "确认成功", "暗网商品 #{商品编号} 确认收货成功。"),
+            ("/投诉", "complained", "投诉成功", "暗网商品 #{商品编号} 投诉已处理，成交款已退还，卖家已被处罚。"),
+        )
+        for definition in (
+            TemplateDefinition(command, "private_only", "仅限私聊", f"请在私聊中发送 {command} [商品编号]。", ("{日期}",)),
+            TemplateDefinition(command, "usage", "指令格式", f"请用 {command} [商品编号]。", ("{日期}",)),
+            TemplateDefinition(command, "choose_listing", "选择交易", "你有多笔待收货交易：{商品编号列表}。请在指令后加商品编号。", ("{商品编号列表}", "{日期}")),
+            TemplateDefinition(command, success_scenario, success_title, success_text, ("{商品编号}", "{日期}")),
+            TemplateDefinition(command, "auto_confirmed", "已自动确认", "暗网商品 #{商品编号} 已到期自动确认收货。", ("{商品编号}", "{日期}")),
+            TemplateDefinition(command, "no_pending", "没有待收货交易", "当前没有需要你处理的暗网待收货交易。", ("{日期}",)),
+            TemplateDefinition(command, "not_found", "商品不存在", "未找到该暗网商品。", ("{日期}",)),
+            TemplateDefinition(command, "not_buyer", "不是买家", "你不是该暗网商品的买家，无法处理收货。", ("{日期}",)),
+            TemplateDefinition(command, "already_resolved", "订单已处理", "该暗网订单已经处理完成。", ("{日期}",)),
+            TemplateDefinition(command, "not_joined", "未入职", "请先用 /入职 名字 加入摸鱼公司。", ("{日期}",)),
+        )
+    ),
     TemplateDefinition("/投稿", "usage", "投稿格式", "请发送 /投稿 随机事件。", ("{日期}",)),
     TemplateDefinition("/投稿", "not_joined", "未入职", "请先发送 /入职 名称 加入摸鱼公司。", ("{日期}",)),
     TemplateDefinition("/投稿", "no_direct_chat", "无法建立私聊", "暂时无法建立私聊，请先私聊机器人发送 /投稿 随机事件。", ("{日期}",)),

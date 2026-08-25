@@ -509,7 +509,7 @@ function renderTexasHoldemSettings(settings) {
 }
 
 function darkMarketStateLabel(state) {
-  return ({active: "竞价中", sold: "已成交", unsold: "已流拍", force_delisted: "强制下架"})[state] || state;
+  return ({active: "竞价中", awaiting_receipt: "待确认收货", sold: "已成交", complained: "已投诉", unsold: "已流拍", force_delisted: "强制下架"})[state] || state;
 }
 
 function renderDarkMarketSettings(settings) {
@@ -525,7 +525,7 @@ function renderDarkMarketSettings(settings) {
 function renderDarkMarketListings(records) {
   const container = document.querySelector("#dark-market-listings");
   container.innerHTML = records.items.map((item) => `
-    <article class="data-row"><div><b>#${item.public_number} ${escapeHtml(item.name)}</b><small>${statusBadge(darkMarketStateLabel(item.state), item.state === "active" ? "success" : "")}</small><small>卖家：${escapeHtml(item.seller_display_name)} · 当前报价者：${escapeHtml(item.current_bidder_display_name || "无")} · 起拍 ${item.starting_price}</small><small>创建：${escapeHtml(formatHeartbeat(item.created_at))} · 截止：${escapeHtml(formatHeartbeat(item.ends_at))}${item.final_amount == null ? "" : ` · 成交 ${item.final_amount} · 手续费 ${item.fee_amount}`}</small></div><div class="command-actions"><button class="secondary" data-dark-market-detail="${escapeHtml(item.id)}" type="button">查看详情</button>${item.state === "active" ? `<button class="danger-button" data-action="force-delist-dark-market" data-listing-id="${escapeHtml(item.id)}" type="button">强制下架</button>` : ""}</div></article>`).join("") || '<p class="muted">没有符合条件的暗网交易记录。</p>';
+    <article class="data-row"><div><b>#${item.public_number} ${escapeHtml(item.name)}</b><small>${statusBadge(darkMarketStateLabel(item.state), item.state === "active" ? "success" : "")}</small><small>卖家：${escapeHtml(item.seller_display_name)}（#${String(item.seller_employee_number).padStart(4, "0")}） · 当前报价者：${escapeHtml(item.current_bidder_display_name || "无")} · 起拍 ${item.starting_price}</small><small>创建：${escapeHtml(formatHeartbeat(item.created_at))} · 截止：${escapeHtml(formatHeartbeat(item.ends_at))}${item.final_amount == null ? "" : ` · 成交 ${item.final_amount} · 手续费 ${item.fee_amount ?? "待结算"}`}${item.receipt_deadline == null ? "" : ` · 收货期限 ${escapeHtml(formatHeartbeat(item.receipt_deadline))}`}</small></div><div class="command-actions"><button class="secondary" data-dark-market-detail="${escapeHtml(item.id)}" type="button">查看详情</button>${item.state === "active" ? `<button class="danger-button" data-action="force-delist-dark-market" data-listing-id="${escapeHtml(item.id)}" type="button">强制下架</button>` : ""}</div></article>`).join("") || '<p class="muted">没有符合条件的暗网交易记录。</p>';
   records.pages = Math.max(1, Math.ceil(records.total / records.page_size));
   renderPagination(document.querySelector("#dark-market-pagination"), records, "笔交易", loadDarkMarketListings);
 }
@@ -537,7 +537,7 @@ function renderDarkMarketDetail(item) {
   document.querySelector("#dark-market-detail-title").textContent = `暗网商品 #${item.public_number}`;
   document.querySelector("#dark-market-detail").innerHTML = `
     <article class="data-row"><div><b>${escapeHtml(item.name)}</b><small>用途：${escapeHtml(item.purpose)}</small><small>信息：${escapeHtml(item.details)}</small><small>匿名性别：${escapeHtml(item.gender)} · 状态：${escapeHtml(darkMarketStateLabel(item.state))}</small></div></article>
-    <article class="data-row"><div><b>卖家：${escapeHtml(item.seller_display_name)}</b><small>平台 ID：${escapeHtml(item.seller_platform_id)}</small><small>买家：${escapeHtml(item.buyer_display_name || "尚未成交")} ${item.buyer_platform_id ? `· ${escapeHtml(item.buyer_platform_id)}` : ""}</small><small>公开状态：${escapeHtml(item.disclosure_state || "无")} · 卖家选择 ${String(item.seller_choice)} · 买家选择 ${String(item.buyer_choice)}</small></div></article>
+    <article class="data-row"><div><b>卖家：${escapeHtml(item.seller_display_name)}（#${String(item.seller_employee_number).padStart(4, "0")}）</b><small>平台 ID：${escapeHtml(item.seller_platform_id)}</small><small>买家：${escapeHtml(item.buyer_display_name || "尚未成交")}${item.buyer_employee_number == null ? "" : `（#${String(item.buyer_employee_number).padStart(4, "0")}）`} ${item.buyer_platform_id ? `· ${escapeHtml(item.buyer_platform_id)}` : ""}</small><small>收货阶段：开始 ${escapeHtml(formatHeartbeat(item.receipt_started_at))} · 截止 ${escapeHtml(formatHeartbeat(item.receipt_deadline))} · 处理 ${escapeHtml(formatHeartbeat(item.receipt_resolved_at))}</small><small>公开状态：${escapeHtml(item.disclosure_state || "无")} · 卖家选择 ${String(item.seller_choice)} · 买家选择 ${String(item.buyer_choice)}</small></div></article>
     <article class="data-row"><div><b>报价链</b></div></article>${bids}`;
 }
 

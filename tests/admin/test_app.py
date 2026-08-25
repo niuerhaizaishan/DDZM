@@ -148,8 +148,10 @@ class FakeCore:
                 "public_number": 1,
                 "seller_platform_id": "seller-platform",
                 "seller_display_name": "后台卖家",
+                "seller_employee_number": 1,
                 "buyer_platform_id": None,
                 "buyer_display_name": None,
+                "buyer_employee_number": None,
                 "current_bidder_platform_id": "buyer-platform",
                 "current_bidder_display_name": "后台买家",
                 "name": "旧怀表",
@@ -163,6 +165,9 @@ class FakeCore:
                 "ends_at": "2026-08-24T18:00:00+08:00",
                 "final_amount": None,
                 "fee_amount": None,
+                "receipt_started_at": None,
+                "receipt_deadline": None,
+                "receipt_resolved_at": None,
                 "created_at": "2026-08-24T15:00:00+08:00",
                 "finished_at": None,
                 "disclosure_state": None,
@@ -3041,6 +3046,7 @@ def test_admin_proxies_dark_market_settings_history_and_force_delist(
     )
     assert listed.status_code == 200
     assert listed.json()["items"][0]["seller_display_name"] == "后台卖家"
+    assert listed.json()["items"][0]["seller_employee_number"] == 1
     listing_id = listed.json()["items"][0]["id"]
     detail = client.get(
         f"/api/game/dark-market/listings/{listing_id}", headers=headers

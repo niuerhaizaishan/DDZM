@@ -967,8 +967,10 @@ class DarkMarketListingResponse(ApiModel):
     public_number: int
     seller_platform_id: str
     seller_display_name: str
+    seller_employee_number: int
     buyer_platform_id: str | None
     buyer_display_name: str | None
+    buyer_employee_number: int | None
     current_bidder_platform_id: str | None
     current_bidder_display_name: str | None
     name: str
@@ -982,6 +984,9 @@ class DarkMarketListingResponse(ApiModel):
     ends_at: AwareDatetime
     final_amount: int | None
     fee_amount: int | None
+    receipt_started_at: AwareDatetime | None
+    receipt_deadline: AwareDatetime | None
+    receipt_resolved_at: AwareDatetime | None
     created_at: AwareDatetime
     finished_at: AwareDatetime | None
     disclosure_state: str | None

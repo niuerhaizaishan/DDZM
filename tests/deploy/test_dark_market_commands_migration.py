@@ -102,9 +102,11 @@ def test_dark_market_command_migration_seeds_without_overwriting_custom_template
         "/报价",
         "/公开",
         "/不公开",
-        "/登陆暗网",
+        "/查看暗网",
+        "/确认收货",
+        "/投诉",
     } <= set(command_rows)
     assert command_rows["/报价"] is False
     assert custom == "管理员自定义报价提示"
     assert ("/上架暗网", "private_only") in scenarios
-    assert ("/登陆暗网", "wrong_group") in scenarios
+    assert ("/查看暗网", "wrong_group") in scenarios

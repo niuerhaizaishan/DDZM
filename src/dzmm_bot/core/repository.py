@@ -406,6 +406,8 @@ _BALANCE_SOURCE_LABELS = {
     "dark_market_sale_income": "暗网成交收入",
     "dark_market_sale_fee": "暗网成交手续费",
     "dark_market_force_refund": "暗网强制下架退款",
+    "dark_market_complaint_refund": "暗网投诉退款",
+    "dark_market_complaint_penalty": "暗网投诉卖家罚款",
     "shop_purchase": "商店购买",
     "shop_gift": "赠送卡到账",
     "shop_scratch": "刮刮卡奖励",
@@ -1000,6 +1002,13 @@ class DarkMarketDisclosureResult:
 
 
 @dataclass(frozen=True)
+class DarkMarketReceiptResult:
+    status: str
+    public_number: int | None = None
+    candidates: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
 class DarkMarketBrowseResult:
     status: str
     text: str | None = None
@@ -1023,8 +1032,10 @@ class DarkMarketAdminListing:
     public_number: int
     seller_platform_id: str
     seller_display_name: str
+    seller_employee_number: int
     buyer_platform_id: str | None
     buyer_display_name: str | None
+    buyer_employee_number: int | None
     current_bidder_platform_id: str | None
     current_bidder_display_name: str | None
     name: str
@@ -1038,6 +1049,9 @@ class DarkMarketAdminListing:
     ends_at: datetime
     final_amount: int | None
     fee_amount: int | None
+    receipt_started_at: datetime | None
+    receipt_deadline: datetime | None
+    receipt_resolved_at: datetime | None
     created_at: datetime
     finished_at: datetime | None
     disclosure_state: str | None
@@ -1700,7 +1714,9 @@ _COMMAND_DEFINITIONS = (
     ("/报价", "/报价 商品编号 金额（仅私聊）", "为暗网商品提交匿名报价"),
     ("/公开", "/公开 [商品编号]（仅私聊）", "同意公开暗网成交双方身份"),
     ("/不公开", "/不公开 [商品编号]（仅私聊）", "拒绝公开暗网成交双方身份"),
-    ("/登陆暗网", "/登陆暗网 [商品编号]", "在暗网群查看竞价中的商品"),
+    ("/查看暗网", "/查看暗网 [商品编号]", "在暗网群查看竞价中的商品"),
+    ("/确认收货", "/确认收货 [商品编号]（仅私聊）", "确认暗网商品收货"),
+    ("/投诉", "/投诉 [商品编号]（仅私聊）", "投诉暗网商品未交付"),
     ("/投稿", "/投稿 随机事件", "进入随机事件私聊投稿向导"),
     ("/我的投稿", "/我的投稿", "查看自己最近的随机事件投稿状态"),
     ("/撤回投稿", "/撤回投稿 编号", "撤回自己仍在等待审核的随机事件投稿"),
@@ -5403,6 +5419,15 @@ class CoreRepository:
                             DarkMarketDisclosureRecord.state == "pending",
                             DarkMarketDisclosureRecord.deadline > now,
                         ),
+                        select(UserRecord.platform_id)
+                        .join(
+                            DarkMarketListingRecord,
+                            DarkMarketListingRecord.buyer_user_id == UserRecord.id,
+                        )
+                        .where(
+                            DarkMarketListingRecord.state == "awaiting_receipt",
+                            DarkMarketListingRecord.receipt_deadline > now,
+                        ),
                     )
                 )
             )
@@ -6426,6 +6451,89 @@ class CoreRepository:
         buyer = users.get(current.bidder_user_id)
         if seller is None or buyer is None:
             raise RuntimeError("暗网交易用户不存在")
+        listing.state = "awaiting_receipt"
+        listing.buyer_user_id = buyer.id
+        listing.final_amount = current.amount
+        listing.fee_amount = None
+        listing.receipt_started_at = now
+        listing.receipt_deadline = now + timedelta(hours=72)
+        listing.receipt_resolved_at = None
+        listing.finished_at = None
+        self.enqueue_system_outbound(
+            f"暗网商品 #{listing.public_number} 竞拍结束，成交价 {current.amount} "
+            "摸鱼币，等待买家确认收货。",
+            group_chat_id=group.id,
+            destination_chatroom_id=group.chatroom_id,
+        )
+        seller_destination = self._dark_market_direct_destination(
+            session, seller.platform_id
+        )
+        buyer_destination = self._dark_market_direct_destination(
+            session, buyer.platform_id
+        )
+        if seller_destination is None or buyer_destination is None:
+            raise RuntimeError("暗网交易双方私聊不存在")
+        seller_identity = (
+            f"{seller.display_name}（{format_employee_number(seller.employee_number)}）"
+        )
+        buyer_identity = (
+            f"{buyer.display_name}（{format_employee_number(buyer.employee_number)}）"
+        )
+        if seller.id == buyer.id:
+            self.enqueue_system_outbound(
+                f"暗网商品 #{listing.public_number} 由你拍下自己的商品，成交价 "
+                f"{current.amount} 摸鱼币。请在 72 小时内发送 "
+                f"/确认收货 {listing.public_number} 或 /投诉 {listing.public_number}。",
+                destination_chatroom_id=buyer_destination,
+                delivery_kind="direct",
+            )
+            return
+        self.enqueue_system_outbound(
+            f"暗网商品 #{listing.public_number} 已进入待收货。买家：{buyer_identity}。"
+            "请联系买家完成交付。",
+            destination_chatroom_id=seller_destination,
+            delivery_kind="direct",
+        )
+        self.enqueue_system_outbound(
+            f"暗网商品 #{listing.public_number} 已进入待收货。卖家：{seller_identity}。"
+            f"请在 72 小时内发送 /确认收货 {listing.public_number} 或 "
+            f"/投诉 {listing.public_number}。",
+            destination_chatroom_id=buyer_destination,
+            delivery_kind="direct",
+        )
+
+    def _confirm_dark_market_receipt_locked(
+        self, session: Session, listing: DarkMarketListingRecord, now: datetime
+    ) -> None:
+        if listing.state != "awaiting_receipt":
+            return
+        current = session.scalar(
+            select(DarkMarketBidRecord)
+            .where(
+                DarkMarketBidRecord.listing_id == listing.id,
+                DarkMarketBidRecord.state == "current",
+            )
+            .with_for_update()
+        )
+        if current is None or listing.buyer_user_id is None:
+            raise RuntimeError("暗网待收货报价不存在")
+        user_ids = {listing.seller_user_id, listing.buyer_user_id}
+        users = {
+            user.id: user
+            for user in session.scalars(
+                select(UserRecord)
+                .where(UserRecord.id.in_(user_ids))
+                .order_by(UserRecord.id)
+                .with_for_update()
+            )
+        }
+        seller = users.get(listing.seller_user_id)
+        buyer = users.get(listing.buyer_user_id)
+        if seller is None or buyer is None:
+            raise RuntimeError("暗网交易用户不存在")
+        group = session.get(GroupChatRecord, listing.announcement_group_id)
+        if group is None or group.chatroom_id is None:
+            raise RuntimeError("暗网播报群不存在")
         fee = calculate_fee(current.amount, listing.fee_percent_snapshot)
         self._apply_balance_change(
             seller, current.amount, "dark_market_sale_income", now
@@ -6434,20 +6542,22 @@ class CoreRepository:
         current.state = "settled"
         current.settled_at = now
         listing.state = "sold"
-        listing.buyer_user_id = buyer.id
-        listing.final_amount = current.amount
         listing.fee_amount = fee
-        disclosure = DarkMarketDisclosureRecord(
-            listing_id=listing.id,
-            seller_user_id=seller.id,
-            buyer_user_id=buyer.id,
-            state="pending",
-            deadline=now + timedelta(minutes=10),
-            created_at=now,
+        listing.receipt_resolved_at = now
+        listing.finished_at = now
+        session.add(
+            DarkMarketDisclosureRecord(
+                listing_id=listing.id,
+                seller_user_id=seller.id,
+                buyer_user_id=buyer.id,
+                state="pending",
+                deadline=now + timedelta(minutes=10),
+                created_at=now,
+            )
         )
-        session.add(disclosure)
         self.enqueue_system_outbound(
-            f"暗网商品 #{listing.public_number} 已成交，成交价 {current.amount} 摸鱼币。",
+            f"暗网商品 #{listing.public_number} 已确认收货，交易成功，成交价 "
+            f"{current.amount} 摸鱼币。",
             group_chat_id=group.id,
             destination_chatroom_id=group.chatroom_id,
         )
@@ -6457,11 +6567,132 @@ class CoreRepository:
             )
             if direct_chatroom_id is not None:
                 self.enqueue_system_outbound(
-                    f"暗网商品 #{listing.public_number} 已成交。是否公开买卖双方身份？"
+                    f"暗网商品 #{listing.public_number} 已确认收货。是否公开买卖双方身份？"
                     "请在 10 分钟内发送 /公开 或 /不公开。",
                     destination_chatroom_id=direct_chatroom_id,
                     delivery_kind="direct",
                 )
+
+    def _complain_dark_market_receipt_locked(
+        self, session: Session, listing: DarkMarketListingRecord, now: datetime
+    ) -> None:
+        if listing.state != "awaiting_receipt":
+            return
+        current = session.scalar(
+            select(DarkMarketBidRecord)
+            .where(
+                DarkMarketBidRecord.listing_id == listing.id,
+                DarkMarketBidRecord.state == "current",
+            )
+            .with_for_update()
+        )
+        if current is None or listing.buyer_user_id is None:
+            raise RuntimeError("暗网待收货报价不存在")
+        user_ids = {listing.seller_user_id, listing.buyer_user_id}
+        users = {
+            user.id: user
+            for user in session.scalars(
+                select(UserRecord)
+                .where(UserRecord.id.in_(user_ids))
+                .order_by(UserRecord.id)
+                .with_for_update()
+            )
+        }
+        seller = users.get(listing.seller_user_id)
+        buyer = users.get(listing.buyer_user_id)
+        if seller is None or buyer is None:
+            raise RuntimeError("暗网交易用户不存在")
+        group = session.get(GroupChatRecord, listing.announcement_group_id)
+        if group is None or group.chatroom_id is None:
+            raise RuntimeError("暗网播报群不存在")
+        self._apply_balance_change(
+            buyer, current.amount, "dark_market_complaint_refund", now
+        )
+        self._apply_balance_change(
+            seller, -current.amount, "dark_market_complaint_penalty", now
+        )
+        current.state = "refunded"
+        current.refunded_at = now
+        listing.state = "complained"
+        listing.fee_amount = None
+        listing.receipt_resolved_at = now
+        listing.finished_at = now
+        self.enqueue_system_outbound(
+            "【暗网交易公开通报批评】"
+            f"商品 #{listing.public_number} 的卖家 "
+            f"{seller.display_name}（{format_employee_number(seller.employee_number)}）"
+            f"未完成交付，已向买家退款 {current.amount} 摸鱼币，并处罚卖家 "
+            f"{current.amount} 摸鱼币。",
+            group_chat_id=group.id,
+            destination_chatroom_id=group.chatroom_id,
+        )
+
+    def resolve_dark_market_receipt(
+        self,
+        platform_id: str,
+        public_number: int | None,
+        action: str,
+        inbound_id: UUID,
+        now: datetime,
+    ) -> DarkMarketReceiptResult:
+        del inbound_id
+        if action not in {"confirm", "complain"}:
+            raise ValueError("暗网收货操作无效")
+        with self.transaction():
+            with self._session() as session:
+                user = session.scalar(
+                    select(UserRecord).where(UserRecord.platform_id == platform_id)
+                )
+                if user is None:
+                    return DarkMarketReceiptResult("not_joined")
+                query = (
+                    select(DarkMarketListingRecord)
+                    .where(
+                        DarkMarketListingRecord.state == "awaiting_receipt",
+                        DarkMarketListingRecord.buyer_user_id == user.id,
+                    )
+                    .order_by(DarkMarketListingRecord.public_number)
+                    .with_for_update()
+                )
+                if public_number is not None:
+                    query = query.where(
+                        DarkMarketListingRecord.public_number == public_number
+                    )
+                listings = list(session.scalars(query))
+                if not listings:
+                    if public_number is None:
+                        return DarkMarketReceiptResult("no_pending")
+                    listing = session.scalar(
+                        select(DarkMarketListingRecord).where(
+                            DarkMarketListingRecord.public_number == public_number
+                        )
+                    )
+                    if listing is None:
+                        return DarkMarketReceiptResult("not_found", public_number)
+                    if listing.buyer_user_id != user.id:
+                        return DarkMarketReceiptResult("not_buyer", public_number)
+                    return DarkMarketReceiptResult("already_resolved", public_number)
+                if public_number is None and len(listings) > 1:
+                    return DarkMarketReceiptResult(
+                        "choose_listing",
+                        candidates=tuple(
+                            listing.public_number for listing in listings
+                        ),
+                    )
+                listing = listings[0]
+                if (
+                    listing.receipt_deadline is not None
+                    and listing.receipt_deadline <= now
+                ):
+                    self._confirm_dark_market_receipt_locked(session, listing, now)
+                    return DarkMarketReceiptResult(
+                        "auto_confirmed", listing.public_number
+                    )
+                if action == "confirm":
+                    self._confirm_dark_market_receipt_locked(session, listing, now)
+                    return DarkMarketReceiptResult("confirmed", listing.public_number)
+                self._complain_dark_market_receipt_locked(session, listing, now)
+                return DarkMarketReceiptResult("complained", listing.public_number)
 
     def run_dark_market_jobs(self, now: datetime) -> None:
         with self.transaction():
@@ -6503,6 +6734,42 @@ class CoreRepository:
             except Exception:
                 logger.exception(
                     "failed to settle dark market listing %s", listing_id
+                )
+        with self._session() as session:
+            receipt_due_ids = tuple(
+                session.scalars(
+                    select(DarkMarketListingRecord.id)
+                    .where(
+                        DarkMarketListingRecord.state == "awaiting_receipt",
+                        DarkMarketListingRecord.receipt_deadline <= now,
+                    )
+                    .order_by(
+                        DarkMarketListingRecord.receipt_deadline,
+                        DarkMarketListingRecord.public_number,
+                    )
+                )
+            )
+        for listing_id in receipt_due_ids:
+            try:
+                with self.transaction():
+                    with self._session() as session:
+                        listing = session.get(
+                            DarkMarketListingRecord,
+                            listing_id,
+                            with_for_update=True,
+                        )
+                        if (
+                            listing is not None
+                            and listing.state == "awaiting_receipt"
+                            and listing.receipt_deadline is not None
+                            and listing.receipt_deadline <= now
+                        ):
+                            self._confirm_dark_market_receipt_locked(
+                                session, listing, now
+                            )
+            except Exception:
+                logger.exception(
+                    "failed to auto-confirm dark market receipt %s", listing_id
                 )
         with self._session() as session:
             disclosure_ids = tuple(
@@ -6641,8 +6908,10 @@ class CoreRepository:
             public_number=listing.public_number,
             seller_platform_id=seller.platform_id,
             seller_display_name=seller.display_name,
+            seller_employee_number=seller.employee_number,
             buyer_platform_id=None if buyer is None else buyer.platform_id,
             buyer_display_name=None if buyer is None else buyer.display_name,
+            buyer_employee_number=None if buyer is None else buyer.employee_number,
             current_bidder_platform_id=(
                 None if current_bidder is None else current_bidder.platform_id
             ),
@@ -6660,6 +6929,9 @@ class CoreRepository:
             ends_at=listing.ends_at,
             final_amount=listing.final_amount,
             fee_amount=listing.fee_amount,
+            receipt_started_at=listing.receipt_started_at,
+            receipt_deadline=listing.receipt_deadline,
+            receipt_resolved_at=listing.receipt_resolved_at,
             created_at=listing.created_at,
             finished_at=listing.finished_at,
             disclosure_state=None if disclosure is None else disclosure.state,
