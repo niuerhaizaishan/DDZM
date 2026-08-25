@@ -473,6 +473,40 @@ def test_worker_dispatches_the_random_event_submission_entry_from_a_new_direct_r
     assert core.submitted_ids == ["new-submission"]
 
 
+@pytest.mark.parametrize(
+    "content",
+    (
+        "/上架暗网",
+        "/取消上架",
+        "/确认",
+        "/报价 12 25",
+        "/公开 12",
+        "/不公开 12",
+    ),
+)
+def test_worker_dispatches_dark_market_commands_from_a_new_direct_room(context, content):
+    worker, gateway, _, _, core, _ = context
+    worker.run_once()
+
+    gateway.message_handler(
+        InboundMessage(
+            f"new-dark-market-{content}",
+            "new-user",
+            content,
+            NOW,
+            source_type="direct",
+            chatroom_id="new-direct",
+        )
+    )
+
+    assert core.submitted_event.wait(timeout=1)
+    assert core.direct_chat_syncs[-1] == (
+        [DirectChatRoom("new-user", "new-direct")],
+        NOW,
+    )
+    assert core.submitted_ids == [f"new-dark-market-{content}"]
+
+
 def test_worker_does_not_wait_for_outbound_socket_send(context):
     worker, gateway, _, _, core, _ = context
     gateway.send_delay_seconds = 0.2

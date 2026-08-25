@@ -13,7 +13,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, delete, exists, func, or_, select, text, update
+from sqlalchemy import and_, delete, exists, func, or_, select, text, union_all, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session, aliased, sessionmaker
@@ -5305,7 +5305,8 @@ class CoreRepository:
                 )
             )
 
-    def direct_inbound_chatroom_ids(self) -> tuple[str, ...]:
+    def direct_inbound_chatroom_ids(self, now: datetime) -> tuple[str, ...]:
+        now = now.astimezone(BEIJING)
         with self._session() as session:
             active_platform_ids = set(
                 session.scalars(
@@ -5360,6 +5361,47 @@ class CoreRepository:
                         ),
                         TexasHoldemPlayerRecord.state.not_in(
                             ("left", "finished", "cancelled")
+                        ),
+                    )
+                )
+            )
+            active_platform_ids.update(
+                session.scalars(
+                    union_all(
+                        select(UserRecord.platform_id)
+                        .join(
+                            DarkMarketDraftRecord,
+                            DarkMarketDraftRecord.user_id == UserRecord.id,
+                        )
+                        .where(DarkMarketDraftRecord.expires_at > now),
+                        select(UserRecord.platform_id)
+                        .join(
+                            AdultCardSessionRecord,
+                            AdultCardSessionRecord.owner_user_id == UserRecord.id,
+                        )
+                        .where(
+                            AdultCardSessionRecord.state.in_(
+                                ("collecting_scene", "collecting_m_count")
+                            ),
+                            AdultCardSessionRecord.stage_deadline > now,
+                        ),
+                        select(UserRecord.platform_id)
+                        .join(
+                            DarkMarketDisclosureRecord,
+                            DarkMarketDisclosureRecord.seller_user_id == UserRecord.id,
+                        )
+                        .where(
+                            DarkMarketDisclosureRecord.state == "pending",
+                            DarkMarketDisclosureRecord.deadline > now,
+                        ),
+                        select(UserRecord.platform_id)
+                        .join(
+                            DarkMarketDisclosureRecord,
+                            DarkMarketDisclosureRecord.buyer_user_id == UserRecord.id,
+                        )
+                        .where(
+                            DarkMarketDisclosureRecord.state == "pending",
+                            DarkMarketDisclosureRecord.deadline > now,
                         ),
                     )
                 )

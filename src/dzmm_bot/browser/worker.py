@@ -28,6 +28,14 @@ from .session import BrowserSession, ChatGateway
 
 
 _LOGGER = logging.getLogger(__name__)
+_DIRECT_ENTRY_COMMANDS = {
+    "/上架暗网",
+    "/取消上架",
+    "/确认",
+    "/报价",
+    "/公开",
+    "/不公开",
+}
 _OUTBOUND_BATCH_SIZE = 20
 _OUTBOUND_BATCH_BUDGET_SECONDS = 2.0
 _GROUP_TARGET_SYNC_INTERVAL_SECONDS = 5.0
@@ -267,10 +275,12 @@ class BrowserWorker:
                 [DirectChatRoom(message.sender_platform_id, message.chatroom_id)],
                 self._clock(),
             )
+            content = message.content.strip()
+            command = content.split(maxsplit=1)[0] if content else ""
             if (
-                message.content.strip() != "/投稿 随机事件"
-                and message.chatroom_id
-                not in self._core.direct_inbound_chatroom_ids()
+                content != "/投稿 随机事件"
+                and command not in _DIRECT_ENTRY_COMMANDS
+                and message.chatroom_id not in self._core.direct_inbound_chatroom_ids()
             ):
                 return
         self._core.submit_inbound(message)

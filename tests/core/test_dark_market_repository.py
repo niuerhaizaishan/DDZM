@@ -138,6 +138,7 @@ def test_dark_market_settings_require_an_enabled_listening_group(repository, now
 
 def test_dark_market_draft_resumes_and_rejects_invalid_field(repository, now) -> None:
     repository.create_user("seller", "卖家", now, 100)
+    repository.upsert_direct_chats([("seller", "direct-seller")], now)
     _configure_market(repository, now)
 
     started = repository.start_dark_market_draft("seller", now)
@@ -149,6 +150,10 @@ def test_dark_market_draft_resumes_and_rejects_invalid_field(repository, now) ->
     assert invalid.step == "name"
     assert resumed.status == "resumed"
     assert resumed.step == "name"
+    assert repository.direct_inbound_chatroom_ids(now) == ("direct-seller",)
+    assert repository.direct_inbound_chatroom_ids(
+        now + timedelta(minutes=30)
+    ) == ()
 
 
 def test_dark_market_draft_can_be_cancelled_and_expires(repository, now) -> None:
@@ -360,6 +365,14 @@ def test_disclosure_requires_both_parties_and_self_sale_only_one(repository, now
     )
     repository.run_dark_market_jobs(listing.ends_at)
 
+    assert set(repository.direct_inbound_chatroom_ids(listing.ends_at)) == {
+        "direct-seller",
+        "direct-buyer-a",
+    }
+    assert repository.direct_inbound_chatroom_ids(
+        listing.ends_at + timedelta(minutes=10)
+    ) == ()
+
     seller = repository.decide_dark_market_disclosure(
         "seller", listing.public_number, True,
         _inbound_id(repository, "seller", "/公开 1", listing.ends_at), listing.ends_at,
@@ -371,6 +384,7 @@ def test_disclosure_requires_both_parties_and_self_sale_only_one(repository, now
 
     assert seller.status == "waiting_other"
     assert buyer.status == "revealed"
+    assert repository.direct_inbound_chatroom_ids(listing.ends_at) == ()
     with repository._session() as session:
         public_messages = list(
             session.scalars(

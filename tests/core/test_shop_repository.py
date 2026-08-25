@@ -438,6 +438,10 @@ def test_adult_card_requires_switch_direct_room_and_reserves_until_scene(
     )
     assert started.status == "scene_required"
     assert started.direct_chatroom_id == "direct-owner"
+    assert repository.direct_inbound_chatroom_ids(now) == ("direct-owner",)
+    assert repository.direct_inbound_chatroom_ids(
+        now + timedelta(minutes=30)
+    ) == ()
     with factory.begin() as session:
         inventory = session.scalar(
             select(UserItemRecord).where(UserItemRecord.user_id == owner.id)
@@ -453,6 +457,39 @@ def test_adult_card_requires_switch_direct_room_and_reserves_until_scene(
         participant = session.scalar(select(AdultCardParticipantRecord))
         assert card_session.state == "awaiting_consent"
         assert participant.authorization_outbound_id is not None
+
+
+def test_m_card_count_keeps_direct_room_subscribed_until_setup_deadline(
+    setup_repository, now
+) -> None:
+    repository, factory = setup_repository
+    repository.create_user("m-owner", "M卡发起人", now, 100)
+    repository.upsert_direct_chats([("m-owner", "direct-m-owner")], now)
+    with factory.begin() as session:
+        session.get(GroupChatRecord, PRIMARY_GROUP_CHAT_ID).adult_shop_enabled = True
+    number = _number(repository, "adult_m")
+    assert repository.purchase_shop_item(
+        _inbound(repository, "m-owner", now),
+        "m-owner",
+        number,
+        PRIMARY_GROUP_CHAT_ID,
+        now,
+    ).status == "purchased"
+    assert repository.start_adult_shop_item(
+        _inbound(repository, "m-owner", now, "/使用"),
+        "m-owner",
+        number,
+        PRIMARY_GROUP_CHAT_ID,
+        now,
+    ).status == "scene_required"
+    assert repository.consume_adult_card_scene(
+        "m-owner", "自愿参与的虚构场景", now
+    ).status == "m_count_required"
+
+    assert repository.direct_inbound_chatroom_ids(now) == ("direct-m-owner",)
+    assert repository.direct_inbound_chatroom_ids(
+        now + timedelta(minutes=30)
+    ) == ()
 
 
 def test_multi_adult_card_collects_unique_participants_and_can_cancel(

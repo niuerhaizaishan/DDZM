@@ -405,7 +405,7 @@ def create_app(
         _: Annotated[None, Depends(authorize)],
     ) -> DirectInboundRoomsResponse:
         return DirectInboundRoomsResponse(
-            chatroom_ids=list(repository.direct_inbound_chatroom_ids())
+            chatroom_ids=list(repository.direct_inbound_chatroom_ids(clock()))
         )
 
     @app.post(
