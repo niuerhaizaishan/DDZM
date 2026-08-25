@@ -44,3 +44,17 @@ def test_admin_bundle_contains_dark_market_controls():
     assert 'id="dark-market-settings-modal"' in page
     assert "/api/game/dark-market/listings" in script
     assert "force-delist-dark-market" in script
+
+
+def test_admin_bundle_contains_shop_card_controls():
+    root = Path(__file__).resolve().parents[2]
+    page = (root / "src/dzmm_bot/admin/templates/index.html").read_text()
+    script = (root / "src/dzmm_bot/admin/static/admin.js").read_text()
+
+    assert 'id="group-chat-adult-shop-enabled"' in page
+    assert 'id="shop-purchase-log"' in page
+    assert 'id="shop-scene-job-list"' in page
+    assert 'id="shop-common-state-list"' in page
+    assert "/api/game/shop/activity" in script
+    assert "data-retry-shop-scene" in script
+    assert "data-end-shop-state" in script

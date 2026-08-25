@@ -9,6 +9,7 @@ from dzmm_bot.ai.core_client import (
 )
 from dzmm_bot.ai.impressions import AIImpressionOperation
 from dzmm_bot.core.repository import ClaimedAIRequest
+from dzmm_bot.core.repository import ClaimedShopSceneJob
 from dzmm_bot.core.schema import BEIJING
 
 
@@ -174,6 +175,45 @@ def test_ai_worker_uses_enhanced_social_prompt_in_one_provider_call():
                 "timeout_seconds": 10,
             },
         )
+    ]
+
+
+def test_ai_worker_prioritizes_and_completes_shop_scene_job():
+    from dzmm_bot.ai.worker import AIWorker
+
+    scene_claim = ClaimedShopSceneJob(
+        id=uuid4(),
+        lease_token=uuid4(),
+        system_prompt="consensual scene",
+        user_content="approved context",
+        max_response_chars=8,
+        timeout_seconds=120,
+    )
+
+    class SceneCore(FakeCore):
+        def __init__(self):
+            super().__init__(None)
+            self.scene_claim = scene_claim
+            self.scene_completed = []
+
+        def claim_shop_scene_job(self, *args):
+            claim, self.scene_claim = self.scene_claim, None
+            return claim
+
+        def complete_shop_scene_job(self, *args):
+            self.scene_completed.append(args)
+
+        def fail_shop_scene_job(self, *args):
+            raise AssertionError(args)
+
+    class SceneClient:
+        def complete(self, *args, **kwargs):
+            return "123456789"
+
+    core = SceneCore()
+    assert AIWorker("ai-1", core, SceneClient(), clock=lambda: NOW).run_once() is True
+    assert core.scene_completed == [
+        (scene_claim.id, "ai-1", scene_claim.lease_token, "12345678", NOW)
     ]
 
 

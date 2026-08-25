@@ -45,6 +45,7 @@ from .api_models import (
     CreateDepartmentRequest,
     CreateAIPlayerImpressionRequest,
     CreateItemRequest,
+    UpdateItemRequest,
     CreateProfileImageUploadRequest,
     DailyJobsRequest,
     DirectChatSyncRequest,
@@ -75,6 +76,8 @@ from .api_models import (
     DarkMarketSettingsResponse,
     DarkMarketRankLimitResponse,
     SetDarkMarketSettingsRequest,
+    ShopAdminActivityResponse,
+    ShopSceneClaimResponse,
     DarkMarketListingResponse,
     DarkMarketBidResponse,
     PaginatedDarkMarketListingsResponse,
@@ -282,6 +285,7 @@ def create_app(
                 request.announcements_enabled,
                 request.now,
                 enabled_game_types=request.enabled_game_types,
+                adult_shop_enabled=request.adult_shop_enabled,
             )
         except (ValueError, GroupChatConflict) as error:
             raise HTTPException(status.HTTP_409_CONFLICT, str(error))
@@ -350,6 +354,7 @@ def create_app(
                 enabled_game_types=request.enabled_game_types,
                 random_events_enabled=request.random_events_enabled,
                 announcements_enabled=request.announcements_enabled,
+                adult_shop_enabled=request.adult_shop_enabled,
                 now=request.now,
             )
         except LookupError as error:
@@ -1022,6 +1027,59 @@ def create_app(
             )
         )
 
+    @app.patch(
+        "/internal/game/items/{public_number}", response_model=ItemResponse
+    )
+    def update_game_item(
+        public_number: int,
+        request: UpdateItemRequest,
+        _: Annotated[None, Depends(authorize)],
+    ) -> ItemResponse:
+        try:
+            record = repository.update_shop_item(
+                public_number,
+                enabled=request.enabled,
+                minimum_rank_order=request.minimum_rank_order,
+                unlimited_stock=request.unlimited_stock,
+                stock=request.stock,
+            )
+        except LookupError as error:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(error))
+        return _item_response(record)
+
+    @app.get(
+        "/internal/game/shop/activity", response_model=ShopAdminActivityResponse
+    )
+    def shop_activity(
+        _: Annotated[None, Depends(authorize)],
+        limit: int = Query(100, ge=1, le=500),
+    ) -> ShopAdminActivityResponse:
+        return ShopAdminActivityResponse(
+            **repository.list_shop_admin_activity(limit)
+        )
+
+    @app.post(
+        "/internal/game/shop/scene-jobs/{job_id}/retry",
+        response_model=AcceptedResponse,
+    )
+    def retry_shop_scene_job(
+        job_id: UUID,
+        _: Annotated[None, Depends(authorize)],
+    ) -> AcceptedResponse:
+        return AcceptedResponse(accepted=repository.retry_shop_scene_job(job_id))
+
+    @app.post(
+        "/internal/game/shop/common-states/{state_id}/end",
+        response_model=AcceptedResponse,
+    )
+    def end_shop_common_state(
+        state_id: UUID,
+        _: Annotated[None, Depends(authorize)],
+    ) -> AcceptedResponse:
+        return AcceptedResponse(
+            accepted=repository.force_end_shop_common_state(state_id, clock())
+        )
+
     @app.get("/internal/game/settings", response_model=GameSettingsResponse)
     def game_settings(
         _: Annotated[None, Depends(authorize)],
@@ -1361,6 +1419,63 @@ def create_app(
             timeout_seconds=record.timeout_seconds,
         )
 
+    @app.post(
+        "/internal/ai/shop-scenes/claim", response_model=ShopSceneClaimResponse | None
+    )
+    def claim_shop_scene_job(
+        request: ClaimRequest, _: Annotated[None, Depends(authorize)]
+    ) -> ShopSceneClaimResponse | None:
+        record = repository.claim_shop_scene_job(
+            request.worker_id, request.now, request.lease_seconds
+        )
+        if record is None:
+            return None
+        return ShopSceneClaimResponse(
+            id=record.id,
+            lease_token=record.lease_token,
+            system_prompt=record.system_prompt,
+            user_content=record.user_content,
+            max_response_chars=record.max_response_chars,
+            timeout_seconds=record.timeout_seconds,
+        )
+
+    @app.post(
+        "/internal/ai/shop-scenes/{job_id}/completed",
+        response_model=AcceptedResponse,
+    )
+    def complete_shop_scene_job(
+        job_id: UUID,
+        request: AICompleteRequest,
+        _: Annotated[None, Depends(authorize)],
+    ) -> AcceptedResponse:
+        return AcceptedResponse(
+            accepted=repository.complete_shop_scene_job(
+                job_id,
+                request.worker_id,
+                request.lease_token,
+                request.text,
+                request.now,
+            )
+        )
+
+    @app.post(
+        "/internal/ai/shop-scenes/{job_id}/failed",
+        response_model=AcceptedResponse,
+    )
+    def fail_shop_scene_job(
+        job_id: UUID,
+        request: AIFailedRequest,
+        _: Annotated[None, Depends(authorize)],
+    ) -> AcceptedResponse:
+        return AcceptedResponse(
+            accepted=repository.fail_shop_scene_job(
+                job_id,
+                request.worker_id,
+                request.lease_token,
+                request.failure_summary,
+                request.now,
+            )
+        )
     @app.post(
         "/internal/ai/{request_id}/completed", response_model=AcceptedResponse
     )
@@ -2561,6 +2676,7 @@ def _group_chat_response(group, runtime) -> GroupChatResponse:
         enabled_game_types=list(group.enabled_game_types),
         random_events_enabled=group.random_events_enabled,
         announcements_enabled=group.announcements_enabled,
+        adult_shop_enabled=group.adult_shop_enabled,
         created_at=group.created_at,
         updated_at=group.updated_at,
         deleted_at=group.deleted_at,
@@ -2619,10 +2735,15 @@ def _worker_command_response(record: WorkerCommandRecord) -> WorkerCommandRespon
 
 def _item_response(record) -> ItemResponse:
     return ItemResponse(
+        public_number=record.public_number,
         name=record.name,
         description=record.description,
         price=record.price,
         stock=record.stock,
+        unlimited_stock=record.unlimited_stock,
+        system_key=record.system_key,
+        effect_type=record.effect_type,
+        minimum_rank_order=record.minimum_rank_order,
         enabled=record.enabled,
     )
 

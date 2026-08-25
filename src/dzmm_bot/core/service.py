@@ -17,7 +17,9 @@ from .random_event_submissions import (
 _DIRECT_COMMANDS = {
     "/报数", "/发红包", "/抢红包", "/余额", "/我的物品", "/我",
     "/帮助", "/当前游戏", "/我的档案", "/我的部门人数", "/打卡",
-    "/编辑档案", "/编辑档案形象", "/加入", "/退出", "/开始",
+    "/编辑档案", "/编辑档案形象", "/商店", "/购买",
+    "/使用", "/邀请参与", "/取消使用", "/同意使用", "/拒绝使用",
+    "/加入", "/退出", "/开始",
     "/答案", "/继续", "/收手", "/投降", "/跳过", "/结束游戏", "/看牌",
     "/上架暗网", "/取消上架", "/确认", "/报价", "/公开", "/不公开",
     "/登陆暗网",
@@ -113,12 +115,19 @@ class CoreService:
                 elif not message.content.lstrip().startswith("/"):
                     direct_reply = self._submission_handler.handle(message)
                     if direct_reply is None:
-                        draft_reply = self._repository.consume_dark_market_draft_text(
+                        adult_result = self._repository.consume_adult_card_scene(
                             message.sender_platform_id,
                             message.content,
                             message.received_at,
                         )
-                        direct_reply = self._dark_market_draft_reply(draft_reply)
+                        direct_reply = self._adult_card_scene_reply(adult_result)
+                        if direct_reply is None:
+                            draft_reply = self._repository.consume_dark_market_draft_text(
+                                message.sender_platform_id,
+                                message.content,
+                                message.received_at,
+                            )
+                            direct_reply = self._dark_market_draft_reply(draft_reply)
                 else:
                     return ReceiveResult(stored.id, True)
                 self._enqueue_replies(
@@ -310,6 +319,28 @@ class CoreService:
                     delivery_kind=reply.delivery_kind,
                 )
             return ReceiveResult(stored.id, True)
+
+    @staticmethod
+    def _adult_card_scene_reply(result):
+        if result is None:
+            return None
+        messages = {
+            "invalid_scene": "场景要求必须是 1–200 字，请重新发送。",
+            "invalid_m_count": "期望人数必须是 1–99 的整数，请重新发送。",
+            "expired": "卡片局填写已超时，预留卡片已经退回。",
+            "m_count_required": (
+                f"场景已保存。请继续发送卡片局 #{result.session_number} 的期望人数（1–99）。"
+            ),
+            "m_completed": f"M卡片局 #{result.session_number} 已发布到来源群。",
+            "participants_required": (
+                f"场景已保存。请回到来源群回复其他目标发送 "
+                f"/邀请参与 {result.session_number}。"
+            ),
+            "awaiting_consent": (
+                f"场景已保存，卡片局 #{result.session_number} 的授权通知已发出。"
+            ),
+        }
+        return messages.get(result.status)
 
     @staticmethod
     def _dark_market_draft_reply(result):

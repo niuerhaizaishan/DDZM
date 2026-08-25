@@ -93,7 +93,9 @@ def test_command_registry_exposes_exact_enabled_syntax(repository):
     assert commands["/记忆考核"] == "/记忆考核；/记忆考核 对战；/答案 内容"
     assert commands["/谁是卧底"] == "/谁是卧底 人数"
     assert commands["/甩锅"] == "/甩锅 玩家编号 甩锅理由"
-    assert commands["/发奖金"] == "/发奖金 员工名 金额；/发奖金 全部 金额"
+    assert commands["/发奖金"] == (
+        "回复发送 /发奖金 金额；/发奖金 员工名 金额；/发奖金 全部 金额"
+    )
     assert commands["/发红包"] == "/发红包 人数 总金额"
     assert commands["/抢红包"] == "/抢红包"
     assert commands["/修改名称"] == "/修改名称 新名称"
@@ -344,19 +346,33 @@ def session_factory():
 @pytest.fixture
 def repository(session_factory):
     from dzmm_bot.core.repository import CoreRepository
+    from dzmm_bot.core.schema import RankRecord
 
-    return CoreRepository(session_factory, number_bomb_random=Random(1))
+    repository = CoreRepository(session_factory, number_bomb_random=Random(1))
+    repository.list_ranks()
+    with session_factory.begin() as session:
+        session.scalar(
+            select(RankRecord).where(RankRecord.sort_order == 1)
+        ).multiplayer_game_limit = 999
+    return repository
 
 
 @pytest.fixture
 def texas_repository(session_factory):
     from dzmm_bot.core.repository import CoreRepository
+    from dzmm_bot.core.schema import RankRecord
 
-    return CoreRepository(
+    repository = CoreRepository(
         session_factory,
         number_bomb_random=Random(1),
         texas_holdem_random=Random(7),
     )
+    repository.list_ranks()
+    with session_factory.begin() as session:
+        session.scalar(
+            select(RankRecord).where(RankRecord.sort_order == 1)
+        ).multiplayer_game_limit = 999
+    return repository
 
 
 def _prepare_texas_users(repository, now, *platform_ids: str) -> None:
@@ -2565,6 +2581,14 @@ def test_red_packet_database_rejects_duplicate_claimant(session_factory):
 def _prepare_number_bomb_players(
     repository, now, prefix, count, balance=0, name_prefix="玩家"
 ):
+    from dzmm_bot.core.schema import RankRecord
+
+    repository.list_ranks()
+    with repository.transaction():
+        with repository._session() as session:
+            session.scalar(
+                select(RankRecord).where(RankRecord.sort_order == 1)
+            ).multiplayer_game_limit = 999
     platform_ids = [f"{prefix}-p{index}" for index in range(1, count + 1)]
     for index, platform_id in enumerate(platform_ids, 1):
         repository.create_user(platform_id, f"{name_prefix}{index}", now, balance)
@@ -4595,6 +4619,7 @@ def test_ai_social_context_includes_employee_live_state(
             select(DepartmentRecord.id).where(DepartmentRecord.name == "摸鱼研究部")
         )
         item = ItemRecord(
+            public_number=999,
             name="咖啡券",
             description="一杯咖啡",
             price=2,
@@ -9108,6 +9133,7 @@ def test_item_page_returns_newest_records_and_total(repository, session_factory,
         for index in range(21):
             session.add(
                 ItemRecord(
+                    public_number=1000 + index,
                     name=f"物品{index}",
                     description="说明",
                     price=index,
@@ -9117,10 +9143,10 @@ def test_item_page_returns_newest_records_and_total(repository, session_factory,
                 )
             )
 
-    items, total = repository.list_active_items_page(2, 20)
+    items, total = repository.list_active_items_page(3, 20)
 
-    assert total == 21
-    assert [item.name for item in items] == ["物品0"]
+    assert total == 43
+    assert [item.name for item in items] == ["物品2", "物品1", "物品0"]
 
 
 def test_daily_jobs_backfill_current_day_history_and_legacy_checkin_income(

@@ -80,6 +80,7 @@ class GroupChatResponse(ApiModel):
     enabled_game_types: list[GroupGameType]
     random_events_enabled: bool
     announcements_enabled: bool
+    adult_shop_enabled: bool
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None
@@ -96,6 +97,7 @@ class CreateGroupChatRequest(ApiModel):
     )
     random_events_enabled: bool = True
     announcements_enabled: bool = True
+    adult_shop_enabled: bool = False
     now: AwareDatetime
 
 
@@ -107,6 +109,7 @@ class UpdateGroupChatRequest(ApiModel):
     enabled_game_types: list[GroupGameType] | None = None
     random_events_enabled: bool | None = None
     announcements_enabled: bool | None = None
+    adult_shop_enabled: bool | None = None
     now: AwareDatetime
 
 
@@ -415,10 +418,15 @@ class UserProfileResponse(ApiModel):
 
 
 class ItemResponse(ApiModel):
+    public_number: int
     name: str
     description: str
     price: int
     stock: int
+    unlimited_stock: bool
+    system_key: str | None
+    effect_type: str | None
+    minimum_rank_order: int | None
     enabled: bool
 
 
@@ -443,6 +451,78 @@ class CreateItemRequest(ApiModel):
     description: str = Field(min_length=1)
     price: int = Field(ge=0, le=999)
     stock: int = Field(ge=0, le=999)
+
+
+class UpdateItemRequest(ApiModel):
+    enabled: bool
+    minimum_rank_order: int | None = Field(default=None, ge=1, le=999)
+    unlimited_stock: bool
+    stock: int = Field(ge=0, le=99999)
+
+
+class ShopPurchaseLogResponse(ApiModel):
+    id: UUID
+    created_at: datetime
+    user_name: str
+    item_number: int
+    item_name: str
+    group_name: str
+    price: int
+
+
+class ShopUseLogResponse(ApiModel):
+    id: UUID
+    created_at: datetime
+    completed_at: datetime | None
+    user_name: str
+    target_name: str | None
+    item_number: int
+    item_name: str
+    group_name: str
+    state: str
+    result: dict | None
+
+
+class ShopConsentLogResponse(ApiModel):
+    id: UUID
+    session_number: int
+    participant_name: str
+    decision: str | None
+    decided_at: datetime | None
+
+
+class ShopSceneJobAdminResponse(ApiModel):
+    id: UUID
+    session_number: int
+    item_name: str
+    owner_name: str
+    group_name: str
+    status: str
+    attempt_count: int
+    failure_summary: str | None
+    created_at: datetime
+    completed_at: datetime | None
+
+
+class ShopCommonStateAdminResponse(ApiModel):
+    id: UUID
+    session_number: int
+    owner_name: str
+    target_name: str
+    group_name: str
+    content: str
+    state: str
+    starts_at: datetime
+    ends_at: datetime
+    finished_at: datetime | None
+
+
+class ShopAdminActivityResponse(ApiModel):
+    purchases: list[ShopPurchaseLogResponse]
+    uses: list[ShopUseLogResponse]
+    consents: list[ShopConsentLogResponse]
+    scene_jobs: list[ShopSceneJobAdminResponse]
+    common_states: list[ShopCommonStateAdminResponse]
 
 
 class GameSettingsResponse(ApiModel):
@@ -668,6 +748,15 @@ class AIClaimResponse(ApiModel):
     user_content: str
     max_response_chars: int = Field(ge=1, le=10000)
     timeout_seconds: int = Field(ge=1, le=60)
+
+
+class ShopSceneClaimResponse(ApiModel):
+    id: UUID
+    lease_token: UUID
+    system_prompt: str
+    user_content: str
+    max_response_chars: int = Field(ge=1, le=800)
+    timeout_seconds: int = Field(ge=1, le=180)
 
 
 class AICompleteRequest(ApiModel):

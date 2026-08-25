@@ -398,6 +398,10 @@ def create_app(
                 )
             )
             or (
+                "adult_shop_enabled" in request
+                and not isinstance(request["adult_shop_enabled"], bool)
+            )
+            or (
                 "enabled_game_types" in request
                 and (
                     not isinstance(request["enabled_game_types"], list)
@@ -413,6 +417,7 @@ def create_app(
             )
         payload = {
             **{key: request[key] for key in required},
+            "adult_shop_enabled": request.get("adult_shop_enabled", False),
             "enabled_game_types": request.get(
                 "enabled_game_types", list(GROUP_GAME_TYPES)
             ),
@@ -445,6 +450,7 @@ def create_app(
             "enabled_game_types",
             "random_events_enabled",
             "announcements_enabled",
+            "adult_shop_enabled",
         }
         if not request or set(request) - allowed:
             raise HTTPException(
@@ -761,6 +767,81 @@ def create_app(
             idempotency_key,
             lambda: (201, core.create_game_item({key: item[key] for key in required})),
             scope="game-items",
+        )
+
+    @app.patch("/api/game/items/{public_number}")
+    def update_game_item(
+        public_number: int,
+        request: dict,
+        identity: Annotated[AdminIdentity, Depends(authorize)],
+        idempotency_key: Annotated[
+            str | None, Header(alias="Idempotency-Key")
+        ] = None,
+    ) -> JSONResponse:
+        required = {
+            "enabled",
+            "minimum_rank_order",
+            "unlimited_stock",
+            "stock",
+        }
+        if set(request) != required:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid item")
+        if (
+            not isinstance(request["enabled"], bool)
+            or not isinstance(request["unlimited_stock"], bool)
+            or not isinstance(request["stock"], int)
+            or request["stock"] < 0
+            or (
+                request["minimum_rank_order"] is not None
+                and (
+                    not isinstance(request["minimum_rank_order"], int)
+                    or request["minimum_rank_order"] < 1
+                )
+            )
+        ):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid item")
+        return idempotent_response(
+            identity,
+            idempotency_key,
+            lambda: (200, core.update_game_item(public_number, request)),
+            scope=f"game-items:{public_number}",
+        )
+
+    @app.get("/api/game/shop/activity")
+    def shop_activity(
+        _: Annotated[None, Depends(authorize)],
+        limit: int = Query(100, ge=1, le=500),
+    ) -> dict:
+        return core.get_shop_activity(limit)
+
+    @app.post("/api/game/shop/scene-jobs/{job_id}/retry")
+    def retry_shop_scene_job(
+        job_id: str,
+        identity: Annotated[AdminIdentity, Depends(authorize)],
+        idempotency_key: Annotated[
+            str | None, Header(alias="Idempotency-Key")
+        ] = None,
+    ) -> JSONResponse:
+        return idempotent_response(
+            identity,
+            idempotency_key,
+            lambda: (200, core.retry_shop_scene_job(job_id)),
+            scope=f"shop-scene-retry:{job_id}",
+        )
+
+    @app.post("/api/game/shop/common-states/{state_id}/end")
+    def end_shop_common_state(
+        state_id: str,
+        identity: Annotated[AdminIdentity, Depends(authorize)],
+        idempotency_key: Annotated[
+            str | None, Header(alias="Idempotency-Key")
+        ] = None,
+    ) -> JSONResponse:
+        return idempotent_response(
+            identity,
+            idempotency_key,
+            lambda: (200, core.end_shop_common_state(state_id)),
+            scope=f"shop-common-end:{state_id}",
         )
 
     @app.get("/api/game/settings")

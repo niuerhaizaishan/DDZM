@@ -26,6 +26,16 @@ class AIClaim:
 
 
 @dataclass(frozen=True)
+class ShopSceneClaim:
+    id: UUID
+    lease_token: UUID
+    system_prompt: str
+    user_content: str
+    max_response_chars: int
+    timeout_seconds: int
+
+
+@dataclass(frozen=True)
 class AIMemoryClaim:
     user_id: UUID
     target_message_id: UUID
@@ -56,6 +66,23 @@ class AIImpressionCandidate:
 
 
 class AICorePort(Protocol):
+    def claim_shop_scene_job(
+        self, worker_id: str, now: datetime, lease_seconds: int
+    ) -> ShopSceneClaim | None: ...
+
+    def complete_shop_scene_job(
+        self, job_id: UUID, worker_id: str, lease_token: UUID, text: str, now: datetime
+    ) -> None: ...
+
+    def fail_shop_scene_job(
+        self,
+        job_id: UUID,
+        worker_id: str,
+        lease_token: UUID,
+        failure_summary: str,
+        now: datetime,
+    ) -> None: ...
+
     def claim_ai_request(
         self, worker_id: str, now: datetime, lease_seconds: int
     ) -> AIClaim | None: ...
@@ -140,6 +167,64 @@ class AICoreClient:
             user_content=data["user_content"],
             max_response_chars=data["max_response_chars"],
             timeout_seconds=data["timeout_seconds"],
+        )
+
+    def claim_shop_scene_job(
+        self, worker_id: str, now: datetime, lease_seconds: int
+    ) -> ShopSceneClaim | None:
+        data = self._post(
+            "/internal/ai/shop-scenes/claim",
+            {
+                "worker_id": worker_id,
+                "now": now.isoformat(),
+                "lease_seconds": lease_seconds,
+            },
+        )
+        if data is None:
+            return None
+        return ShopSceneClaim(
+            id=UUID(data["id"]),
+            lease_token=UUID(data["lease_token"]),
+            system_prompt=data["system_prompt"],
+            user_content=data["user_content"],
+            max_response_chars=data["max_response_chars"],
+            timeout_seconds=data["timeout_seconds"],
+        )
+
+    def complete_shop_scene_job(
+        self,
+        job_id: UUID,
+        worker_id: str,
+        lease_token: UUID,
+        text: str,
+        now: datetime,
+    ) -> None:
+        self._post(
+            f"/internal/ai/shop-scenes/{job_id}/completed",
+            {
+                "worker_id": worker_id,
+                "lease_token": str(lease_token),
+                "text": text,
+                "now": now.isoformat(),
+            },
+        )
+
+    def fail_shop_scene_job(
+        self,
+        job_id: UUID,
+        worker_id: str,
+        lease_token: UUID,
+        failure_summary: str,
+        now: datetime,
+    ) -> None:
+        self._post(
+            f"/internal/ai/shop-scenes/{job_id}/failed",
+            {
+                "worker_id": worker_id,
+                "lease_token": str(lease_token),
+                "failure_summary": failure_summary,
+                "now": now.isoformat(),
+            },
         )
 
     def complete_ai_request(

@@ -63,6 +63,15 @@ class FakeCore:
         default_factory=list
     )
     items: list[dict] = field(default_factory=list)
+    shop_activity: dict = field(
+        default_factory=lambda: {
+            "purchases": [],
+            "uses": [],
+            "consents": [],
+            "scene_jobs": [],
+            "common_states": [],
+        }
+    )
     template_error: bool = False
     game_settings: dict = field(
         default_factory=lambda: {
@@ -455,6 +464,18 @@ class FakeCore:
         item = {**item, "enabled": True}
         self.items.append(item)
         return item
+
+    def update_game_item(self, public_number, item):
+        return {"public_number": public_number, **item}
+
+    def get_shop_activity(self, limit=100):
+        return self.shop_activity
+
+    def retry_shop_scene_job(self, job_id):
+        return {"accepted": True, "job_id": job_id}
+
+    def end_shop_common_state(self, state_id):
+        return {"accepted": True, "state_id": state_id}
 
     def list_ranks(self):
         return getattr(self, "ranks", [])
@@ -1445,6 +1466,21 @@ def test_admin_proxies_paginated_employee_and_item_pages(client, headers, core):
     assert employees.json()["items"][0]["employee_number"] == 21
     assert items.json()["page_size"] == 20
     assert items.json()["items"][0]["name"] == "午休券20"
+
+
+def test_admin_proxies_shop_activity_and_controls(client, headers):
+    activity = client.get("/api/game/shop/activity", headers=headers)
+    retried = client.post(
+        "/api/game/shop/scene-jobs/job-1/retry", headers=headers
+    )
+    ended = client.post(
+        "/api/game/shop/common-states/state-1/end", headers=headers
+    )
+
+    assert activity.status_code == 200
+    assert activity.json()["scene_jobs"] == []
+    assert retried.json()["job_id"] == "job-1"
+    assert ended.json()["state_id"] == "state-1"
 
 
 def test_admin_proxies_employee_balance_ledger(client, headers, core):

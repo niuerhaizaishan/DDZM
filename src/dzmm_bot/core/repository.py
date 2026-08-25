@@ -9,6 +9,7 @@ from random import SystemRandom
 import re
 from secrets import choice, randbelow
 import unicodedata
+from typing import Any
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 from uuid import UUID, uuid4
 
@@ -65,6 +66,7 @@ from .number_bomb import (
     calculate_points_tournament_scores,
     render_number_bomb_result,
 )
+from .shop_cards import SYSTEM_SHOP_ITEMS, adult_item, item_by_key, purchase_category
 from .red_packet import RandomSource, generate_red_packet_allocation
 from .texas_holdem import (
     BettingPlayer,
@@ -189,6 +191,16 @@ from .schema import (
     RedPacketRecord,
     RedPacketSettingsRecord,
     RedPacketShareRecord,
+    AdultCardParticipantRecord,
+    AdultCardSessionRecord,
+    ShopCommonSenseStateRecord,
+    ShopDailyBonusRecord,
+    ShopItemUseRecord,
+    ShopMultiplayerDailyStartRecord,
+    ShopPurchaseDailyUsageRecord,
+    ShopPurchaseRecord,
+    ShopSceneJobRecord,
+    ShopSessionNumberCounterRecord,
     UserItemRecord,
     UserRecord,
     WeeklyAttendanceSettlementRecord,
@@ -215,6 +227,7 @@ class GroupChatConfig:
     enabled_game_types: tuple[str, ...]
     random_events_enabled: bool
     announcements_enabled: bool
+    adult_shop_enabled: bool
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None
@@ -234,6 +247,58 @@ class GroupChatRuntimeState:
 
 class GroupChatConflict(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class ShopCatalogItem:
+    public_number: int
+    name: str
+    description: str
+    price: int
+    stock: int
+    unlimited_stock: bool
+    enabled: bool
+    system_key: str | None
+    effect_type: str | None
+    minimum_rank_order: int | None
+
+
+@dataclass(frozen=True)
+class ShopInventoryItem:
+    public_number: int
+    name: str
+    quantity: int
+    effect_type: str | None
+
+
+@dataclass(frozen=True)
+class ShopPurchaseResult:
+    status: str
+    item: ShopCatalogItem | None = None
+    balance: int | None = None
+    quantity: int | None = None
+
+
+@dataclass(frozen=True)
+class ShopUseResult:
+    status: str
+    item: ShopCatalogItem | None = None
+    reward: int | None = None
+    target_display_name: str | None = None
+    session_number: int | None = None
+    direct_chatroom_id: str | None = None
+    group_chat_id: UUID | None = None
+    public_message: str | None = None
+
+
+@dataclass(frozen=True)
+class ClaimedShopSceneJob:
+    id: UUID
+    lease_token: UUID
+    system_prompt: str
+    user_content: str
+    max_response_chars: int
+    timeout_seconds: int
 
 
 def normalize_group_chat_url(
@@ -279,6 +344,7 @@ def _group_chat_config(record: GroupChatRecord) -> GroupChatConfig:
         enabled_game_types=tuple(record.enabled_game_types),
         random_events_enabled=record.random_events_enabled,
         announcements_enabled=record.announcements_enabled,
+        adult_shop_enabled=record.adult_shop_enabled,
         created_at=record.created_at,
         updated_at=record.updated_at,
         deleted_at=record.deleted_at,
@@ -340,6 +406,10 @@ _BALANCE_SOURCE_LABELS = {
     "dark_market_sale_income": "暗网成交收入",
     "dark_market_sale_fee": "暗网成交手续费",
     "dark_market_force_refund": "暗网强制下架退款",
+    "shop_purchase": "商店购买",
+    "shop_gift": "赠送卡到账",
+    "shop_scratch": "刮刮卡奖励",
+    "shop_compensation": "卡片作废补偿",
 }
 _DEFAULT_RED_PACKET_EXPIRY_MINUTES = 10
 _DEFAULT_RED_PACKET_EMPTY_PROBABILITY_PERCENT = 5
@@ -379,7 +449,7 @@ _DEFAULT_RANDOM_EVENT_SUBMISSION_APPROVAL_REWARD = 10
 _DEFAULT_RANDOM_EVENT_TIPPING_DURATION_SECONDS = 120
 _RANDOM_EVENT_CONFIGURABLE_COMMANDS = frozenset(
     {
-        "/入职", "/我的物品", "/打卡", "/余额", "/我", "/编辑档案", "/编辑档案形象", "/我的档案", "/商店", "/帮助", "/当前游戏",
+        "/入职", "/我的物品", "/购买", "/使用", "/邀请参与", "/取消使用", "/同意使用", "/拒绝使用", "/打卡", "/余额", "/我", "/编辑档案", "/编辑档案形象", "/我的档案", "/商店", "/帮助", "/当前游戏",
         "/加入", "/退出", "/开始", "/跳过", "/摸鱼躲猫猫", "/记忆考核", "/继续", "/收手", "/投降",
         "/部门", "/部门人数", "/我的部门人数", "/加入部门", "/切换部门", "/部门申请列表",
         "/同意部门", "/全部同意部门", "/拒绝部门", "/全部拒绝部门",
@@ -1561,13 +1631,19 @@ class EmployeeNameTakenError(ValueError):
 _COMMAND_DEFINITIONS = (
     ("/入职", "/入职 名字", "登记群成员为摸鱼公司员工"),
     ("/我的物品", "/我的物品", "查看自己持有的物品"),
+    ("/购买", "/购买 商品序号", "购买一件商店商品"),
+    ("/使用", "/使用 商品序号", "使用持有的商店商品"),
+    ("/邀请参与", "/邀请参与 卡片局编号", "回复员工消息邀请加入成人卡片局"),
+    ("/取消使用", "/取消使用 卡片局编号", "取消尚未进入授权的卡片局"),
+    ("/同意使用", "/同意使用", "回复授权通知同意本次场景"),
+    ("/拒绝使用", "/拒绝使用", "回复授权通知拒绝本次场景"),
     ("/打卡", "/打卡", "每日领取配置的打卡奖励"),
     ("/余额", "/余额", "查看当前摸鱼币余额"),
     ("/修改名称", "/修改名称 新名称", "修改自己的员工名称"),
     ("/编辑档案", "/编辑档案 档案内容", "更新自己的个人档案"),
     ("/编辑档案形象", "/编辑档案形象（回复一张图片）", "更新自己的档案形象"),
     ("/我的档案", "/我的档案", "查看自己的个人档案"),
-    ("/发奖金", "/发奖金 员工名 金额；/发奖金 全部 金额", "核心董事会向单个或全部员工发放系统奖金"),
+    ("/发奖金", "回复发送 /发奖金 金额；/发奖金 员工名 金额；/发奖金 全部 金额", "核心董事会向单个或全部员工发放系统奖金"),
     ("/发红包", "/发红包 人数 总金额", "使用自己的摸鱼币发出随机运气红包"),
     ("/抢红包", "/抢红包", "领取当前随机运气红包"),
     ("/打赏", "/打赏 员工名称 金额", "在随机事件打赏阶段向参与者转移摸鱼币"),
@@ -1650,12 +1726,14 @@ class CoreRepository:
         red_packet_random: RandomSource | None = None,
         number_bomb_random: RandomSource | None = None,
         texas_holdem_random: RandomSource | None = None,
+        shop_random: RandomSource | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._preserve_long_group_messages = preserve_long_group_messages
         self._red_packet_random = red_packet_random or SystemRandom()
         self._number_bomb_random = number_bomb_random or SystemRandom()
         self._texas_holdem_random = texas_holdem_random or SystemRandom()
+        self._shop_random = shop_random or SystemRandom()
         self._active_session: ContextVar[Session | None] = ContextVar(
             f"core_repository_session_{id(self)}", default=None
         )
@@ -1762,6 +1840,7 @@ class CoreRepository:
         now: datetime,
         *,
         enabled_game_types: Sequence[str] | None = None,
+        adult_shop_enabled: bool = False,
     ) -> GroupChatConfig:
         normalized_name = self._validate_group_chat_name(name)
         with self._session() as session:
@@ -1787,6 +1866,7 @@ class CoreRepository:
                 ),
                 random_events_enabled=random_events_enabled,
                 announcements_enabled=announcements_enabled,
+                adult_shop_enabled=adult_shop_enabled,
                 created_at=now,
                 updated_at=now,
             )
@@ -1814,6 +1894,7 @@ class CoreRepository:
         enabled_game_types: Sequence[str] | None = None,
         random_events_enabled: bool | None = None,
         announcements_enabled: bool | None = None,
+        adult_shop_enabled: bool | None = None,
         now: datetime,
     ) -> GroupChatConfig:
         with self._session() as session:
@@ -1879,6 +1960,8 @@ class CoreRepository:
                 record.random_events_enabled = random_events_enabled
             if announcements_enabled is not None:
                 record.announcements_enabled = announcements_enabled
+            if adult_shop_enabled is not None:
+                record.adult_shop_enabled = adult_shop_enabled
             record.updated_at = now
             runtime = session.get(GroupChatRuntimeStateRecord, group_id)
             if runtime is not None:
@@ -2133,6 +2216,7 @@ class CoreRepository:
                 "enabled_game_types": list(config.enabled_game_types),
                 "random_events_enabled": config.random_events_enabled,
                 "announcements_enabled": config.announcements_enabled,
+                "adult_shop_enabled": config.adult_shop_enabled,
                 "deleted": config.deleted_at is not None,
             }
 
@@ -3959,7 +4043,7 @@ class CoreRepository:
                 if existing is not None:
                     return AIEnqueueResult("duplicate")
                 quota = session.get(AIRankQuotaRecord, user.rank_id)
-                if quota is None or quota.daily_limit < 1:
+                if quota is None:
                     return AIEnqueueResult("over_limit")
                 usage_date = now.astimezone(BEIJING).date()
                 usage = session.get(DailyAIUsageRecord, (user.id, usage_date))
@@ -3969,9 +4053,20 @@ class CoreRepository:
                     )
                     session.add(usage)
                     session.flush()
-                if usage.used_count >= quota.daily_limit:
-                    return AIEnqueueResult("over_limit")
-                usage.used_count += 1
+                if usage.used_count < max(0, quota.daily_limit):
+                    usage.used_count += 1
+                else:
+                    bonus = session.scalar(
+                        select(ShopDailyBonusRecord)
+                        .where(
+                            ShopDailyBonusRecord.user_id == user.id,
+                            ShopDailyBonusRecord.usage_date == usage_date,
+                        )
+                        .with_for_update()
+                    )
+                    if bonus is None or bonus.ai_used >= bonus.ai_total:
+                        return AIEnqueueResult("over_limit")
+                    bonus.ai_used += 1
                 session.add(
                     AIRequestRecord(
                         inbound_message_id=UUID(str(inbound_message_id)),
@@ -4569,6 +4664,37 @@ class CoreRepository:
                     unavailable_sources=tuple(dict.fromkeys(unavailable_sources)),
                 )
             )
+            relevant_people_ids = {employee.user_id for employee in resolution.people}
+            relevant_people_ids.add(user.id)
+            if inbound.group_chat_id is not None:
+                temporary_states = list(
+                    session.execute(
+                        select(ShopCommonSenseStateRecord, UserRecord)
+                        .join(
+                            UserRecord,
+                            UserRecord.id == ShopCommonSenseStateRecord.target_user_id,
+                        )
+                        .where(
+                            ShopCommonSenseStateRecord.group_chat_id
+                            == inbound.group_chat_id,
+                            ShopCommonSenseStateRecord.state == "active",
+                            ShopCommonSenseStateRecord.ends_at > now,
+                            ShopCommonSenseStateRecord.target_user_id.in_(
+                                relevant_people_ids
+                            ),
+                        )
+                    )
+                )
+                if temporary_states:
+                    social_context_text = (
+                        f"{social_context_text}\n\n【本群临时角色状态】\n"
+                        + "\n".join(
+                            f"{person.display_name}：{state.content}（至"
+                            f" {state.ends_at.strftime('%Y-%m-%d %H:%M')}）"
+                            for state, person in temporary_states
+                        )
+                        + "\n仅在本群本次对话中按已授权的虚构设定理解，不得写入档案或稳定画像。"
+                    )
             active_token = self._active_session.set(session)
             try:
                 authoritative_context = self.build_ai_authoritative_context(
@@ -6775,7 +6901,10 @@ class CoreRepository:
                         TexasHoldemDailyStartRecord.play_date == now.date(),
                     )
                 )
-                if int(daily_count or 0) >= settings.daily_start_limit:
+                if (
+                    int(daily_count or 0) >= settings.daily_start_limit
+                    and not self._has_multiplayer_bonus(session, user.id, now.date())
+                ):
                     return TexasHoldemResult("daily_limit")
                 if user.balance < buy_in:
                     return TexasHoldemResult("insufficient_balance")
@@ -6982,11 +7111,15 @@ class CoreRepository:
                     )
                     .with_for_update()
                 )
-                if (
-                    creator_start is not None
-                    and creator_start.count >= game.daily_start_limit_snapshot
+                use_base_quota = (
+                    creator_start is None
+                    or creator_start.count < game.daily_start_limit_snapshot
+                )
+                if not use_base_quota and not self._consume_multiplayer_bonus(
+                    session, game.creator_user_id, now.date()
                 ):
                     return TexasHoldemResult("daily_limit", game.id, len(rows))
+                game.start_quota_source = "base" if use_base_quota else "bonus"
 
                 deck = list(build_deck())
                 self._texas_holdem_random.shuffle(deck)
@@ -7052,16 +7185,17 @@ class CoreRepository:
                     outbound.group_chat_id = None
                     player.private_outbound_id = outbound.id
                     outbound_ids.append(outbound.id)
-                if creator_start is None:
-                    session.add(
-                        TexasHoldemDailyStartRecord(
-                            user_id=game.creator_user_id,
-                            play_date=now.date(),
-                            count=1,
+                if use_base_quota:
+                    if creator_start is None:
+                        session.add(
+                            TexasHoldemDailyStartRecord(
+                                user_id=game.creator_user_id,
+                                play_date=now.date(),
+                                count=1,
+                            )
                         )
-                    )
-                else:
-                    creator_start.count += 1
+                    else:
+                        creator_start.count += 1
                 return TexasHoldemResult(
                     "dealing", game.id, len(rows), tuple(outbound_ids)
                 )
@@ -7608,7 +7742,7 @@ class CoreRepository:
                             outbound.lease_worker_id = None
                             outbound.lease_token = None
                             outbound.lease_expires_at = None
-                if game.started_at is not None:
+                if game.started_at is not None and game.start_quota_source in {None, "base"}:
                     counter = session.scalar(
                         select(TexasHoldemDailyStartRecord)
                         .where(
@@ -7619,6 +7753,17 @@ class CoreRepository:
                     )
                     if counter is not None and counter.count > 0:
                         counter.count -= 1
+                elif game.started_at is not None and game.start_quota_source == "bonus":
+                    bonus = session.scalar(
+                        select(ShopDailyBonusRecord)
+                        .where(
+                            ShopDailyBonusRecord.user_id == game.creator_user_id,
+                            ShopDailyBonusRecord.usage_date == game.started_at.date(),
+                        )
+                        .with_for_update()
+                    )
+                    if bonus is not None and bonus.multiplayer_used > 0:
+                        bonus.multiplayer_used -= 1
                 game.state = "aborted"
                 game.active_key = None
                 game.current_seat = None
@@ -8582,6 +8727,10 @@ class CoreRepository:
                     or self._has_active_game(session, group_chat_id)
                 ):
                     return NumberBombGameResult("multiplayer_active")
+                if self._claim_rank_multiplayer_start(
+                    session, user, "number_bomb", now.date()
+                ) is None:
+                    return NumberBombGameResult("daily_limit")
                 game = NumberBombGameRecord(
                     group_chat_id=group_chat_id,
                     active_key="global",
@@ -10023,6 +10172,10 @@ class CoreRepository:
                     return UndercoverGameResult("multiplayer_active")
                 if self._active_undercover_session(session, group_chat_id) is not None:
                     return UndercoverGameResult("already_active")
+                if self._claim_rank_multiplayer_start(
+                    session, user, "undercover", now.date()
+                ) is None:
+                    return UndercoverGameResult("daily_limit")
                 session_record = UndercoverSessionRecord(
                     group_chat_id=group_chat_id,
                     state="signup",
@@ -10887,6 +11040,74 @@ class CoreRepository:
         if record is None:
             raise RuntimeError("随机事件设置消失")
 
+    @staticmethod
+    def _consume_multiplayer_bonus(
+        session: Session, user_id: UUID, play_date: date
+    ) -> bool:
+        bonus = session.scalar(
+            select(ShopDailyBonusRecord)
+            .where(
+                ShopDailyBonusRecord.user_id == user_id,
+                ShopDailyBonusRecord.usage_date == play_date,
+            )
+            .with_for_update()
+        )
+        if bonus is None or bonus.multiplayer_used >= bonus.multiplayer_total:
+            return False
+        bonus.multiplayer_used += 1
+        return True
+
+    @staticmethod
+    def _has_multiplayer_bonus(
+        session: Session, user_id: UUID, play_date: date
+    ) -> bool:
+        bonus = session.scalar(
+            select(ShopDailyBonusRecord).where(
+                ShopDailyBonusRecord.user_id == user_id,
+                ShopDailyBonusRecord.usage_date == play_date,
+            )
+        )
+        return bool(
+            bonus is not None and bonus.multiplayer_used < bonus.multiplayer_total
+        )
+
+    def _claim_rank_multiplayer_start(
+        self,
+        session: Session,
+        user: UserRecord,
+        game_type: str,
+        play_date: date,
+    ) -> str | None:
+        rank = session.get(RankRecord, user.rank_id)
+        if rank is None:
+            raise RuntimeError("发起者职位消失")
+        if rank.multiplayer_game_limit < 0:
+            return "base"
+        usage = session.scalar(
+            select(ShopMultiplayerDailyStartRecord)
+            .where(
+                ShopMultiplayerDailyStartRecord.user_id == user.id,
+                ShopMultiplayerDailyStartRecord.play_date == play_date,
+                ShopMultiplayerDailyStartRecord.game_type == game_type,
+            )
+            .with_for_update()
+        )
+        used_count = 0 if usage is None else usage.count
+        if used_count < rank.multiplayer_game_limit:
+            if usage is None:
+                usage = ShopMultiplayerDailyStartRecord(
+                    user_id=user.id,
+                    play_date=play_date,
+                    game_type=game_type,
+                    count=0,
+                )
+                session.add(usage)
+            usage.count += 1
+            return "base"
+        if self._consume_multiplayer_bonus(session, user.id, play_date):
+            return "bonus"
+        return None
+
     def _undercover_joined_members(
         self, session: Session, session_id: UUID
     ) -> list[UndercoverSessionMemberRecord]:
@@ -11673,6 +11894,12 @@ class CoreRepository:
                 )
                 if rule is None:
                     raise RuntimeError("记忆考核多人难度规则消失")
+                if self._claim_rank_multiplayer_start(
+                    session, user, "memory_duel", now.date()
+                ) is None:
+                    return MemoryAssessmentGameResult(
+                        "daily_limit", display_name=user.display_name
+                    )
                 game = MemoryAssessmentGameRecord(
                     group_chat_id=group_chat_id,
                     mode="duel",
@@ -12672,9 +12899,15 @@ class CoreRepository:
                     .with_for_update()
                 )
                 used_count = 0 if daily is None else daily.count
-                if rank.multiplayer_game_limit >= 0 and used_count >= rank.multiplayer_game_limit:
+                use_base_quota = (
+                    rank.multiplayer_game_limit < 0
+                    or used_count < rank.multiplayer_game_limit
+                )
+                if not use_base_quota and not self._consume_multiplayer_bonus(
+                    session, user.id, now.date()
+                ):
                     return BlameGameResult("daily_limit")
-                if daily is None:
+                if use_base_quota and daily is None:
                     daily = BlameGameDailyStartRecord(
                         user_id=user.id,
                         play_date=now.date(),
@@ -12705,7 +12938,8 @@ class CoreRepository:
                         joined_at=now,
                     )
                 )
-                daily.count += 1
+                if use_base_quota:
+                    daily.count += 1
                 return BlameGameResult(
                     "signup_started",
                     game_id=game.id,
@@ -15388,6 +15622,7 @@ class CoreRepository:
         now = now.astimezone(BEIJING)
         should_backfill = self._current_day_history_backfilled != now.date()
         self.run_dark_market_jobs(now)
+        self.run_shop_card_jobs(now)
         with self.transaction():
             if should_backfill:
                 self._backfill_current_day_history(now)
@@ -17542,44 +17777,1607 @@ class CoreRepository:
     def add_item(
         self, name: str, description: str, price: int, stock: int
     ) -> ItemRecord:
-        with self._session() as session:
+        with self.transaction():
+            with self._session() as session:
+                self._ensure_shop_catalog(session)
+                record = ItemRecord(
+                    public_number=self._next_item_public_number(session),
+                    name=name,
+                    description=description,
+                    price=price,
+                    stock=stock,
+                    unlimited_stock=False,
+                    enabled=True,
+                )
+                session.add(record)
+                session.flush()
+                return record
+
+    def _next_item_public_number(self, session: Session) -> int:
+        return int(session.scalar(select(func.max(ItemRecord.public_number))) or 0) + 1
+
+    def _ensure_shop_catalog(self, session: Session) -> None:
+        existing_keys = set(
+            session.scalars(
+                select(ItemRecord.system_key).where(ItemRecord.system_key.is_not(None))
+            )
+        )
+        missing = [item for item in SYSTEM_SHOP_ITEMS if item.key not in existing_keys]
+        if not missing:
+            return
+        existing_names = {
+            record.name: record
+            for record in session.scalars(
+                select(ItemRecord).where(
+                    ItemRecord.name.in_([item.name for item in missing])
+                )
+            )
+        }
+        if existing_names:
+            raise RuntimeError(
+                "系统商品同名冲突，请先处理历史自建商品："
+                + "、".join(sorted(existing_names))
+            )
+        next_number = self._next_item_public_number(session)
+        for definition in missing:
             record = ItemRecord(
-                name=name,
-                description=description,
-                price=price,
-                stock=stock,
+                public_number=next_number,
+                name=definition.name,
+                description=definition.description,
+                price=definition.price,
+                stock=0,
+                unlimited_stock=True,
                 enabled=True,
             )
             session.add(record)
-            session.flush()
-            return record
+            next_number += 1
+            record.system_key = definition.key
+            record.effect_type = definition.effect_type
+            record.price = definition.price
+            record.description = definition.description
+            record.minimum_rank_order = definition.minimum_rank_order
+            record.unlimited_stock = True
+        session.flush()
 
-    def list_active_items(self) -> list[ItemRecord]:
-        with self._session() as session:
-            return list(
-                session.scalars(
+    @staticmethod
+    def _shop_catalog_item(record: ItemRecord) -> ShopCatalogItem:
+        return ShopCatalogItem(
+            public_number=record.public_number,
+            name=record.name,
+            description=record.description,
+            price=record.price,
+            stock=record.stock,
+            unlimited_stock=record.unlimited_stock,
+            enabled=record.enabled,
+            system_key=record.system_key,
+            effect_type=record.effect_type,
+            minimum_rank_order=record.minimum_rank_order,
+        )
+
+    def list_shop_items(
+        self,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+        *,
+        include_disabled: bool = False,
+    ) -> list[ShopCatalogItem]:
+        with self.transaction():
+            with self._session() as session:
+                self._ensure_shop_catalog(session)
+                group = session.get(GroupChatRecord, group_chat_id)
+                if group is not None and group.deleted_at is not None:
+                    return []
+                query = select(ItemRecord)
+                if not include_disabled:
+                    query = query.where(ItemRecord.enabled.is_(True))
+                records = session.scalars(query.order_by(ItemRecord.public_number))
+                return [
+                    self._shop_catalog_item(record)
+                    for record in records
+                    if (group is not None and group.adult_shop_enabled)
+                    or not (record.effect_type or "").startswith("adult_")
+                ]
+
+    def purchase_shop_item(
+        self,
+        inbound_message_id: UUID | str,
+        sender_platform_id: str,
+        public_number: int,
+        group_chat_id: UUID,
+        now: datetime,
+    ) -> ShopPurchaseResult:
+        with self.transaction():
+            with self._session() as session:
+                self._ensure_shop_catalog(session)
+                if isinstance(inbound_message_id, UUID):
+                    inbound_id = inbound_message_id
+                else:
+                    inbound_id = session.scalar(
+                        select(InboundRecord.id).where(
+                            InboundRecord.platform_message_id == inbound_message_id,
+                            InboundRecord.sender_platform_id == sender_platform_id,
+                            InboundRecord.group_chat_id == group_chat_id,
+                        )
+                    )
+                    if inbound_id is None:
+                        raise ValueError("商店购买入站消息不存在")
+                existing = session.scalar(
+                    select(ShopPurchaseRecord).where(
+                        ShopPurchaseRecord.inbound_message_id == inbound_id
+                    )
+                )
+                if existing is not None:
+                    item = session.get(ItemRecord, existing.item_id)
+                    inventory = session.scalar(
+                        select(UserItemRecord).where(
+                            UserItemRecord.user_id == existing.user_id,
+                            UserItemRecord.item_id == existing.item_id,
+                        )
+                    )
+                    user = session.get(UserRecord, existing.user_id)
+                    return ShopPurchaseResult(
+                        "purchased",
+                        None if item is None else self._shop_catalog_item(item),
+                        None if user is None else user.balance,
+                        None if inventory is None else inventory.quantity,
+                    )
+                user_row = session.execute(
+                    select(UserRecord, RankRecord)
+                    .join(RankRecord, UserRecord.rank_id == RankRecord.id)
+                    .where(UserRecord.platform_id == sender_platform_id)
+                    .with_for_update()
+                ).first()
+                if user_row is None:
+                    return ShopPurchaseResult("not_joined")
+                user, rank = user_row
+                group = session.get(GroupChatRecord, group_chat_id)
+                if group is None or group.deleted_at is not None:
+                    return ShopPurchaseResult("wrong_group")
+                item = session.scalar(
                     select(ItemRecord)
-                    .where(ItemRecord.enabled.is_(True))
-                    .order_by(ItemRecord.price, ItemRecord.name)
+                    .where(ItemRecord.public_number == public_number)
+                    .with_for_update()
+                )
+                if item is None:
+                    return ShopPurchaseResult("not_found")
+                view = self._shop_catalog_item(item)
+                if not item.enabled:
+                    return ShopPurchaseResult("disabled", view)
+                if item.system_key is not None and adult_item(
+                    item_by_key(item.system_key)
+                ):
+                    if not group.adult_shop_enabled:
+                        return ShopPurchaseResult("adult_disabled", view)
+                if (
+                    item.minimum_rank_order is not None
+                    and rank.sort_order < item.minimum_rank_order
+                ):
+                    return ShopPurchaseResult("rank_required", view)
+                if not item.unlimited_stock and item.stock < 1:
+                    return ShopPurchaseResult("out_of_stock", view)
+                if user.balance < item.price:
+                    return ShopPurchaseResult("insufficient_balance", view, user.balance)
+                category = (
+                    purchase_category(item_by_key(item.system_key))
+                    if item.system_key is not None
+                    else None
+                )
+                usage = None
+                if category is not None:
+                    usage_date = now.astimezone(BEIJING).date()
+                    usage = session.scalar(
+                        select(ShopPurchaseDailyUsageRecord)
+                        .where(
+                            ShopPurchaseDailyUsageRecord.user_id == user.id,
+                            ShopPurchaseDailyUsageRecord.usage_date == usage_date,
+                            ShopPurchaseDailyUsageRecord.category == category,
+                        )
+                        .with_for_update()
+                    )
+                    limit = 2 if category == "gift" else 3
+                    if usage is not None and usage.count >= limit:
+                        return ShopPurchaseResult("daily_limit", view, user.balance)
+                    if usage is None:
+                        usage = ShopPurchaseDailyUsageRecord(
+                            user_id=user.id,
+                            usage_date=usage_date,
+                            category=category,
+                            count=0,
+                        )
+                        session.add(usage)
+                inventory = session.scalar(
+                    select(UserItemRecord)
+                    .where(
+                        UserItemRecord.user_id == user.id,
+                        UserItemRecord.item_id == item.id,
+                    )
+                    .with_for_update()
+                )
+                if inventory is None:
+                    inventory = UserItemRecord(
+                        user_id=user.id,
+                        item_id=item.id,
+                        quantity=0,
+                        created_at=now,
+                    )
+                    session.add(inventory)
+                self._apply_balance_change(user, -item.price, "shop_purchase", now)
+                if not item.unlimited_stock:
+                    item.stock -= 1
+                inventory.quantity += 1
+                if usage is not None:
+                    usage.count += 1
+                session.add(
+                    ShopPurchaseRecord(
+                        inbound_message_id=inbound_id,
+                        user_id=user.id,
+                        item_id=item.id,
+                        group_chat_id=group_chat_id,
+                        price=item.price,
+                        created_at=now,
+                    )
+                )
+                session.flush()
+                return ShopPurchaseResult(
+                    "purchased",
+                    self._shop_catalog_item(item),
+                    user.balance,
+                    inventory.quantity,
+                )
+
+    def use_ordinary_shop_item(
+        self,
+        inbound_message_id: UUID | str,
+        sender_platform_id: str,
+        public_number: int,
+        group_chat_id: UUID,
+        now: datetime,
+        *,
+        target_platform_id: str | None = None,
+    ) -> ShopUseResult:
+        with self.transaction():
+            with self._session() as session:
+                self._ensure_shop_catalog(session)
+                if isinstance(inbound_message_id, UUID):
+                    inbound_id = inbound_message_id
+                else:
+                    inbound_id = session.scalar(
+                        select(InboundRecord.id).where(
+                            InboundRecord.platform_message_id == inbound_message_id,
+                            InboundRecord.sender_platform_id == sender_platform_id,
+                            InboundRecord.group_chat_id == group_chat_id,
+                        )
+                    )
+                    if inbound_id is None:
+                        raise ValueError("商店使用入站消息不存在")
+                existing = session.scalar(
+                    select(ShopItemUseRecord).where(
+                        ShopItemUseRecord.inbound_message_id == inbound_id
+                    )
+                )
+                if existing is not None:
+                    item = session.get(ItemRecord, existing.item_id)
+                    result = existing.result or {}
+                    return ShopUseResult(
+                        existing.state,
+                        None if item is None else self._shop_catalog_item(item),
+                        result.get("reward"),
+                        result.get("target_display_name"),
+                        result.get("session_number"),
+                    )
+                user = session.scalar(
+                    select(UserRecord)
+                    .where(UserRecord.platform_id == sender_platform_id)
+                    .with_for_update()
+                )
+                if user is None:
+                    return ShopUseResult("not_joined")
+                group = session.get(GroupChatRecord, group_chat_id)
+                if group is None or group.deleted_at is not None:
+                    return ShopUseResult("wrong_group")
+                item = session.scalar(
+                    select(ItemRecord).where(ItemRecord.public_number == public_number)
+                )
+                if item is None:
+                    return ShopUseResult("not_found")
+                view = self._shop_catalog_item(item)
+                inventory = session.scalar(
+                    select(UserItemRecord)
+                    .where(
+                        UserItemRecord.user_id == user.id,
+                        UserItemRecord.item_id == item.id,
+                    )
+                    .with_for_update()
+                )
+                if inventory is None or inventory.quantity < 1:
+                    return ShopUseResult("not_owned", view)
+                if item.effect_type is None:
+                    return ShopUseResult("no_effect", view)
+                if item.effect_type.startswith("adult_"):
+                    return ShopUseResult("adult_required", view)
+                target = None
+                result: dict[str, Any]
+                if item.effect_type == "gift":
+                    if target_platform_id is None:
+                        return ShopUseResult("target_required", view)
+                    target = session.scalar(
+                        select(UserRecord)
+                        .where(UserRecord.platform_id == target_platform_id)
+                        .with_for_update()
+                    )
+                    if target is None:
+                        return ShopUseResult("target_not_joined", view)
+                    if target.id == user.id:
+                        return ShopUseResult("self_target", view)
+                    definition = item_by_key(item.system_key or "")
+                    reward = int(definition.reward or 0)
+                    self._apply_balance_change(target, reward, "shop_gift", now)
+                    result = {
+                        "reward": reward,
+                        "target_display_name": target.display_name,
+                    }
+                elif item.effect_type == "scratch":
+                    definition = item_by_key(item.system_key or "")
+                    low, high = definition.reward_range or (0, 0)
+                    reward = low + self._shop_random.randrange(high - low + 1)
+                    self._apply_balance_change(user, reward, "shop_scratch", now)
+                    result = {"reward": reward}
+                elif item.effect_type in {"ai_quota", "multiplayer_quota"}:
+                    usage_date = now.astimezone(BEIJING).date()
+                    bonus = session.scalar(
+                        select(ShopDailyBonusRecord)
+                        .where(
+                            ShopDailyBonusRecord.user_id == user.id,
+                            ShopDailyBonusRecord.usage_date == usage_date,
+                        )
+                        .with_for_update()
+                    )
+                    if bonus is None:
+                        bonus = ShopDailyBonusRecord(
+                            user_id=user.id,
+                            usage_date=usage_date,
+                            ai_total=0,
+                            ai_used=0,
+                            multiplayer_total=0,
+                            multiplayer_used=0,
+                        )
+                        session.add(bonus)
+                    if item.effect_type == "ai_quota":
+                        bonus.ai_total += 1
+                    else:
+                        bonus.multiplayer_total += 1
+                    result = {"reward": 1}
+                else:
+                    return ShopUseResult("unsupported", view)
+                inventory.quantity -= 1
+                session.add(
+                    ShopItemUseRecord(
+                        inbound_message_id=inbound_id,
+                        user_id=user.id,
+                        item_id=item.id,
+                        target_user_id=None if target is None else target.id,
+                        group_chat_id=group_chat_id,
+                        state="completed",
+                        result=result,
+                        created_at=now,
+                        completed_at=now,
+                    )
+                )
+                session.flush()
+                return ShopUseResult(
+                    "completed",
+                    view,
+                    result.get("reward"),
+                    result.get("target_display_name"),
+                )
+
+    def start_adult_shop_item(
+        self,
+        inbound_message_id: UUID | str,
+        sender_platform_id: str,
+        public_number: int,
+        group_chat_id: UUID,
+        now: datetime,
+        *,
+        target_platform_id: str | None = None,
+    ) -> ShopUseResult:
+        now = now.astimezone(BEIJING)
+        with self.transaction():
+            with self._session() as session:
+                self._ensure_shop_catalog(session)
+                if isinstance(inbound_message_id, UUID):
+                    inbound_id = inbound_message_id
+                else:
+                    inbound_id = session.scalar(
+                        select(InboundRecord.id).where(
+                            InboundRecord.platform_message_id == inbound_message_id,
+                            InboundRecord.sender_platform_id == sender_platform_id,
+                            InboundRecord.group_chat_id == group_chat_id,
+                        )
+                    )
+                    if inbound_id is None:
+                        raise ValueError("成人卡使用入站消息不存在")
+                existing = session.scalar(
+                    select(ShopItemUseRecord).where(
+                        ShopItemUseRecord.inbound_message_id == inbound_id
+                    )
+                )
+                if existing is not None:
+                    item = session.get(ItemRecord, existing.item_id)
+                    adult_session = session.scalar(
+                        select(AdultCardSessionRecord).where(
+                            AdultCardSessionRecord.item_use_id == existing.id
+                        )
+                    )
+                    return ShopUseResult(
+                        existing.state,
+                        None if item is None else self._shop_catalog_item(item),
+                        session_number=(
+                            None if adult_session is None else adult_session.public_number
+                        ),
+                    )
+                user = session.scalar(
+                    select(UserRecord)
+                    .where(UserRecord.platform_id == sender_platform_id)
+                    .with_for_update()
+                )
+                if user is None:
+                    return ShopUseResult("not_joined")
+                group = session.get(GroupChatRecord, group_chat_id)
+                if group is None or group.deleted_at is not None:
+                    return ShopUseResult("wrong_group")
+                item = session.scalar(
+                    select(ItemRecord).where(ItemRecord.public_number == public_number)
+                )
+                if item is None:
+                    return ShopUseResult("not_found")
+                view = self._shop_catalog_item(item)
+                if not (item.effect_type or "").startswith("adult_"):
+                    return ShopUseResult("not_adult", view)
+                if not group.adult_shop_enabled:
+                    return ShopUseResult("adult_disabled", view)
+                direct_room = session.scalar(
+                    select(DirectChatRecord.chatroom_id).where(
+                        DirectChatRecord.platform_user_id == sender_platform_id
+                    )
+                )
+                if direct_room is None:
+                    return ShopUseResult("direct_chat_required", view)
+                definition = item_by_key(item.system_key or "")
+                active_setup = session.scalar(
+                    select(AdultCardSessionRecord.public_number).where(
+                        AdultCardSessionRecord.owner_user_id == user.id,
+                        AdultCardSessionRecord.state.in_(
+                            (
+                                "collecting_scene",
+                                "collecting_m_count",
+                                "collecting_participants",
+                            )
+                        ),
+                    )
+                )
+                if active_setup is not None:
+                    return ShopUseResult(
+                        "setup_active", view, session_number=active_setup
+                    )
+                target = None
+                if definition.key != "adult_m":
+                    if target_platform_id is None:
+                        return ShopUseResult("target_required", view)
+                    target = session.scalar(
+                        select(UserRecord)
+                        .where(UserRecord.platform_id == target_platform_id)
+                        .with_for_update()
+                    )
+                    if target is None:
+                        return ShopUseResult("target_not_joined", view)
+                    if target.id == user.id:
+                        return ShopUseResult("self_target", view)
+                    if definition.effect_type == "adult_common":
+                        active_state = session.scalar(
+                            select(ShopCommonSenseStateRecord.id).where(
+                                ShopCommonSenseStateRecord.target_user_id == target.id,
+                                ShopCommonSenseStateRecord.state == "active",
+                            )
+                        )
+                        if active_state is not None:
+                            return ShopUseResult("common_active", view)
+                        pending_state = session.scalar(
+                            select(AdultCardSessionRecord.id)
+                            .join(
+                                ShopItemUseRecord,
+                                ShopItemUseRecord.id
+                                == AdultCardSessionRecord.item_use_id,
+                            )
+                            .join(ItemRecord, ItemRecord.id == ShopItemUseRecord.item_id)
+                            .where(
+                                ShopItemUseRecord.target_user_id == target.id,
+                                ItemRecord.effect_type == "adult_common",
+                                AdultCardSessionRecord.state.in_(
+                                    (
+                                        "collecting_scene",
+                                        "awaiting_consent",
+                                        "active",
+                                    )
+                                ),
+                            )
+                        )
+                        if pending_state is not None:
+                            return ShopUseResult("common_active", view)
+                inventory = session.scalar(
+                    select(UserItemRecord)
+                    .where(
+                        UserItemRecord.user_id == user.id,
+                        UserItemRecord.item_id == item.id,
+                    )
+                    .with_for_update()
+                )
+                if inventory is None or inventory.quantity < 1:
+                    return ShopUseResult("not_owned", view)
+                counter = session.get(
+                    ShopSessionNumberCounterRecord, 1, with_for_update=True
+                )
+                if counter is None:
+                    counter = ShopSessionNumberCounterRecord(id=1, next_number=1)
+                    session.add(counter)
+                    session.flush()
+                session_number = counter.next_number
+                counter.next_number += 1
+                inventory.quantity -= 1
+                use = ShopItemUseRecord(
+                    inbound_message_id=inbound_id,
+                    user_id=user.id,
+                    item_id=item.id,
+                    target_user_id=None if target is None else target.id,
+                    group_chat_id=group_chat_id,
+                    state="reserved",
+                    result={"session_number": session_number},
+                    created_at=now,
+                )
+                session.add(use)
+                session.flush()
+                card_session = AdultCardSessionRecord(
+                    public_number=session_number,
+                    item_use_id=use.id,
+                    owner_user_id=user.id,
+                    group_chat_id=group_chat_id,
+                    source_inbound_message_id=inbound_id,
+                    state="collecting_scene",
+                    expected_recipient_count=definition.recipient_count,
+                    stage_deadline=now + timedelta(minutes=30),
+                    created_at=now,
+                    updated_at=now,
+                )
+                session.add(card_session)
+                session.flush()
+                if target is not None:
+                    session.add(
+                        AdultCardParticipantRecord(
+                            session_id=card_session.id,
+                            user_id=target.id,
+                            invitation_order=1,
+                        )
+                    )
+                return ShopUseResult(
+                    "scene_required",
+                    view,
+                    session_number=session_number,
+                    direct_chatroom_id=direct_room,
+                    group_chat_id=group_chat_id,
+                )
+
+    def consume_adult_card_scene(
+        self, platform_id: str, content: str, now: datetime
+    ) -> ShopUseResult | None:
+        scene = content.strip()
+        now = now.astimezone(BEIJING)
+        with self.transaction():
+            with self._session() as session:
+                user = session.scalar(
+                    select(UserRecord).where(UserRecord.platform_id == platform_id)
+                )
+                if user is None:
+                    return None
+                card_session = session.scalar(
+                    select(AdultCardSessionRecord)
+                    .where(
+                        AdultCardSessionRecord.owner_user_id == user.id,
+                        AdultCardSessionRecord.state.in_(
+                            ("collecting_scene", "collecting_m_count")
+                        ),
+                    )
+                    .order_by(AdultCardSessionRecord.created_at.desc())
+                    .with_for_update()
+                )
+                if card_session is None:
+                    return None
+                item_use = session.get(ShopItemUseRecord, card_session.item_use_id)
+                item = None if item_use is None else session.get(ItemRecord, item_use.item_id)
+                if item is None or item_use is None:
+                    raise RuntimeError("成人卡片商品消失")
+                view = self._shop_catalog_item(item)
+                if now >= card_session.stage_deadline:
+                    self._cancel_adult_card_session(session, card_session, item_use, now)
+                    return ShopUseResult("expired", view, session_number=card_session.public_number)
+                definition = item_by_key(item.system_key or "")
+                if card_session.state == "collecting_m_count":
+                    if (
+                        not scene.isascii()
+                        or not scene.isdigit()
+                        or not 1 <= int(scene) <= 99
+                    ):
+                        return ShopUseResult(
+                            "invalid_m_count",
+                            view,
+                            session_number=card_session.public_number,
+                        )
+                    desired_count = int(scene)
+                    card_session.desired_participant_count = desired_count
+                    card_session.state = "completed"
+                    card_session.finished_at = now
+                    card_session.stage_deadline = None
+                    card_session.updated_at = now
+                    item_use.state = "completed"
+                    item_use.completed_at = now
+                    owner = session.get(UserRecord, card_session.owner_user_id)
+                    group = session.get(GroupChatRecord, card_session.group_chat_id)
+                    message = (
+                        f"【M卡 #{card_session.public_number}】@所有人\n"
+                        f"{owner.display_name} 发起自愿参与场景：{card_session.scene}\n"
+                        f"期望人数：{desired_count} 人。愿意参与者请自行联系发起人。"
+                    )
+                    self.enqueue_system_outbound(
+                        message,
+                        group_chat_id=card_session.group_chat_id,
+                        destination_chatroom_id=(
+                            None if group is None else group.chatroom_id
+                        ),
+                    )
+                    return ShopUseResult(
+                        "m_completed",
+                        view,
+                        session_number=card_session.public_number,
+                        group_chat_id=card_session.group_chat_id,
+                        public_message=message,
+                    )
+                if not 1 <= len(scene) <= 200:
+                    return ShopUseResult("invalid_scene", view, session_number=card_session.public_number)
+                card_session.scene = scene
+                card_session.updated_at = now
+                if definition.key == "adult_m":
+                    card_session.state = "collecting_m_count"
+                    return ShopUseResult(
+                        "m_count_required",
+                        view,
+                        session_number=card_session.public_number,
+                        group_chat_id=card_session.group_chat_id,
+                    )
+                participant_count = int(
+                    session.scalar(
+                        select(func.count()).select_from(AdultCardParticipantRecord).where(
+                            AdultCardParticipantRecord.session_id == card_session.id
+                        )
+                    )
+                    or 0
+                )
+                if participant_count >= card_session.expected_recipient_count:
+                    self._begin_adult_card_consent(session, card_session, item, now)
+                    status = "awaiting_consent"
+                else:
+                    card_session.state = "collecting_participants"
+                    status = "participants_required"
+                return ShopUseResult(
+                    status,
+                    view,
+                    session_number=card_session.public_number,
+                    group_chat_id=card_session.group_chat_id,
+                )
+
+    def _begin_adult_card_consent(
+        self,
+        session: Session,
+        card_session: AdultCardSessionRecord,
+        item: ItemRecord,
+        now: datetime,
+    ) -> None:
+        owner = session.get(UserRecord, card_session.owner_user_id)
+        group = session.get(GroupChatRecord, card_session.group_chat_id)
+        participants = list(
+            session.execute(
+                select(AdultCardParticipantRecord, UserRecord)
+                .join(UserRecord, UserRecord.id == AdultCardParticipantRecord.user_id)
+                .where(AdultCardParticipantRecord.session_id == card_session.id)
+                .order_by(AdultCardParticipantRecord.invitation_order)
+            )
+        )
+        names = "、".join(user.display_name for _, user in participants)
+        card_session.state = "awaiting_consent"
+        card_session.stage_deadline = None
+        card_session.consent_deadline = now + timedelta(minutes=10)
+        card_session.updated_at = now
+        for participant, participant_user in participants:
+            notice = self.enqueue_system_outbound(
+                f"【卡片授权 #{card_session.public_number}】{participant_user.display_name}\n"
+                f"{owner.display_name} 使用 {item.name}；参与者：{owner.display_name}、{names}\n"
+                f"场景：{card_session.scene}\n"
+                "请在 10 分钟内回复本通知发送 /同意使用 或 /拒绝使用。"
+                "发送 /同意使用 表示确认本人已成年并同意本次具体场景。",
+                group_chat_id=card_session.group_chat_id,
+                destination_chatroom_id=None if group is None else group.chatroom_id,
+            )
+            participant.authorization_outbound_id = notice.id
+
+    def invite_adult_card_participant(
+        self,
+        owner_platform_id: str,
+        target_platform_id: str | None,
+        session_number: int,
+        now: datetime,
+        *,
+        group_chat_id: UUID | None = None,
+    ) -> ShopUseResult:
+        now = now.astimezone(BEIJING)
+        with self.transaction():
+            with self._session() as session:
+                owner = session.scalar(
+                    select(UserRecord).where(UserRecord.platform_id == owner_platform_id)
+                )
+                if owner is None:
+                    return ShopUseResult("not_joined")
+                card_session = session.scalar(
+                    select(AdultCardSessionRecord)
+                    .where(AdultCardSessionRecord.public_number == session_number)
+                    .with_for_update()
+                )
+                if card_session is None:
+                    return ShopUseResult("session_not_found")
+                item_use = session.get(ShopItemUseRecord, card_session.item_use_id)
+                item = None if item_use is None else session.get(ItemRecord, item_use.item_id)
+                view = None if item is None else self._shop_catalog_item(item)
+                if (
+                    group_chat_id is not None
+                    and card_session.group_chat_id != group_chat_id
+                ):
+                    return ShopUseResult(
+                        "wrong_group", view, session_number=session_number
+                    )
+                if card_session.owner_user_id != owner.id:
+                    return ShopUseResult("not_owner", view, session_number=session_number)
+                if card_session.state != "collecting_participants":
+                    return ShopUseResult("cannot_invite", view, session_number=session_number)
+                if (
+                    card_session.stage_deadline is not None
+                    and now >= card_session.stage_deadline
+                ):
+                    self._cancel_adult_card_session(
+                        session, card_session, item_use, now
+                    )
+                    return ShopUseResult(
+                        "expired", view, session_number=session_number
+                    )
+                if target_platform_id is None:
+                    return ShopUseResult("target_required", view, session_number=session_number)
+                target = session.scalar(
+                    select(UserRecord).where(UserRecord.platform_id == target_platform_id)
+                )
+                if target is None:
+                    return ShopUseResult("target_not_joined", view, session_number=session_number)
+                if target.id == owner.id:
+                    return ShopUseResult("self_target", view, session_number=session_number)
+                participants = list(
+                    session.scalars(
+                        select(AdultCardParticipantRecord)
+                        .where(AdultCardParticipantRecord.session_id == card_session.id)
+                        .order_by(AdultCardParticipantRecord.invitation_order)
+                    )
+                )
+                if any(row.user_id == target.id for row in participants):
+                    return ShopUseResult("duplicate_target", view, session_number=session_number)
+                if len(participants) >= card_session.expected_recipient_count:
+                    return ShopUseResult("participants_full", view, session_number=session_number)
+                session.add(
+                    AdultCardParticipantRecord(
+                        session_id=card_session.id,
+                        user_id=target.id,
+                        invitation_order=len(participants) + 1,
+                    )
+                )
+                session.flush()
+                if len(participants) + 1 == card_session.expected_recipient_count:
+                    self._begin_adult_card_consent(session, card_session, item, now)
+                    status = "awaiting_consent"
+                else:
+                    card_session.updated_at = now
+                    status = "participant_added"
+                return ShopUseResult(status, view, session_number=session_number)
+
+    def cancel_adult_card_session(
+        self,
+        owner_platform_id: str,
+        session_number: int,
+        now: datetime,
+        *,
+        group_chat_id: UUID | None = None,
+    ) -> ShopUseResult:
+        now = now.astimezone(BEIJING)
+        with self.transaction():
+            with self._session() as session:
+                owner = session.scalar(
+                    select(UserRecord).where(UserRecord.platform_id == owner_platform_id)
+                )
+                if owner is None:
+                    return ShopUseResult("not_joined")
+                card_session = session.scalar(
+                    select(AdultCardSessionRecord)
+                    .where(AdultCardSessionRecord.public_number == session_number)
+                    .with_for_update()
+                )
+                if card_session is None:
+                    return ShopUseResult("session_not_found")
+                item_use = session.get(ShopItemUseRecord, card_session.item_use_id)
+                item = None if item_use is None else session.get(ItemRecord, item_use.item_id)
+                view = None if item is None else self._shop_catalog_item(item)
+                if (
+                    group_chat_id is not None
+                    and card_session.group_chat_id != group_chat_id
+                ):
+                    return ShopUseResult(
+                        "wrong_group", view, session_number=session_number
+                    )
+                if card_session.owner_user_id != owner.id:
+                    return ShopUseResult("not_owner", view, session_number=session_number)
+                if card_session.state not in {
+                    "collecting_scene",
+                    "collecting_m_count",
+                    "collecting_participants",
+                }:
+                    return ShopUseResult("cannot_cancel", view, session_number=session_number)
+                self._cancel_adult_card_session(session, card_session, item_use, now)
+                return ShopUseResult("cancelled", view, session_number=session_number)
+
+    def _cancel_adult_card_session(
+        self,
+        session: Session,
+        card_session: AdultCardSessionRecord,
+        item_use: ShopItemUseRecord,
+        now: datetime,
+    ) -> None:
+        inventory = session.scalar(
+            select(UserItemRecord)
+            .where(
+                UserItemRecord.user_id == card_session.owner_user_id,
+                UserItemRecord.item_id == item_use.item_id,
+            )
+            .with_for_update()
+        )
+        if inventory is None:
+            inventory = UserItemRecord(
+                user_id=card_session.owner_user_id,
+                item_id=item_use.item_id,
+                quantity=0,
+                created_at=now,
+            )
+            session.add(inventory)
+        inventory.quantity += 1
+        item_use.state = "cancelled"
+        item_use.completed_at = now
+        card_session.state = "cancelled"
+        card_session.stage_deadline = None
+        card_session.finished_at = now
+        card_session.updated_at = now
+
+    def decide_adult_card_consent(
+        self,
+        platform_id: str,
+        reference_message_id: str | None,
+        approved: bool,
+        now: datetime,
+        *,
+        group_chat_id: UUID | None = None,
+    ) -> ShopUseResult:
+        now = now.astimezone(BEIJING)
+        if reference_message_id is None:
+            return ShopUseResult("authorization_reply_required")
+        with self.transaction():
+            with self._session() as session:
+                user = session.scalar(
+                    select(UserRecord).where(UserRecord.platform_id == platform_id)
+                )
+                if user is None:
+                    return ShopUseResult("not_joined")
+                participant = session.scalar(
+                    select(AdultCardParticipantRecord)
+                    .join(
+                        OutboundRecord,
+                        OutboundRecord.id
+                        == AdultCardParticipantRecord.authorization_outbound_id,
+                    )
+                    .where(
+                        AdultCardParticipantRecord.user_id == user.id,
+                        OutboundRecord.platform_sent_id == reference_message_id,
+                    )
+                    .with_for_update()
+                )
+                if participant is None:
+                    return ShopUseResult("authorization_not_found")
+                card_session = session.get(
+                    AdultCardSessionRecord,
+                    participant.session_id,
+                    with_for_update=True,
+                )
+                if card_session is None:
+                    return ShopUseResult("authorization_not_found")
+                item_use = session.get(ShopItemUseRecord, card_session.item_use_id)
+                item = None if item_use is None else session.get(ItemRecord, item_use.item_id)
+                view = None if item is None else self._shop_catalog_item(item)
+                if (
+                    group_chat_id is not None
+                    and card_session.group_chat_id != group_chat_id
+                ):
+                    return ShopUseResult(
+                        "wrong_group",
+                        view,
+                        session_number=card_session.public_number,
+                    )
+                if card_session.state != "awaiting_consent":
+                    return ShopUseResult(
+                        "already_finished", view, session_number=card_session.public_number
+                    )
+                if (
+                    card_session.consent_deadline is not None
+                    and now >= card_session.consent_deadline
+                ):
+                    self._void_adult_card_session(
+                        session, card_session, item_use, item, now, "timeout"
+                    )
+                    return ShopUseResult(
+                        "expired", view, session_number=card_session.public_number
+                    )
+                if participant.decision is not None:
+                    return ShopUseResult(
+                        "already_decided", view, session_number=card_session.public_number
+                    )
+                participant.decision = "approved" if approved else "rejected"
+                participant.decided_at = now
+                if not approved:
+                    self._void_adult_card_session(
+                        session, card_session, item_use, item, now, "rejected"
+                    )
+                    return ShopUseResult(
+                        "rejected", view, session_number=card_session.public_number
+                    )
+                decisions = list(
+                    session.scalars(
+                        select(AdultCardParticipantRecord.decision).where(
+                            AdultCardParticipantRecord.session_id == card_session.id
+                        )
+                    )
+                )
+                if all(decision == "approved" for decision in decisions):
+                    self._complete_adult_card_session(
+                        session, card_session, item_use, item, now
+                    )
+                    return ShopUseResult(
+                        "all_approved", view, session_number=card_session.public_number
+                    )
+                return ShopUseResult(
+                    "approved_waiting", view, session_number=card_session.public_number
+                )
+
+    def _void_adult_card_session(
+        self,
+        session: Session,
+        card_session: AdultCardSessionRecord,
+        item_use: ShopItemUseRecord,
+        item: ItemRecord,
+        now: datetime,
+        reason: str,
+    ) -> None:
+        owner = session.get(UserRecord, card_session.owner_user_id, with_for_update=True)
+        if owner is None:
+            raise RuntimeError("成人卡片发起人消失")
+        compensation = item.price // 2
+        self._apply_balance_change(owner, compensation, "shop_compensation", now)
+        item_use.state = "voided"
+        item_use.result = {
+            **(item_use.result or {}),
+            "reason": reason,
+            "compensation": compensation,
+        }
+        item_use.completed_at = now
+        card_session.state = "voided"
+        card_session.consent_deadline = None
+        card_session.finished_at = now
+        card_session.updated_at = now
+        group = session.get(GroupChatRecord, card_session.group_chat_id)
+        self.enqueue_system_outbound(
+            f"【卡片局 #{card_session.public_number} 作废】授权未全部通过，"
+            f"{owner.display_name} 获得 {compensation} 摸鱼币补偿。",
+            group_chat_id=card_session.group_chat_id,
+            destination_chatroom_id=None if group is None else group.chatroom_id,
+        )
+
+    def _complete_adult_card_session(
+        self,
+        session: Session,
+        card_session: AdultCardSessionRecord,
+        item_use: ShopItemUseRecord,
+        item: ItemRecord,
+        now: datetime,
+    ) -> None:
+        definition = item_by_key(item.system_key or "")
+        card_session.state = "active" if definition.effect_type == "adult_common" else "generating"
+        card_session.consent_deadline = None
+        card_session.updated_at = now
+        item_use.state = "completed"
+        item_use.completed_at = now
+        group = session.get(GroupChatRecord, card_session.group_chat_id)
+        if definition.effect_type == "adult_common":
+            target_user_id = session.scalar(
+                select(AdultCardParticipantRecord.user_id)
+                .where(AdultCardParticipantRecord.session_id == card_session.id)
+                .order_by(AdultCardParticipantRecord.invitation_order)
+                .limit(1)
+            )
+            if target_user_id is None or definition.duration_minutes is None:
+                raise RuntimeError("常识改变卡目标或时长消失")
+            target = session.get(UserRecord, target_user_id)
+            ends_at = now + timedelta(minutes=definition.duration_minutes)
+            session.add(
+                ShopCommonSenseStateRecord(
+                    session_id=card_session.id,
+                    target_user_id=target_user_id,
+                    group_chat_id=card_session.group_chat_id,
+                    content=card_session.scene or "",
+                    state="active",
+                    starts_at=now,
+                    ends_at=ends_at,
                 )
             )
+            self.enqueue_system_outbound(
+                f"【常识改变 #{card_session.public_number}】{target.display_name}："
+                f"{card_session.scene}\n状态持续至 {ends_at.strftime('%Y-%m-%d %H:%M')}。",
+                group_chat_id=card_session.group_chat_id,
+                destination_chatroom_id=None if group is None else group.chatroom_id,
+            )
+        else:
+            session.add(
+                ShopSceneJobRecord(
+                    session_id=card_session.id,
+                    status="pending",
+                    attempt_count=0,
+                    created_at=now,
+                )
+            )
+            self.enqueue_system_outbound(
+                f"【卡片局 #{card_session.public_number}】授权完成，正在生成场景。",
+                group_chat_id=card_session.group_chat_id,
+                destination_chatroom_id=None if group is None else group.chatroom_id,
+            )
+
+    def run_shop_card_jobs(self, now: datetime) -> int:
+        now = now.astimezone(BEIJING)
+        processed = 0
+        with self.transaction():
+            with self._session() as session:
+                sessions = list(
+                    session.scalars(
+                        select(AdultCardSessionRecord)
+                        .where(
+                            or_(
+                                and_(
+                                    AdultCardSessionRecord.state.in_(
+                                        (
+                                            "collecting_scene",
+                                            "collecting_m_count",
+                                            "collecting_participants",
+                                        )
+                                    ),
+                                    AdultCardSessionRecord.stage_deadline <= now,
+                                ),
+                                and_(
+                                    AdultCardSessionRecord.state == "awaiting_consent",
+                                    AdultCardSessionRecord.consent_deadline <= now,
+                                ),
+                            )
+                        )
+                        .with_for_update()
+                    )
+                )
+                for card_session in sessions:
+                    item_use = session.get(ShopItemUseRecord, card_session.item_use_id)
+                    item = None if item_use is None else session.get(ItemRecord, item_use.item_id)
+                    if item_use is None or item is None:
+                        continue
+                    if card_session.state == "awaiting_consent":
+                        self._void_adult_card_session(
+                            session, card_session, item_use, item, now, "timeout"
+                        )
+                    else:
+                        self._cancel_adult_card_session(
+                            session, card_session, item_use, now
+                        )
+                        owner = session.get(UserRecord, card_session.owner_user_id)
+                        group = session.get(
+                            GroupChatRecord, card_session.group_chat_id
+                        )
+                        self.enqueue_system_outbound(
+                            f"【卡片局 #{card_session.public_number}】填写或选人超时，"
+                            f"{owner.display_name} 的预留卡片已退回。",
+                            group_chat_id=card_session.group_chat_id,
+                            destination_chatroom_id=(
+                                None if group is None else group.chatroom_id
+                            ),
+                        )
+                    processed += 1
+                active_states = list(
+                    session.scalars(
+                        select(ShopCommonSenseStateRecord)
+                        .where(
+                            ShopCommonSenseStateRecord.state == "active",
+                            ShopCommonSenseStateRecord.ends_at <= now,
+                        )
+                        .with_for_update()
+                    )
+                )
+                for state in active_states:
+                    state.state = "expired"
+                    state.finished_at = now
+                    card_session = session.get(AdultCardSessionRecord, state.session_id)
+                    if card_session is not None:
+                        card_session.state = "completed"
+                        card_session.finished_at = now
+                        target = session.get(UserRecord, state.target_user_id)
+                        group = session.get(GroupChatRecord, state.group_chat_id)
+                        self.enqueue_system_outbound(
+                            f"【常识改变已结束】{target.display_name} 已恢复原状态。",
+                            group_chat_id=state.group_chat_id,
+                            destination_chatroom_id=None if group is None else group.chatroom_id,
+                        )
+                    processed += 1
+        return processed
+
+    def claim_shop_scene_job(
+        self, worker_id: str, now: datetime, lease_seconds: int
+    ) -> ClaimedShopSceneJob | None:
+        now = now.astimezone(BEIJING)
+        with self.transaction():
+            with self._session() as session:
+                job = session.scalar(
+                    select(ShopSceneJobRecord)
+                    .where(
+                        or_(
+                            and_(
+                                ShopSceneJobRecord.status == "pending",
+                                or_(
+                                    ShopSceneJobRecord.lease_expires_at.is_(None),
+                                    ShopSceneJobRecord.lease_expires_at <= now,
+                                ),
+                            ),
+                            and_(
+                                ShopSceneJobRecord.status == "leased",
+                                ShopSceneJobRecord.lease_expires_at <= now,
+                            ),
+                        )
+                    )
+                    .order_by(ShopSceneJobRecord.created_at)
+                    .with_for_update(skip_locked=True)
+                )
+                if job is None:
+                    return None
+                card_session = session.get(AdultCardSessionRecord, job.session_id)
+                item_use = (
+                    None
+                    if card_session is None
+                    else session.get(ShopItemUseRecord, card_session.item_use_id)
+                )
+                item = None if item_use is None else session.get(ItemRecord, item_use.item_id)
+                owner = (
+                    None
+                    if card_session is None
+                    else session.get(UserRecord, card_session.owner_user_id)
+                )
+                group = (
+                    None
+                    if card_session is None
+                    else session.get(GroupChatRecord, card_session.group_chat_id)
+                )
+                if any(
+                    value is None
+                    for value in (card_session, item_use, item, owner, group)
+                ):
+                    job.status = "failed"
+                    job.failure_summary = "scene context missing"
+                    return None
+                participants = list(
+                    session.scalars(
+                        select(UserRecord)
+                        .join(
+                            AdultCardParticipantRecord,
+                            AdultCardParticipantRecord.user_id == UserRecord.id,
+                        )
+                        .where(AdultCardParticipantRecord.session_id == card_session.id)
+                        .order_by(AdultCardParticipantRecord.invitation_order)
+                    )
+                )
+                lease_token = uuid4()
+                job.status = "leased"
+                job.lease_worker_id = worker_id
+                job.lease_token = lease_token
+                job.lease_expires_at = now + timedelta(seconds=lease_seconds)
+                job.attempt_count += 1
+                job.failure_summary = None
+                profiles = "\n".join(
+                    f"- {person.display_name}：{person.profile_text or '未填写档案'}"
+                    for person in (owner, *participants)
+                )
+                return ClaimedShopSceneJob(
+                    id=job.id,
+                    lease_token=lease_token,
+                    system_prompt=(
+                        "你负责创作所有参与者已经明确同意的成年人虚构角色扮演场景。"
+                        "严格遵循用户给定场景，不新增参与者，不描述现实强迫，"
+                        "使用自然中文，正文最多800字，只输出正文。"
+                    ),
+                    user_content=(
+                        f"卡片：{item.name}\n来源群：{group.name}\n"
+                        f"参与者档案：\n{profiles}\n已同意场景：{card_session.scene}"
+                    ),
+                    max_response_chars=800,
+                    timeout_seconds=120,
+                )
+
+    def complete_shop_scene_job(
+        self,
+        job_id: UUID,
+        worker_id: str,
+        lease_token: UUID,
+        text_value: str,
+        now: datetime,
+    ) -> bool:
+        now = now.astimezone(BEIJING)
+        with self.transaction():
+            with self._session() as session:
+                job = session.get(ShopSceneJobRecord, job_id, with_for_update=True)
+                if (
+                    job is None
+                    or job.status != "leased"
+                    or job.lease_worker_id != worker_id
+                    or job.lease_token != lease_token
+                ):
+                    return False
+                card_session = session.get(
+                    AdultCardSessionRecord, job.session_id, with_for_update=True
+                )
+                if card_session is None:
+                    return False
+                result_text = text_value.strip()[:800]
+                if not result_text:
+                    return False
+                job.status = "completed"
+                job.result_text = result_text
+                job.completed_at = now
+                job.lease_worker_id = None
+                job.lease_token = None
+                job.lease_expires_at = None
+                card_session.state = "completed"
+                card_session.finished_at = now
+                card_session.updated_at = now
+                self.enqueue_outbound(
+                    card_session.source_inbound_message_id,
+                    result_text,
+                    group_chat_id=card_session.group_chat_id,
+                )
+                return True
+
+    def fail_shop_scene_job(
+        self,
+        job_id: UUID,
+        worker_id: str,
+        lease_token: UUID,
+        failure_summary: str,
+        now: datetime,
+    ) -> bool:
+        now = now.astimezone(BEIJING)
+        with self.transaction():
+            with self._session() as session:
+                job = session.get(ShopSceneJobRecord, job_id, with_for_update=True)
+                if (
+                    job is None
+                    or job.status != "leased"
+                    or job.lease_worker_id != worker_id
+                    or job.lease_token != lease_token
+                ):
+                    return False
+                job.failure_summary = failure_summary[:256]
+                job.lease_worker_id = None
+                job.lease_token = None
+                if job.attempt_count < 3:
+                    job.status = "pending"
+                    job.lease_expires_at = now + timedelta(
+                        seconds=30 * job.attempt_count
+                    )
+                else:
+                    job.status = "failed"
+                    job.lease_expires_at = None
+                return True
+
+    def retry_shop_scene_job(self, job_id: UUID) -> bool:
+        with self._session() as session:
+            job = session.get(ShopSceneJobRecord, job_id, with_for_update=True)
+            if job is None or job.status != "failed":
+                return False
+            job.status = "pending"
+            job.failure_summary = None
+            job.lease_expires_at = None
+            return True
+
+    def list_shop_admin_activity(self, limit: int = 100) -> dict[str, list[dict]]:
+        target_user = aliased(UserRecord)
+        owner_user = aliased(UserRecord)
+        with self._session() as session:
+            purchases = [
+                {
+                    "id": record.id,
+                    "created_at": record.created_at,
+                    "user_name": user.display_name,
+                    "item_number": item.public_number,
+                    "item_name": item.name,
+                    "group_name": group.name,
+                    "price": record.price,
+                }
+                for record, user, item, group in session.execute(
+                    select(
+                        ShopPurchaseRecord,
+                        UserRecord,
+                        ItemRecord,
+                        GroupChatRecord,
+                    )
+                    .join(UserRecord, UserRecord.id == ShopPurchaseRecord.user_id)
+                    .join(ItemRecord, ItemRecord.id == ShopPurchaseRecord.item_id)
+                    .join(
+                        GroupChatRecord,
+                        GroupChatRecord.id == ShopPurchaseRecord.group_chat_id,
+                    )
+                    .order_by(ShopPurchaseRecord.created_at.desc())
+                    .limit(limit)
+                )
+            ]
+            uses = [
+                {
+                    "id": record.id,
+                    "created_at": record.created_at,
+                    "completed_at": record.completed_at,
+                    "user_name": user.display_name,
+                    "target_name": None if target is None else target.display_name,
+                    "item_number": item.public_number,
+                    "item_name": item.name,
+                    "group_name": group.name,
+                    "state": record.state,
+                    "result": record.result,
+                }
+                for record, user, target, item, group in session.execute(
+                    select(
+                        ShopItemUseRecord,
+                        UserRecord,
+                        target_user,
+                        ItemRecord,
+                        GroupChatRecord,
+                    )
+                    .join(UserRecord, UserRecord.id == ShopItemUseRecord.user_id)
+                    .outerjoin(
+                        target_user, target_user.id == ShopItemUseRecord.target_user_id
+                    )
+                    .join(ItemRecord, ItemRecord.id == ShopItemUseRecord.item_id)
+                    .join(
+                        GroupChatRecord,
+                        GroupChatRecord.id == ShopItemUseRecord.group_chat_id,
+                    )
+                    .order_by(ShopItemUseRecord.created_at.desc())
+                    .limit(limit)
+                )
+            ]
+            consents = [
+                {
+                    "id": participant.id,
+                    "session_number": card_session.public_number,
+                    "participant_name": participant_user.display_name,
+                    "decision": participant.decision,
+                    "decided_at": participant.decided_at,
+                }
+                for participant, card_session, participant_user in session.execute(
+                    select(
+                        AdultCardParticipantRecord,
+                        AdultCardSessionRecord,
+                        UserRecord,
+                    )
+                    .join(
+                        AdultCardSessionRecord,
+                        AdultCardSessionRecord.id
+                        == AdultCardParticipantRecord.session_id,
+                    )
+                    .join(UserRecord, UserRecord.id == AdultCardParticipantRecord.user_id)
+                    .order_by(AdultCardSessionRecord.created_at.desc())
+                    .limit(limit)
+                )
+            ]
+            scene_jobs = [
+                {
+                    "id": job.id,
+                    "session_number": card_session.public_number,
+                    "item_name": item.name,
+                    "owner_name": owner.display_name,
+                    "group_name": group.name,
+                    "status": job.status,
+                    "attempt_count": job.attempt_count,
+                    "failure_summary": job.failure_summary,
+                    "created_at": job.created_at,
+                    "completed_at": job.completed_at,
+                }
+                for job, card_session, item, owner, group in session.execute(
+                    select(
+                        ShopSceneJobRecord,
+                        AdultCardSessionRecord,
+                        ItemRecord,
+                        owner_user,
+                        GroupChatRecord,
+                    )
+                    .join(
+                        AdultCardSessionRecord,
+                        AdultCardSessionRecord.id == ShopSceneJobRecord.session_id,
+                    )
+                    .join(
+                        ShopItemUseRecord,
+                        ShopItemUseRecord.id == AdultCardSessionRecord.item_use_id,
+                    )
+                    .join(ItemRecord, ItemRecord.id == ShopItemUseRecord.item_id)
+                    .join(owner_user, owner_user.id == AdultCardSessionRecord.owner_user_id)
+                    .join(
+                        GroupChatRecord,
+                        GroupChatRecord.id == AdultCardSessionRecord.group_chat_id,
+                    )
+                    .order_by(ShopSceneJobRecord.created_at.desc())
+                    .limit(limit)
+                )
+            ]
+            common_states = [
+                {
+                    "id": state.id,
+                    "session_number": card_session.public_number,
+                    "owner_name": owner.display_name,
+                    "target_name": target.display_name,
+                    "group_name": group.name,
+                    "content": state.content,
+                    "state": state.state,
+                    "starts_at": state.starts_at,
+                    "ends_at": state.ends_at,
+                    "finished_at": state.finished_at,
+                }
+                for state, card_session, owner, target, group in session.execute(
+                    select(
+                        ShopCommonSenseStateRecord,
+                        AdultCardSessionRecord,
+                        owner_user,
+                        target_user,
+                        GroupChatRecord,
+                    )
+                    .join(
+                        AdultCardSessionRecord,
+                        AdultCardSessionRecord.id
+                        == ShopCommonSenseStateRecord.session_id,
+                    )
+                    .join(owner_user, owner_user.id == AdultCardSessionRecord.owner_user_id)
+                    .join(
+                        target_user,
+                        target_user.id == ShopCommonSenseStateRecord.target_user_id,
+                    )
+                    .join(
+                        GroupChatRecord,
+                        GroupChatRecord.id
+                        == ShopCommonSenseStateRecord.group_chat_id,
+                    )
+                    .order_by(ShopCommonSenseStateRecord.starts_at.desc())
+                    .limit(limit)
+                )
+            ]
+            return {
+                "purchases": purchases,
+                "uses": uses,
+                "consents": consents,
+                "scene_jobs": scene_jobs,
+                "common_states": common_states,
+            }
+
+    def force_end_shop_common_state(self, state_id: UUID, now: datetime) -> bool:
+        now = now.astimezone(BEIJING)
+        with self.transaction():
+            with self._session() as session:
+                state = session.get(
+                    ShopCommonSenseStateRecord, state_id, with_for_update=True
+                )
+                if state is None:
+                    return False
+                if state.state != "active":
+                    return True
+                state.state = "forced_end"
+                state.finished_at = now
+                card_session = session.get(
+                    AdultCardSessionRecord, state.session_id, with_for_update=True
+                )
+                if card_session is not None:
+                    card_session.state = "completed"
+                    card_session.finished_at = now
+                    card_session.updated_at = now
+                target = session.get(UserRecord, state.target_user_id)
+                group = session.get(GroupChatRecord, state.group_chat_id)
+                self.enqueue_system_outbound(
+                    f"【常识改变已结束】{target.display_name} 已恢复原状态。",
+                    group_chat_id=state.group_chat_id,
+                    destination_chatroom_id=(
+                        None if group is None else group.chatroom_id
+                    ),
+                )
+                return True
+
+    def list_active_items(self) -> list[ItemRecord]:
+        with self.transaction():
+            with self._session() as session:
+                self._ensure_shop_catalog(session)
+                return list(
+                    session.scalars(
+                        select(ItemRecord)
+                        .where(ItemRecord.enabled.is_(True))
+                        .order_by(ItemRecord.public_number)
+                    )
+                )
 
     def list_active_items_page(
         self, page: int, page_size: int
     ) -> tuple[list[ItemRecord], int]:
-        with self._session() as session:
-            query = select(ItemRecord).where(ItemRecord.enabled.is_(True))
-            total = int(
-                session.scalar(select(func.count()).select_from(query.subquery())) or 0
-            )
-            items = list(
-                session.scalars(
-                    query.order_by(ItemRecord.created_at.desc(), ItemRecord.id.desc())
-                    .offset((page - 1) * page_size)
-                    .limit(page_size)
+        with self.transaction():
+            with self._session() as session:
+                self._ensure_shop_catalog(session)
+                query = select(ItemRecord)
+                total = int(
+                    session.scalar(select(func.count()).select_from(query.subquery())) or 0
                 )
-            )
-            return items, total
+                items = list(
+                    session.scalars(
+                        query.order_by(ItemRecord.created_at.desc(), ItemRecord.id.desc())
+                        .offset((page - 1) * page_size)
+                        .limit(page_size)
+                    )
+                )
+                return items, total
+
+    def update_shop_item(
+        self,
+        public_number: int,
+        *,
+        enabled: bool,
+        minimum_rank_order: int | None,
+        unlimited_stock: bool,
+        stock: int,
+    ) -> ItemRecord:
+        if minimum_rank_order is not None and minimum_rank_order < 1:
+            raise ValueError("最低职位无效")
+        if stock < 0:
+            raise ValueError("库存无效")
+        with self.transaction():
+            with self._session() as session:
+                self._ensure_shop_catalog(session)
+                item = session.scalar(
+                    select(ItemRecord)
+                    .where(ItemRecord.public_number == public_number)
+                    .with_for_update()
+                )
+                if item is None:
+                    raise LookupError("item_not_found")
+                item.enabled = enabled
+                item.minimum_rank_order = minimum_rank_order
+                item.unlimited_stock = unlimited_stock
+                item.stock = stock
+                session.flush()
+                return item
 
     def list_user_items(self, user_id: UUID) -> list[tuple[str, int]]:
         with self._session() as session:
@@ -17587,10 +19385,27 @@ class CoreRepository:
                 session.execute(
                     select(ItemRecord.name, UserItemRecord.quantity)
                     .join(UserItemRecord, UserItemRecord.item_id == ItemRecord.id)
-                    .where(UserItemRecord.user_id == user_id)
-                    .order_by(ItemRecord.name)
+                    .where(UserItemRecord.user_id == user_id, UserItemRecord.quantity > 0)
+                    .order_by(ItemRecord.public_number)
                 )
             )
+
+    def list_user_shop_items(self, user_id: UUID) -> list[ShopInventoryItem]:
+        with self._session() as session:
+            return [
+                ShopInventoryItem(number, name, quantity, effect_type)
+                for number, name, quantity, effect_type in session.execute(
+                    select(
+                        ItemRecord.public_number,
+                        ItemRecord.name,
+                        UserItemRecord.quantity,
+                        ItemRecord.effect_type,
+                    )
+                    .join(UserItemRecord, UserItemRecord.item_id == ItemRecord.id)
+                    .where(UserItemRecord.user_id == user_id, UserItemRecord.quantity > 0)
+                    .order_by(ItemRecord.public_number)
+                )
+            ]
 
     def enqueue_outbound(
         self,

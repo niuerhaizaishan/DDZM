@@ -34,6 +34,13 @@ def _service(
         number_bomb_random=number_bomb_random,
         texas_holdem_random=texas_holdem_random,
     )
+    from dzmm_bot.core.schema import RankRecord
+
+    repository.list_ranks()
+    with factory.begin() as session:
+        session.scalar(
+            select(RankRecord).where(RankRecord.sort_order == 1)
+        ).multiplayer_game_limit = 999
     return CoreService(repository, GroupCommandHandler(repository)), repository, factory
 
 
@@ -1481,8 +1488,8 @@ def test_board_bonus_command_rejects_nonboard_and_missing_targets():
 @pytest.mark.parametrize(
     ("content", "expected"),
     [
-        ("/发奖金", "请用 /发奖金 员工名 金额 或 /发奖金 全部 金额。"),
-        ("/发奖金 苏白", "请用 /发奖金 员工名 金额 或 /发奖金 全部 金额。"),
+        ("/发奖金", "请回复目标员工发送 /发奖金 金额，或使用 /发奖金 员工名 金额、/发奖金 全部 金额。"),
+        ("/发奖金 苏白", "请回复目标员工发送 /发奖金 金额，或使用 /发奖金 员工名 金额、/发奖金 全部 金额。"),
         ("/发奖金 苏白 0", "奖金金额必须是 1–99999 的整数。"),
         ("/发奖金 苏白 -1", "奖金金额必须是 1–99999 的整数。"),
         ("/发奖金 苏白 1.5", "奖金金额必须是 1–99999 的整数。"),
@@ -1510,13 +1517,46 @@ def test_board_bonus_command_rejects_invalid_syntax_and_amounts(content, expecte
     assert all(user.balance == 0 for user in repository.list_users())
 
 
+def test_board_bonus_can_target_replied_employee():
+    from dzmm_bot.core.schema import RankRecord, UserRecord
+
+    service, repository, factory = _service()
+    now = datetime(2026, 8, 25, 10, 0, tzinfo=BEIJING)
+    board, _ = repository.create_user("board-reply", "董事", now, 0)
+    recipient, _ = repository.create_user("recipient-reply", "苏白", now, 0)
+    with factory.begin() as session:
+        board_rank = session.scalar(select(RankRecord).where(RankRecord.is_board.is_(True)))
+        session.get(UserRecord, board.id).rank_id = board_rank.id
+
+    service.receive_inbound(
+        InboundMessage(
+            "reply-bonus",
+            "board-reply",
+            "/发奖金 6",
+            now,
+            reference=MessageReference(
+                message_id="target-message",
+                sender_platform_id="recipient-reply",
+                content_type="text",
+                text="你好",
+            ),
+        )
+    )
+
+    assert "向苏白发放 6 摸鱼币" in _latest_reply(factory)
+    assert repository.find_user("recipient-reply").balance == 6
+
+
 def test_help_basic_lists_board_bonus_command():
     service, _, factory = _service()
     now = datetime(2026, 8, 11, 10, 0, tzinfo=BEIJING)
 
     _receive(service, "bonus-help", "viewer", "/帮助 基础", now)
 
-    assert "/发奖金 员工名 金额；/发奖金 全部 金额：仅核心董事会发放" in _latest_reply(factory)
+    assert (
+        "回复目标发送 /发奖金 金额；也支持 /发奖金 员工名 金额、"
+        "/发奖金 全部 金额：仅核心董事会发放"
+    ) in _latest_reply(factory)
 
 
 def test_checkin_awards_five_once_per_beijing_date_and_uses_beijing_dates():
@@ -1601,7 +1641,133 @@ def test_balance_inventory_and_shop_require_employee_and_return_persisted_data()
 
     repository.add_item("工位午睡券", "允许正大光明眯十分钟。", 5, 3)
     _receive(service, "message-4", "platform-xiaoming", "/商店", received_at)
-    assert _latest_reply(factory) == "总监事小卖部：\n工位午睡券（5 摸鱼币，库存 3）"
+    reply = _latest_reply(factory)
+    assert "#1 初级赠送卡（3 摸鱼币，库存 不限，需 LV2）" in reply
+    assert "#23 工位午睡券（5 摸鱼币，库存 3）" in reply
+
+
+def test_shop_purchase_inventory_and_scratch_use_group_commands():
+    service, repository, factory = _service()
+    now = datetime(2026, 8, 25, 10, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group("https://www.aikda.com/chat?c=shop-main", now)
+    repository.create_user("shopper", "购物者", now, 20)
+    scratch = next(
+        item for item in repository.list_shop_items() if item.system_key == "scratch_a"
+    )
+
+    for message_id, content in (
+        ("buy", f"/购买 {scratch.public_number}"),
+        ("inventory", "/我的物品"),
+        ("use", f"/使用 {scratch.public_number}"),
+    ):
+        service.receive_inbound(
+            InboundMessage(
+                message_id,
+                "shopper",
+                content,
+                now,
+                source_type="group",
+                chatroom_id="shop-main",
+            )
+        )
+        reply = _latest_reply(factory)
+        if message_id == "buy":
+            assert "已购买" in reply and "余额 15 摸鱼币" in reply
+        elif message_id == "inventory":
+            assert f"#{scratch.public_number} 刮刮卡 A × 1" in reply
+        else:
+            assert "刮出" in reply
+
+
+def test_shop_commands_reject_direct_chat():
+    service, repository, factory = _service()
+    now = datetime(2026, 8, 25, 10, 0, tzinfo=BEIJING)
+    repository.create_user("shopper", "购物者", now, 20)
+
+    service.receive_inbound(
+        InboundMessage(
+            "direct-shop",
+            "shopper",
+            "/商店",
+            now,
+            source_type="direct",
+            chatroom_id="direct-shopper",
+        )
+    )
+
+    assert _latest_reply(factory) == "请回到群里发送 /商店。"
+
+
+def test_adult_card_command_sends_private_scene_prompt_and_authorization_notice():
+    from dzmm_bot.core.schema import (
+        GroupChatRecord,
+        OutboundRecord,
+        PRIMARY_GROUP_CHAT_ID,
+    )
+
+    service, repository, factory = _service()
+    now = datetime(2026, 8, 25, 10, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group("https://www.aikda.com/chat?c=adult-main", now)
+    repository.create_user("adult-command-owner", "发起者", now, 100)
+    repository.create_user("adult-command-target", "目标", now, 0)
+    repository.upsert_direct_chats(
+        [("adult-command-owner", "direct-adult-command")], now
+    )
+    with factory.begin() as session:
+        session.get(GroupChatRecord, PRIMARY_GROUP_CHAT_ID).adult_shop_enabled = True
+    item = next(
+        row for row in repository.list_shop_items() if row.system_key == "adult_flirt"
+    )
+
+    for message_id, content in (
+        ("adult-buy", f"/购买 {item.public_number}"),
+        ("adult-use", f"/使用 {item.public_number}"),
+    ):
+        service.receive_inbound(
+            InboundMessage(
+                message_id,
+                "adult-command-owner",
+                content,
+                now,
+                source_type="group",
+                chatroom_id="adult-main",
+                reference=(
+                    None
+                    if message_id == "adult-buy"
+                    else MessageReference(
+                        message_id="target-source",
+                        sender_platform_id="adult-command-target",
+                        content_type="text",
+                        text="目标消息",
+                    )
+                ),
+            )
+        )
+    with factory.begin() as session:
+        private_prompt = session.scalar(
+            select(OutboundRecord).where(
+                OutboundRecord.destination_chatroom_id == "direct-adult-command"
+            )
+        )
+        assert "请发送 1–200 字" in private_prompt.text
+
+    service.receive_inbound(
+        InboundMessage(
+            "adult-scene",
+            "adult-command-owner",
+            "双方同意的虚构场景",
+            now,
+            source_type="direct",
+            chatroom_id="direct-adult-command",
+        )
+    )
+
+    with factory.begin() as session:
+        assert session.scalar(
+            select(OutboundRecord.id).where(
+                OutboundRecord.text.contains("卡片授权")
+            )
+        ) is not None
 
 
 def test_me_alias_shows_balance_level_and_today_income_without_count():

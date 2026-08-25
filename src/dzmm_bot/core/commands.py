@@ -6,6 +6,7 @@ from dzmm_bot.runtime.contracts import InboundMessage
 
 from .group_games import GROUP_GAME_COMMANDS, GROUP_GAME_LABELS
 from .reply_templates import render_template, template_definition
+from .schema import PRIMARY_GROUP_CHAT_ID
 from .repository import (
     BlameGameResult,
     CoreRepository,
@@ -19,7 +20,7 @@ from .service import CommandReply
 
 _BEIJING = ZoneInfo("Asia/Shanghai")
 _COMMANDS = {
-    "/入职", "/我的物品", "/打卡", "/余额", "/修改名称", "/编辑档案", "/编辑档案形象", "/我的档案", "/发奖金", "/发红包", "/抢红包", "/打赏", "/我", "/商店", "/帮助", "/当前游戏", "/加入", "/退出", "/开始", "/摸鱼躲猫猫", "/记忆考核", "/继续", "/收手", "/投降", "/部门", "/部门人数", "/我的部门人数", "/加入部门", "/切换部门", "/部门申请列表", "/同意部门", "/全部同意部门", "/拒绝部门", "/全部拒绝部门", "/职位", "/晋升", "/晋升申请列表", "/同意", "/全部同意", "/拒绝", "/全部拒绝", "/谁是卧底", "/开始投票", "/投票", "/退出谁是卧底", "/结束游戏", "/甩锅游戏", "/甩锅", "/退出甩锅", "/蹦蹦数字炸弹", "/报数", "/跳过", "/德州扑克", "/看牌", "/过牌", "/跟注", "/加注", "/全下", "/弃牌", "/上架暗网", "/取消上架", "/确认", "/报价", "/公开", "/不公开", "/登陆暗网",
+    "/入职", "/我的物品", "/购买", "/使用", "/邀请参与", "/取消使用", "/同意使用", "/拒绝使用", "/打卡", "/余额", "/修改名称", "/编辑档案", "/编辑档案形象", "/我的档案", "/发奖金", "/发红包", "/抢红包", "/打赏", "/我", "/商店", "/帮助", "/当前游戏", "/加入", "/退出", "/开始", "/摸鱼躲猫猫", "/记忆考核", "/继续", "/收手", "/投降", "/部门", "/部门人数", "/我的部门人数", "/加入部门", "/切换部门", "/部门申请列表", "/同意部门", "/全部同意部门", "/拒绝部门", "/全部拒绝部门", "/职位", "/晋升", "/晋升申请列表", "/同意", "/全部同意", "/拒绝", "/全部拒绝", "/谁是卧底", "/开始投票", "/投票", "/退出谁是卧底", "/结束游戏", "/甩锅游戏", "/甩锅", "/退出甩锅", "/蹦蹦数字炸弹", "/报数", "/跳过", "/德州扑克", "/看牌", "/过牌", "/跟注", "/加注", "/全下", "/弃牌", "/上架暗网", "/取消上架", "/确认", "/报价", "/公开", "/不公开", "/登陆暗网",
 }
 
 
@@ -300,15 +301,29 @@ class GroupCommandHandler:
         if command == "/我的档案":
             return self._my_profile(message.sender_platform_id, received_at)
         if command == "/发奖金":
-            return self._grant_bonus(
-                message.sender_platform_id, content, received_at
-            )
+            return self._grant_bonus(message, content, received_at)
         if command == "/我":
             return self._me(message.sender_platform_id, received_at)
         if command == "/我的物品":
-            return self._inventory(message.sender_platform_id, received_at)
+            return self._inventory(message, received_at)
         if command == "/商店":
-            return self._shop(received_at)
+            return self._shop(message, received_at, group_chat_id)
+        if command == "/购买":
+            return self._purchase(message, content, received_at, group_chat_id)
+        if command == "/使用":
+            return self._use_item(message, content, received_at, group_chat_id)
+        if command == "/邀请参与":
+            return self._invite_adult_participant(
+                message, content, received_at, group_chat_id
+            )
+        if command == "/取消使用":
+            return self._cancel_adult_use(
+                message, content, received_at, group_chat_id
+            )
+        if command in {"/同意使用", "/拒绝使用"}:
+            return self._decide_adult_use(
+                message, command, received_at, group_chat_id
+            )
         if command == "/部门":
             return self._departments(received_at)
         if command == "/部门人数":
@@ -809,20 +824,31 @@ class GroupCommandHandler:
             {"{昵称}": employee.display_name, "{余额}": employee.balance},
         )
 
-    def _grant_bonus(self, platform_id: str, content: str, received_at) -> str:
+    def _grant_bonus(
+        self, message: InboundMessage, content: str, received_at
+    ) -> str:
         payload = content[len("/发奖金"):].strip()
         parts = payload.rsplit(maxsplit=1)
-        if len(parts) != 2:
+        if len(parts) == 1 and message.reference is not None:
+            target_user = self._repository.find_user(
+                message.reference.sender_platform_id
+            )
+            if target_user is None:
+                return self._reply("/发奖金", "target_not_found", received_at)
+            target = target_user.display_name
+            amount_text = parts[0]
+        elif len(parts) == 2:
+            target, amount_text = parts
+            target = target.strip()
+        else:
             return self._reply("/发奖金", "usage", received_at)
-        target, amount_text = parts
-        target = target.strip()
         if not target:
             return self._reply("/发奖金", "usage", received_at)
         if not amount_text.isascii() or not amount_text.isdigit():
             return self._reply("/发奖金", "invalid_amount", received_at)
 
         result = self._repository.grant_board_bonus(
-            platform_id, target, int(amount_text), received_at
+            message.sender_platform_id, target, int(amount_text), received_at
         )
         if result.status == "granted":
             values = {
@@ -1224,11 +1250,13 @@ class GroupCommandHandler:
                 replies.append(self._reply(command, "unavailable", received_at))
         return "\n".join(replies)
 
-    def _inventory(self, platform_id: str, received_at) -> str:
-        employee = self._repository.find_user(platform_id)
+    def _inventory(self, message: InboundMessage, received_at) -> str:
+        if message.source_type != "group":
+            return self._reply("/我的物品", "group_only", received_at)
+        employee = self._repository.find_user(message.sender_platform_id)
         if employee is None:
             return self._reply("/我的物品", "not_joined", received_at)
-        items = self._repository.list_user_items(employee.id)
+        items = self._repository.list_user_shop_items(employee.id)
         return self._reply(
             "/我的物品",
             "shown",
@@ -1237,12 +1265,17 @@ class GroupCommandHandler:
                 "{昵称}": employee.display_name,
                 "{物品列表}": "暂时空空如也。"
                 if not items
-                else "\n".join(f"{name} × {quantity}" for name, quantity in items),
+                else "\n".join(
+                    f"#{item.public_number} {item.name} × {item.quantity}"
+                    for item in items
+                ),
             },
         )
 
-    def _shop(self, received_at) -> str:
-        items = self._repository.list_active_items()
+    def _shop(self, message: InboundMessage, received_at, group_chat_id) -> str:
+        if message.source_type != "group":
+            return self._reply("/商店", "group_only", received_at)
+        items = self._repository.list_shop_items(group_chat_id or PRIMARY_GROUP_CHAT_ID)
         if not items:
             return self._reply("/商店", "empty", received_at)
         currency_name = self._repository.get_game_settings().currency_name
@@ -1252,10 +1285,173 @@ class GroupCommandHandler:
             received_at,
             {
                 "{商店列表}": "\n".join(
-                    f"{item.name}（{item.price} {currency_name}，库存 {item.stock}）"
+                    f"#{item.public_number} {item.name}（{item.price} {currency_name}，库存 "
+                    f"{'不限' if item.unlimited_stock else item.stock}"
+                    f"{'，需 LV' + str(item.minimum_rank_order) if item.minimum_rank_order else ''}）"
+                    f"：{item.description}"
                     for item in items
                 )
             },
+        )
+
+    def _purchase(
+        self, message: InboundMessage, content: str, received_at, group_chat_id
+    ) -> str:
+        if message.source_type != "group":
+            return self._reply("/购买", "group_only", received_at)
+        group_chat_id = group_chat_id or PRIMARY_GROUP_CHAT_ID
+        parts = content.split()
+        if len(parts) != 2 or not parts[1].isascii() or not parts[1].isdigit():
+            return self._reply("/购买", "usage", received_at)
+        result = self._repository.purchase_shop_item(
+            message.platform_message_id,
+            message.sender_platform_id,
+            int(parts[1]),
+            group_chat_id,
+            received_at,
+        )
+        values = {}
+        if result.item is not None:
+            values.update(
+                {
+                    "{商品编号}": result.item.public_number,
+                    "{商品名称}": result.item.name,
+                    "{最低职位}": result.item.minimum_rank_order or 0,
+                }
+            )
+        if result.balance is not None:
+            values["{余额}"] = result.balance
+        if result.quantity is not None:
+            values["{数量}"] = result.quantity
+        return self._reply("/购买", result.status, received_at, values)
+
+    def _use_item(
+        self, message: InboundMessage, content: str, received_at, group_chat_id
+    ) -> str:
+        if message.source_type != "group":
+            return self._reply("/使用", "group_only", received_at)
+        group_chat_id = group_chat_id or PRIMARY_GROUP_CHAT_ID
+        parts = content.split()
+        if len(parts) != 2 or not parts[1].isascii() or not parts[1].isdigit():
+            return self._reply("/使用", "usage", received_at)
+        result = self._repository.use_ordinary_shop_item(
+            message.platform_message_id,
+            message.sender_platform_id,
+            int(parts[1]),
+            group_chat_id,
+            received_at,
+            target_platform_id=(
+                None
+                if message.reference is None
+                else message.reference.sender_platform_id
+            ),
+        )
+        if result.status == "adult_required":
+            result = self._repository.start_adult_shop_item(
+                message.platform_message_id,
+                message.sender_platform_id,
+                int(parts[1]),
+                group_chat_id,
+                received_at,
+                target_platform_id=(
+                    None
+                    if message.reference is None
+                    else message.reference.sender_platform_id
+                ),
+            )
+        values = {}
+        if result.item is not None:
+            values.update(
+                {
+                    "{商品编号}": result.item.public_number,
+                    "{商品名称}": result.item.name,
+                }
+            )
+        if result.reward is not None:
+            values["{奖励}"] = result.reward
+        if result.target_display_name is not None:
+            values["{目标员工}"] = result.target_display_name
+        if result.session_number is not None:
+            values["{卡片局编号}"] = result.session_number
+        scenario = result.status
+        if result.status == "completed" and result.item is not None:
+            if result.item.effect_type == "gift":
+                scenario = "gift_completed"
+            elif result.item.effect_type == "scratch":
+                scenario = "scratch_completed"
+            else:
+                scenario = "quota_completed"
+        if result.status == "scene_required":
+            return [
+                self._reply("/使用", "scene_required", received_at, values),
+                CommandReply(
+                    f"卡片局 #{result.session_number}：请发送 1–200 字的具体场景要求。",
+                    destination_chatroom_id=result.direct_chatroom_id,
+                    delivery_kind="direct",
+                ),
+            ]
+        return self._reply("/使用", scenario, received_at, values)
+
+    def _invite_adult_participant(
+        self, message: InboundMessage, content: str, received_at, group_chat_id
+    ) -> str:
+        if message.source_type != "group":
+            return self._reply("/邀请参与", "group_only", received_at)
+        parts = content.split()
+        if len(parts) != 2 or not parts[1].isascii() or not parts[1].isdigit():
+            return self._reply("/邀请参与", "usage", received_at)
+        result = self._repository.invite_adult_card_participant(
+            message.sender_platform_id,
+            None if message.reference is None else message.reference.sender_platform_id,
+            int(parts[1]),
+            received_at,
+            group_chat_id=group_chat_id or PRIMARY_GROUP_CHAT_ID,
+        )
+        return self._reply(
+            "/邀请参与",
+            result.status,
+            received_at,
+            {"{卡片局编号}": result.session_number or int(parts[1])},
+        )
+
+    def _cancel_adult_use(
+        self, message: InboundMessage, content: str, received_at, group_chat_id
+    ) -> str:
+        if message.source_type != "group":
+            return self._reply("/取消使用", "group_only", received_at)
+        parts = content.split()
+        if len(parts) != 2 or not parts[1].isascii() or not parts[1].isdigit():
+            return self._reply("/取消使用", "usage", received_at)
+        result = self._repository.cancel_adult_card_session(
+            message.sender_platform_id,
+            int(parts[1]),
+            received_at,
+            group_chat_id=group_chat_id or PRIMARY_GROUP_CHAT_ID,
+        )
+        return self._reply(
+            "/取消使用",
+            result.status,
+            received_at,
+            {"{卡片局编号}": result.session_number or int(parts[1])},
+        )
+
+    def _decide_adult_use(
+        self, message: InboundMessage, command: str, received_at, group_chat_id
+    ) -> str:
+        if message.source_type != "group":
+            return self._reply(command, "group_only", received_at)
+        result = self._repository.decide_adult_card_consent(
+            message.sender_platform_id,
+            None if message.reference is None else message.reference.message_id,
+            command == "/同意使用",
+            received_at,
+            group_chat_id=group_chat_id or PRIMARY_GROUP_CHAT_ID,
+        )
+        return self._reply(
+            command,
+            result.status,
+            received_at,
+            {"{卡片局编号}": result.session_number or ""},
         )
 
     def _undercover_start(
@@ -1281,6 +1477,7 @@ class GroupCommandHandler:
             "not_joined": "not_joined",
             "direct_chat_required": "direct_chat_required",
             "disabled": "disabled",
+            "daily_limit": "daily_limit",
             "multiplayer_active": "multiplayer_active",
             "already_active": "already_active",
             "invalid_player_count": "invalid_player_count",
@@ -1349,7 +1546,7 @@ class GroupCommandHandler:
                 },
             )
         scenario = result.status if result.status in {
-            "not_joined", "direct_chat_required", "disabled",
+            "not_joined", "direct_chat_required", "disabled", "daily_limit",
             "multiplayer_active", "already_active"
         } else "multiplayer_active"
         return self._reply("/蹦蹦数字炸弹", scenario, received_at)
@@ -2548,6 +2745,7 @@ class GroupCommandHandler:
             scenarios = {
                 "not_joined": "not_joined",
                 "disabled": "disabled",
+                "daily_limit": "duel_daily_limit",
                 "multiplayer_active": "multiplayer_active",
                 "already_active": "already_active",
             }
@@ -2727,12 +2925,25 @@ class GroupCommandHandler:
                     ("/编辑档案", "/编辑档案 档案内容：更新个人档案"),
                     ("/编辑档案形象", "/编辑档案形象（回复一张图片）：更新档案形象"),
                     ("/我的档案", "/我的档案：查看自己的个人档案"),
-                    ("/发奖金", "/发奖金 员工名 金额；/发奖金 全部 金额：仅核心董事会发放"),
+                    ("/发奖金", "回复目标发送 /发奖金 金额；也支持 /发奖金 员工名 金额、/发奖金 全部 金额：仅核心董事会发放"),
                     ("/发红包", "/发红包 人数 总金额：发出随机运气红包"),
                     ("/抢红包", "/抢红包：领取当前红包"),
                     ("/我", "/我：查看个人资料、收益与活跃度"),
                     ("/我的物品", "/我的物品：查看持有物品"),
                     ("/商店", "/商店：查看可购买物品"),
+                ),
+            ),
+            "商店": (
+                "【商店与卡片】",
+                (
+                    ("/商店", "/商店：查看本群可购买商品、稳定编号、价格、职位和库存"),
+                    ("/购买", "/购买 商品编号：购买一件商品并扣除摸鱼币"),
+                    ("/我的物品", "/我的物品：按商品编号查看自己的库存"),
+                    ("/使用", "/使用 商品编号：使用刮刮卡或次数卡；回复员工消息使用赠送卡或成人卡"),
+                    ("/邀请参与", "/邀请参与 卡片局编号：回复其他员工，为多人成人卡补充参与者"),
+                    ("/取消使用", "/取消使用 卡片局编号：场景或选人阶段取消并退回预留卡片"),
+                    ("/同意使用", "回复卡片授权通知发送 /同意使用：确认成年并同意该次具体场景"),
+                    ("/拒绝使用", "回复卡片授权通知发送 /拒绝使用：整局作废，发起人获商品价格 50% 补偿"),
                 ),
             ),
             "随机事件": (
@@ -2875,7 +3086,8 @@ class GroupCommandHandler:
 
         if not topic:
             categories = (
-                ("基础", "/帮助 基础：入职、资产与商店"),
+                ("基础", "/帮助 基础：入职与资产"),
+                ("商店", "/帮助 商店：购买、使用、赠送与授权"),
                 (
                     "游戏",
                     "/帮助 游戏：玩法总览；/帮助 摸鱼躲藏、/帮助 记忆考核、/帮助 谁是卧底、/帮助 甩锅游戏、/帮助 蹦蹦数字炸弹、/帮助 德州扑克、/帮助 暗网交易所",

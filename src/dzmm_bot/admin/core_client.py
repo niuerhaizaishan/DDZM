@@ -53,6 +53,14 @@ class AdminCorePort(Protocol):
 
     def create_game_item(self, item: dict) -> dict: ...
 
+    def update_game_item(self, public_number: int, item: dict) -> dict: ...
+
+    def get_shop_activity(self, limit: int = 100) -> dict: ...
+
+    def retry_shop_scene_job(self, job_id: str) -> dict: ...
+
+    def end_shop_common_state(self, state_id: str) -> dict: ...
+
     def list_ranks(self) -> list[dict]: ...
 
     def update_rank(self, rank_id: str, rank: dict) -> dict: ...
@@ -366,6 +374,32 @@ class CoreClient:
 
     def create_game_item(self, item: dict) -> dict:
         response = self._client.post("/internal/game/items", json=item)
+        response.raise_for_status()
+        return response.json()
+
+    def update_game_item(self, public_number: int, item: dict) -> dict:
+        response = self._client.patch(
+            f"/internal/game/items/{public_number}", json=item
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def get_shop_activity(self, limit: int = 100) -> dict:
+        return self._get(
+            "/internal/game/shop/activity", params={"limit": limit}
+        )
+
+    def retry_shop_scene_job(self, job_id: str) -> dict:
+        response = self._client.post(
+            f"/internal/game/shop/scene-jobs/{job_id}/retry"
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def end_shop_common_state(self, state_id: str) -> dict:
+        response = self._client.post(
+            f"/internal/game/shop/common-states/{state_id}/end"
+        )
         response.raise_for_status()
         return response.json()
 

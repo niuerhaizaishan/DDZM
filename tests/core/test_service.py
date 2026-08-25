@@ -199,7 +199,7 @@ def test_service_records_an_accepted_joined_message_once(session_factory):
 def test_direct_number_bomb_reports_are_isolated_and_destination_aware(session_factory):
     from dzmm_bot.core.commands import GroupCommandHandler
     from dzmm_bot.core.repository import CoreRepository
-    from dzmm_bot.core.schema import InboundRecord, OutboundRecord
+    from dzmm_bot.core.schema import InboundRecord, OutboundRecord, RankRecord
     from dzmm_bot.core.service import CoreService
 
     repository = CoreRepository(
@@ -210,6 +210,10 @@ def test_direct_number_bomb_reports_are_isolated_and_destination_aware(session_f
     now = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
     for index in range(1, 4):
         repository.create_user(f"direct-p{index}", f"私聊{index}", now, 0)
+    with session_factory.begin() as session:
+        session.scalar(
+            select(RankRecord).where(RankRecord.sort_order == 1)
+        ).multiplayer_game_limit = 999
     repository.upsert_direct_chats(
         [(f"direct-p{index}", f"direct-room-{index}") for index in range(1, 4)],
         now,

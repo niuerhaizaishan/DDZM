@@ -1556,6 +1556,7 @@ function renderGroupChats(items) {
       ["游戏", group.games_enabled],
       ["随机事件", group.random_events_enabled],
       ["公告", group.announcements_enabled],
+      ["成人商店", group.adult_shop_enabled],
     ].map(([label, enabled]) => `${label}：${enabled ? "开" : "关"}`).join(" · ");
     return `<article class="data-row"><div><b>${escapeHtml(group.name)}</b><small>${statusBadge(groupConnectionLabel(runtime.connection_state), runtime.connection_state === "connected" ? "success" : runtime.connection_state === "failed" ? "warning" : "")}</small><small>群聊 ID：${escapeHtml(group.chatroom_id || "未识别")} · ${escapeHtml(switches)}</small><small>已开启玩法：${escapeHtml(gameSummary)}</small><small>${escapeHtml(group.chat_url || "未配置链接")}</small><small>最近接收：${formatHeartbeat(runtime.last_inbound_at)} · 最近发送：${formatHeartbeat(runtime.last_outbound_at)}</small>${runtime.last_error_summary ? `<small class="form-error">${escapeHtml(runtime.last_error_summary)}</small>` : ""}</div><div class="command-actions"><button class="secondary" data-edit-group-chat="${group.id}" type="button">编辑</button><button class="danger-button" data-delete-group-chat="${group.id}" type="button" ${group.listening_enabled ? "disabled" : ""}>删除</button></div></article>`;
   }).join("") || '<p class="muted">还没有可管理的群聊。</p>';
@@ -1583,6 +1584,7 @@ function openGroupChatModal(group = null) {
   }
   document.querySelector("#group-chat-random-events-enabled").checked = group?.random_events_enabled ?? true;
   document.querySelector("#group-chat-announcements-enabled").checked = group?.announcements_enabled ?? true;
+  document.querySelector("#group-chat-adult-shop-enabled").checked = group?.adult_shop_enabled ?? false;
   groupChatModal.hidden = false;
   document.querySelector("#group-chat-name").focus();
 }
@@ -1709,12 +1711,27 @@ async function loadOrganization(departmentTarget = departmentPage, promotionTarg
 
 async function loadShop(page = shopPage) {
   const settings = gameSettings || await loadSettings();
-  const items = await requestGame(`/api/game/items?page=${page}&page_size=${pageSizeFor("shop")}`);
+  const [items, activity, ranks] = await Promise.all([
+    requestGame(`/api/game/items?page=${page}&page_size=${pageSizeFor("shop")}`),
+    requestGame("/api/game/shop/activity?limit=100"),
+    requestGame("/api/game/ranks"),
+  ]);
+  rankDefinitions = ranks;
   shopPage = items.page;
   const filtered = filterList("shop", items.items, (item) => `${item.name} ${item.description}`);
   document.querySelector("#shop-list").innerHTML = filtered.map((item) => `
-    <article class="data-row"><div><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.description)}</small></div><strong>${item.price} ${escapeHtml(settings.currency_name)} · 库存 ${item.stock}</strong></article>`).join("") || "<p class=\"muted\">尚未上架商品。</p>";
+    <article class="data-row" data-shop-item="${item.public_number}"><div><b>#${item.public_number} ${escapeHtml(item.name)}</b><small>${escapeHtml(item.description)}</small><small>${item.system_key ? `系统效果：${escapeHtml(item.effect_type || "-")}` : "管理员普通商品（无使用效果）"}</small></div><div class="command-actions"><strong>${item.price} ${escapeHtml(settings.currency_name)}</strong><label><input data-item-enabled type="checkbox" ${item.enabled ? "checked" : ""}> 启用</label><label><input data-item-unlimited type="checkbox" ${item.unlimited_stock ? "checked" : ""}> 无限库存</label><input data-item-stock type="number" min="0" max="99999" value="${item.stock}" aria-label="库存"><select data-item-rank aria-label="最低职位"><option value="">不限职位</option>${rankDefinitions.map((rank) => `<option value="${rank.sort_order}" ${item.minimum_rank_order === rank.sort_order ? "selected" : ""}>${escapeHtml(rank.level_label)} ${escapeHtml(rank.name)}</option>`).join("")}</select><button class="secondary" data-save-shop-item type="button">保存</button></div></article>`).join("") || "<p class=\"muted\">尚未上架商品。</p>";
   renderPagination(document.querySelector("#shop-pagination"), items, "件物品", loadShop);
+  document.querySelector("#shop-purchase-log").innerHTML = activity.purchases.map((entry) => `
+    <article class="data-row"><div><b>${escapeHtml(entry.user_name)} 购买 #${entry.item_number} ${escapeHtml(entry.item_name)}</b><small>${escapeHtml(entry.group_name)} · ${entry.price} 摸鱼币 · ${escapeHtml(entry.created_at)}</small></div></article>`).join("") || "<p class=\"muted\">暂无购买记录。</p>";
+  document.querySelector("#shop-use-log").innerHTML = activity.uses.map((entry) => `
+    <article class="data-row"><div><b>${escapeHtml(entry.user_name)} 使用 #${entry.item_number} ${escapeHtml(entry.item_name)}</b><small>${escapeHtml(entry.group_name)} · 状态 ${escapeHtml(entry.state)}${entry.target_name ? ` · 目标 ${escapeHtml(entry.target_name)}` : ""}</small><small>${escapeHtml(entry.result ? JSON.stringify(entry.result) : "无附加结果")} · ${escapeHtml(entry.created_at)}</small></div></article>`).join("") || "<p class=\"muted\">暂无使用记录。</p>";
+  document.querySelector("#shop-consent-log").innerHTML = activity.consents.map((entry) => `
+    <article class="data-row"><div><b>卡片局 #${entry.session_number} · ${escapeHtml(entry.participant_name)}</b><small>${escapeHtml(entry.decision || "等待确认")}${entry.decided_at ? ` · ${escapeHtml(entry.decided_at)}` : ""}</small></div></article>`).join("") || "<p class=\"muted\">暂无授权记录。</p>";
+  document.querySelector("#shop-scene-job-list").innerHTML = activity.scene_jobs.map((job) => `
+    <article class="data-row"><div><b>卡片局 #${job.session_number} · ${escapeHtml(job.item_name)}</b><small>${escapeHtml(job.owner_name)} · ${escapeHtml(job.group_name)} · 状态 ${escapeHtml(job.status)} · 尝试 ${job.attempt_count} 次</small>${job.failure_summary ? `<small>${escapeHtml(job.failure_summary)}</small>` : ""}</div>${job.status === "failed" ? `<button class="secondary" data-retry-shop-scene="${job.id}" type="button">重新生成</button>` : ""}</article>`).join("") || "<p class=\"muted\">暂无场景生成任务。</p>";
+  document.querySelector("#shop-common-state-list").innerHTML = activity.common_states.map((state) => `
+    <article class="data-row"><div><b>卡片局 #${state.session_number} · ${escapeHtml(state.target_name)}</b><small>${escapeHtml(state.owner_name)} · ${escapeHtml(state.group_name)} · ${escapeHtml(state.state)}</small><small>${escapeHtml(state.content)} · 至 ${escapeHtml(state.ends_at)}</small></div>${state.state === "active" ? `<button class="danger-button" data-end-shop-state="${state.id}" type="button">强制结束</button>` : ""}</article>`).join("") || "<p class=\"muted\">暂无常识改变状态。</p>";
 }
 
 function renderCommands(commands) {
@@ -2119,6 +2136,7 @@ document.querySelector("#save-group-chat").addEventListener("click", async (even
     enabled_game_types: groupGameOptions.filter(([, , inputId]) => document.querySelector(`#group-chat-game-${inputId}`).checked).map(([type]) => type),
     random_events_enabled: document.querySelector("#group-chat-random-events-enabled").checked,
     announcements_enabled: document.querySelector("#group-chat-announcements-enabled").checked,
+    adult_shop_enabled: document.querySelector("#group-chat-adult-shop-enabled").checked,
   };
   try {
     await runMutation(event.currentTarget, "保存中…", async () => {
@@ -3568,6 +3586,61 @@ document.querySelector("#item-form").addEventListener("submit", async (event) =>
     setResult("物品已上架", "success");
   } catch (error) {
     setResult(`上架失败（${error.message}）`, "error");
+  }
+});
+
+document.querySelector("#shop-list").addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-save-shop-item]");
+  if (!button) return;
+  const row = button.closest("[data-shop-item]");
+  const rankValue = row.querySelector("[data-item-rank]").value;
+  const payload = {
+    enabled: row.querySelector("[data-item-enabled]").checked,
+    minimum_rank_order: rankValue ? Number(rankValue) : null,
+    unlimited_stock: row.querySelector("[data-item-unlimited]").checked,
+    stock: Number(row.querySelector("[data-item-stock]").value),
+  };
+  try {
+    await runMutation(button, "保存中…", async () => {
+      await requestGame(`/api/game/items/${row.dataset.shopItem}`, {
+        method: "PATCH",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(payload),
+      });
+      await loadShop(shopPage);
+    });
+    setResult("商品配置已保存", "success");
+  } catch (error) {
+    setResult(`保存失败（${error.message}）`, "error");
+  }
+});
+
+document.querySelector("#shop-scene-job-list").addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-retry-shop-scene]");
+  if (!button) return;
+  try {
+    await runMutation(button, "重试中…", async () => {
+      await requestGame(`/api/game/shop/scene-jobs/${button.dataset.retryShopScene}/retry`, {method: "POST"});
+      await loadShop(shopPage);
+    });
+    setResult("场景生成任务已重新排队", "success");
+  } catch (error) {
+    setResult(`重试失败（${error.message}）`, "error");
+  }
+});
+
+document.querySelector("#shop-common-state-list").addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-end-shop-state]");
+  if (!button) return;
+  if (!window.confirm("确认强制结束这条常识改变状态？该操作不会退款。")) return;
+  try {
+    await runMutation(button, "结束中…", async () => {
+      await requestGame(`/api/game/shop/common-states/${button.dataset.endShopState}/end`, {method: "POST"});
+      await loadShop(shopPage);
+    });
+    setResult("常识改变状态已结束", "success");
+  } catch (error) {
+    setResult(`结束失败（${error.message}）`, "error");
   }
 });
 
