@@ -512,7 +512,7 @@ TEMPLATE_DEFINITIONS = (
             TemplateDefinition(command, "not_joined", "未入职", "请先用 /入职 名字 加入摸鱼公司。", ("{日期}",)),
         )
     ),
-    TemplateDefinition("/查看暗网", "group_only", "仅限暗网群", "请在配置的暗网群中发送 /查看暗网。", ("{日期}",)),
+    TemplateDefinition("/查看暗网", "group_only", "查询渠道无效", "请在配置的暗网群或私聊中发送 /查看暗网。", ("{日期}",)),
     TemplateDefinition("/查看暗网", "usage", "查询格式", "请用 /查看暗网 或 /查看暗网 商品编号。", ("{日期}",)),
     TemplateDefinition("/查看暗网", "wrong_group", "群聊不匹配", "本群不是暗网交易所入口。", ("{日期}",)),
     TemplateDefinition("/查看暗网", "empty", "暂无商品", "暗网交易所当前没有竞价中的商品。", ("{日期}",)),

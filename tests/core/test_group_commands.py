@@ -328,7 +328,7 @@ def test_dark_market_listing_wizard_is_private_and_login_is_group_scoped():
     ]
 
 
-def test_dark_market_commands_complete_listing_bid_and_query():
+def test_dark_market_commands_complete_listing_bid_and_query_in_group_and_direct():
     service, repository, factory = _service()
     now = datetime(2026, 8, 24, 10, 0, tzinfo=BEIJING)
     market = repository.bootstrap_primary_group(
@@ -388,6 +388,22 @@ def test_dark_market_commands_complete_listing_bid_and_query():
         assert "当前 20" in login_text
         assert "卖家" not in login_text
         assert "截止" not in login_text
+    for index, command in enumerate(
+        ("/查看暗网", "/登陆暗网", "/登录暗网", "/暗网")
+    ):
+        private_query = _direct_receive(
+            service,
+            f"dark-direct-query-{index}",
+            "buyer",
+            command,
+            now,
+            "direct-buyer",
+        )
+        private_text = "".join(_replies_for(factory, private_query.message_id))
+        assert "旧钥匙" in private_text
+        assert "当前 20" in private_text
+        assert "卖家" not in private_text
+        assert "截止" not in private_text
 
 
 def test_dark_market_receipt_commands_are_private_and_confirm_the_order():

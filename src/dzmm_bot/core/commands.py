@@ -590,7 +590,7 @@ class GroupCommandHandler:
         received_at,
         group_chat_id,
     ):
-        if message.source_type != "group":
+        if message.source_type not in {"group", "direct"}:
             return self._reply("/查看暗网", "group_only", received_at)
         parts = content.split()
         if len(parts) > 2 or (
@@ -602,6 +602,7 @@ class GroupCommandHandler:
             group_chat_id,
             received_at,
             None if len(parts) == 1 else int(parts[1]),
+            direct=message.source_type == "direct",
         )
         if result.status == "shown":
             return self._reply(
@@ -3082,7 +3083,7 @@ class GroupCommandHandler:
                     ("/取消上架", "私聊 /取消上架：取消尚未确认的上架草稿"),
                     ("/确认", "私聊 /确认：正式上架当前完整草稿；上架后不能撤回"),
                     ("/报价", "私聊 /报价 商品编号 金额：匿名报价并冻结相应摸鱼币"),
-                    ("/查看暗网", "/查看暗网 [商品编号]：仅在配置的暗网群查询商品；不显示精确结算时间"),
+                    ("/查看暗网", "/查看暗网 [商品编号]：在配置的暗网群或私聊中查询商品；不显示精确结算时间"),
                     ("/确认收货", "私聊 /确认收货 [商品编号]：确认收到拍下的商品"),
                     ("/投诉", "私聊 /投诉 [商品编号]：未收到商品时退款并处罚卖家"),
                     ("/公开", "私聊 /公开 [商品编号]：只有双方都同意才公开买卖双方身份"),

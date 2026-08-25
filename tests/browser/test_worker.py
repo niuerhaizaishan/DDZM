@@ -484,6 +484,10 @@ def test_worker_dispatches_the_random_event_submission_entry_from_a_new_direct_r
         "/不公开 12",
         "/确认收货 12",
         "/投诉 12",
+        "/查看暗网",
+        "/登陆暗网",
+        "/登录暗网",
+        "/暗网",
     ),
 )
 def test_worker_dispatches_dark_market_commands_from_a_new_direct_room(context, content):

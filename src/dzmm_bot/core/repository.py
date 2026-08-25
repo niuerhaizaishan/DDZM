@@ -1714,7 +1714,7 @@ _COMMAND_DEFINITIONS = (
     ("/报价", "/报价 商品编号 金额（仅私聊）", "为暗网商品提交匿名报价"),
     ("/公开", "/公开 [商品编号]（仅私聊）", "同意公开暗网成交双方身份"),
     ("/不公开", "/不公开 [商品编号]（仅私聊）", "拒绝公开暗网成交双方身份"),
-    ("/查看暗网", "/查看暗网 [商品编号]", "在暗网群查看竞价中的商品"),
+    ("/查看暗网", "/查看暗网 [商品编号]", "在暗网群或私聊查看竞价中的商品"),
     ("/确认收货", "/确认收货 [商品编号]（仅私聊）", "确认暗网商品收货"),
     ("/投诉", "/投诉 [商品编号]（仅私聊）", "投诉暗网商品未交付"),
     ("/投稿", "/投稿 随机事件", "进入随机事件私聊投稿向导"),
@@ -6085,6 +6085,8 @@ class CoreRepository:
         group_chat_id: UUID | None,
         now: datetime,
         public_number: int | None = None,
+        *,
+        direct: bool = False,
     ) -> DarkMarketBrowseResult:
         with self._session() as session:
             self._ensure_dark_market_defaults(session)
@@ -6092,7 +6094,10 @@ class CoreRepository:
             if (
                 settings is None
                 or settings.announcement_group_id is None
-                or group_chat_id != settings.announcement_group_id
+                or (
+                    not direct
+                    and group_chat_id != settings.announcement_group_id
+                )
             ):
                 return DarkMarketBrowseResult("wrong_group")
             query = (

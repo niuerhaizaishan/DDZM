@@ -37,6 +37,10 @@ _DIRECT_ENTRY_COMMANDS = {
     "/不公开",
     "/确认收货",
     "/投诉",
+    "/查看暗网",
+    "/登陆暗网",
+    "/登录暗网",
+    "/暗网",
 }
 _OUTBOUND_BATCH_SIZE = 20
 _OUTBOUND_BATCH_BUDGET_SECONDS = 2.0
