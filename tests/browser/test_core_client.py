@@ -313,6 +313,56 @@ def test_core_client_serializes_referenced_image():
     }
 
 
+def test_core_client_serializes_direct_image_inbound():
+    from dzmm_bot.browser.core_client import CoreClient
+
+    observed = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.update(json.loads(request.content))
+        return httpx.Response(200, json={"accepted": True})
+
+    client = CoreClient(
+        "http://core.test",
+        "token",
+        client=httpx.Client(
+            base_url="http://core.test",
+            transport=httpx.MockTransport(handler),
+        ),
+    )
+    now = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
+
+    client.submit_inbound(
+        InboundMessage(
+            "cover-1",
+            "employee-1",
+            "[图片]",
+            now,
+            source_type="direct",
+            chatroom_id="direct-1",
+            content_type="image",
+            image_url="https://cdn.example/cover.webp",
+            image_alt="公演封面",
+            image_width=1200,
+            image_height=800,
+        )
+    )
+
+    assert observed == {
+        "platform_message_id": "cover-1",
+        "sender_platform_id": "employee-1",
+        "content": "[图片]",
+        "received_at": now.isoformat(),
+        "source_type": "direct",
+        "chatroom_id": "direct-1",
+        "content_type": "image",
+        "image_url": "https://cdn.example/cover.webp",
+        "image_alt": "公演封面",
+        "image_width": 1200,
+        "image_height": 800,
+    }
+
+
 def test_core_client_deserializes_image_outbound_claim():
     from dzmm_bot.browser.core_client import CoreClient
 

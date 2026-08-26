@@ -369,6 +369,52 @@ def test_gateway_classifies_nonconfigured_socket_rooms_as_direct(gateway):
     ]
 
 
+def test_socket_preserves_direct_image_as_inbound(gateway):
+    adapter, socket, _ = gateway
+    assert adapter.read_new(("direct-1",)) == []
+    socket.trigger(
+        "message:new",
+        {
+            "chatroomId": "direct-1",
+            "message": {
+                "message_id": "cover-1",
+                "sent_by": "employee-1",
+                "sent_at": "2026-08-05T04:00:00Z",
+                "content": {
+                    "type": "image",
+                    "url": "https://cdn.example/cover.webp",
+                    "alt": "公演封面",
+                    "width": 1200,
+                    "height": 800,
+                },
+            },
+        },
+    )
+
+    [received] = adapter.read_new(("direct-1",))
+    assert received.source_type == "direct"
+    assert received.content == "[图片]"
+    assert received.content_type == "image"
+    assert received.image_url == "https://cdn.example/cover.webp"
+    assert received.image_alt == "公演封面"
+    assert (received.image_width, received.image_height) == (1200, 800)
+
+
+def test_socket_discards_image_with_non_https_url(gateway):
+    adapter, socket, _ = gateway
+    assert adapter.read_new(("direct-1",)) == []
+    payload = {
+        "message_id": "bad-cover",
+        "sent_by": "employee-1",
+        "sent_at": "2026-08-05T04:00:00Z",
+        "content": {"type": "image", "url": "javascript:alert(1)"},
+    }
+
+    socket.trigger("message:new", {"chatroomId": "direct-1", "message": payload})
+
+    assert adapter.read_new(("direct-1",)) == []
+
+
 def test_live_replied_image_metadata_is_preserved(gateway):
     """Fails if the Socket adapter keeps reply text but drops its image target."""
     adapter, socket, _ = gateway

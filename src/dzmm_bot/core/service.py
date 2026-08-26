@@ -69,10 +69,13 @@ class CoreService:
         self,
         repository: CoreRepository,
         command_handler: CommandHandler | None = None,
+        *,
+        cover_image_validator=None,
     ) -> None:
         self._repository = repository
         self._command_handler = command_handler or NoopCommandHandler()
         self._submission_handler = RandomEventSubmissionHandler(repository)
+        self._cover_image_validator = cover_image_validator
 
     def receive_inbound(self, message: InboundMessage) -> ReceiveResult:
         with self._repository.transaction():

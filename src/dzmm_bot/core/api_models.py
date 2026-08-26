@@ -33,11 +33,18 @@ class InboundRequest(ApiModel):
     source_type: Literal["group", "direct"] = "group"
     chatroom_id: str | None = Field(default=None, max_length=255)
     reference: MessageReferenceRequest | None = None
+    content_type: Literal["text", "image"] = "text"
+    image_url: str | None = Field(default=None, max_length=4096)
+    image_alt: str | None = Field(default=None, max_length=512)
+    image_width: int | None = Field(default=None, ge=1)
+    image_height: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
     def validate_direct_room(self):
         if self.source_type == "direct" and not self.chatroom_id:
             raise ValueError("direct inbound requires chatroom_id")
+        if self.content_type == "image" and not self.image_url:
+            raise ValueError("image inbound requires image_url")
         return self
 
 

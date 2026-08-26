@@ -454,12 +454,40 @@ class AikdaSocketGateway:
         sent_at = message.get("sent_at")
         if (
             not isinstance(content, dict)
-            or content.get("type") != "text"
-            or not isinstance(content.get("text"), str)
             or not isinstance(message_id, str)
             or not isinstance(sent_by, str)
             or not isinstance(sent_at, str)
         ):
+            return
+        content_type = content.get("type")
+        if content_type == "text":
+            text_content = content.get("text")
+            if not isinstance(text_content, str):
+                return
+            image_url = image_alt = None
+            image_width = image_height = None
+        elif content_type == "image":
+            image_url = content.get("url")
+            parsed_url = urlsplit(image_url) if isinstance(image_url, str) else None
+            if (
+                parsed_url is None
+                or parsed_url.scheme != "https"
+                or not parsed_url.netloc
+            ):
+                return
+            image_alt = content.get("alt")
+            if image_alt is not None and not isinstance(image_alt, str):
+                return
+            image_width = content.get("width")
+            image_height = content.get("height")
+            if any(
+                value is not None
+                and (isinstance(value, bool) or not isinstance(value, int) or value < 1)
+                for value in (image_width, image_height)
+            ):
+                return
+            text_content = "[图片]"
+        else:
             return
         if chatroom_id is None:
             return
@@ -470,11 +498,16 @@ class AikdaSocketGateway:
         inbound = InboundMessage(
             message_id,
             sent_by,
-            content["text"],
+            text_content,
             _shanghai_time(sent_at),
             source_type=source_type,
             chatroom_id=chatroom_id,
             reference=_message_reference(content.get("reference")),
+            content_type=content_type,
+            image_url=image_url,
+            image_alt=image_alt,
+            image_width=image_width,
+            image_height=image_height,
         )
         with self._pending_lock:
             seen_key = (chatroom_id, message_id)

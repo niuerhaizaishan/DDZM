@@ -3,6 +3,7 @@ from secrets import compare_digest
 from typing import Annotated, Callable, Literal
 from uuid import UUID
 
+import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response, status
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
@@ -174,6 +175,7 @@ from .repository import (
     format_employee_number,
 )
 from .reply_templates import definitions_for_command, template_definition
+from .performance import HttpCoverImageValidator
 from .schema import WorkerCommandRecord, WorkerInstanceRecord, beijing_now
 from .service import CoreService
 
@@ -212,9 +214,16 @@ def create_app(
     *,
     clock: Callable[[], datetime] = beijing_now,
     require_group_chat_bootstrap: bool = False,
+    cover_image_validator=None,
 ) -> FastAPI:
     app = FastAPI()
-    service = CoreService(repository, GroupCommandHandler(repository))
+    if cover_image_validator is None:
+        cover_image_validator = HttpCoverImageValidator(httpx.Client(timeout=5))
+    service = CoreService(
+        repository,
+        GroupCommandHandler(repository),
+        cover_image_validator=cover_image_validator,
+    )
 
     def authorize(x_core_token: Annotated[str | None, Header()] = None) -> None:
         if x_core_token is None or not compare_digest(x_core_token, core_token):
@@ -246,6 +255,11 @@ def create_app(
                     blurhash=reference.blurhash,
                     text=reference.text,
                 ),
+                content_type=request.content_type,
+                image_url=request.image_url,
+                image_alt=request.image_alt,
+                image_width=request.image_width,
+                image_height=request.image_height,
             )
         )
         return InboundResponse(

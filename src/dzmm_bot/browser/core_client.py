@@ -207,6 +207,16 @@ class CoreClient:
             "source_type": message.source_type,
             "chatroom_id": message.chatroom_id,
         }
+        if message.content_type == "image":
+            payload.update(
+                {
+                    "content_type": message.content_type,
+                    "image_url": message.image_url,
+                    "image_alt": message.image_alt,
+                    "image_width": message.image_width,
+                    "image_height": message.image_height,
+                }
+            )
         if reference is not None:
             reference_payload = {
                 "message_id": reference.message_id,

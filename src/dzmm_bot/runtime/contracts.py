@@ -32,6 +32,11 @@ class InboundMessage:
     source_type: str = "group"
     chatroom_id: str | None = None
     reference: MessageReference | None = None
+    content_type: str = "text"
+    image_url: str | None = None
+    image_alt: str | None = None
+    image_width: int | None = None
+    image_height: int | None = None
 
 
 @dataclass(frozen=True)
