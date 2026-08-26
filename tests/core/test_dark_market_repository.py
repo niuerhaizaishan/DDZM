@@ -3,7 +3,7 @@ from random import Random
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
@@ -246,6 +246,97 @@ def test_outbid_refund_and_new_freeze_are_atomic(repository, now) -> None:
         )
     assert [bid.state for bid in bids] == ["refunded", "current"]
     assert set(sources) == {"dark_market_bid_hold", "dark_market_bid_refund"}
+
+
+def test_dark_market_group_notices_wait_for_random_event_but_private_refund_does_not(
+    repository, now
+) -> None:
+    repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=dark-market-room", now
+    )
+    repository.create_random_event_scene(
+        "会议室", "报名", ["正式开始。"], 1, 1, [("员工", 1)]
+    )
+    repository.set_random_event_settings(
+        ["18:00"],
+        "可选身份：{可选身份}",
+        1,
+        5,
+    )
+    repository.run_random_event_jobs(now)
+    listing = _active_listing(repository, now)
+
+    repository.place_dark_market_bid(
+        "buyer-a", listing.public_number, 20,
+        _inbound_id(repository, "buyer-a", "/报价 1 20", now), now,
+    )
+    repository.place_dark_market_bid(
+        "buyer-b", listing.public_number, 25,
+        _inbound_id(repository, "buyer-b", "/报价 1 25", now), now,
+    )
+
+    with repository._session() as session:
+        group_notices = list(
+            session.scalars(
+                select(OutboundRecord.text).where(
+                    OutboundRecord.delivery_kind == "group",
+                    OutboundRecord.text.like("暗网%"),
+                )
+            )
+        )
+        private_refunds = list(
+            session.scalars(
+                select(OutboundRecord.text).where(
+                    OutboundRecord.delivery_kind == "direct",
+                    OutboundRecord.destination_chatroom_id == "direct-buyer-a",
+                    OutboundRecord.text.like("%冻结的 20 摸鱼币已退回%"),
+                )
+            )
+        )
+    assert group_notices == []
+    assert len(private_refunds) == 1
+    assert _balance(repository, "buyer-a") == 100
+
+    repository.run_random_event_jobs(now + timedelta(minutes=1))
+
+    with repository._session() as session:
+        released_notices = list(
+            session.scalars(
+                select(OutboundRecord.text).where(
+                    OutboundRecord.delivery_kind == "group",
+                    OutboundRecord.text.like("暗网%"),
+                )
+            )
+        )
+    assert released_notices == ["暗网商品 #1 出现新的最高报价：25 摸鱼币。"]
+
+
+def test_dark_market_public_notice_checks_the_gameplay_gate(
+    repository, now, monkeypatch
+) -> None:
+    listing = _active_listing(repository, now)
+    order = []
+
+    def record_balance_write(target, value, oldvalue, initiator):
+        order.append("balance")
+
+    def reject_unlocked_notice(session):
+        order.append("gate")
+        raise RuntimeError("gameplay gate checked")
+
+    monkeypatch.setattr(repository, "_lock_gameplay_gate", reject_unlocked_notice)
+    event.listen(UserRecord.balance, "set", record_balance_write)
+
+    try:
+        with pytest.raises(RuntimeError, match="gameplay gate checked"):
+            repository.place_dark_market_bid(
+                "buyer-a", listing.public_number, 20,
+                _inbound_id(repository, "buyer-a", "/报价 1 20", now), now,
+            )
+    finally:
+        event.remove(UserRecord.balance, "set", record_balance_write)
+
+    assert order == ["gate"]
 
 
 def test_same_bidder_only_freezes_raise_difference(repository, now) -> None:

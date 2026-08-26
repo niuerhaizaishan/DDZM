@@ -7510,6 +7510,85 @@ def test_random_event_schedules_are_created_only_for_enabled_groups(repository):
     }
 
 
+def test_random_event_sends_one_group_preview_five_minutes_before_start(
+    repository, session_factory
+):
+    from dzmm_bot.core.schema import OutboundRecord
+
+    now = datetime(2026, 8, 6, 10, 0, tzinfo=BEIJING)
+    group = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=event-preview", now
+    )
+    repository.create_random_event_scene(
+        "茶水间", "开始报名", ["正式开始。"], 1, 1, [("员工", 1)]
+    )
+    repository.set_random_event_settings(
+        ["10:05"], "可选身份：{可选身份}", 15, 5
+    )
+
+    repository.run_random_event_jobs(now)
+    repository.run_random_event_jobs(now + timedelta(minutes=1))
+
+    with session_factory() as session:
+        previews = list(
+            session.scalars(
+                select(OutboundRecord).where(
+                    OutboundRecord.group_chat_id == group.id,
+                    OutboundRecord.text.like("【随机事件预告】%"),
+                )
+            )
+        )
+    assert len(previews) == 1
+    assert "约 5 分钟后" in previews[0].text
+    assert "茶水间" in previews[0].text
+
+    schedule = repository.list_today_random_event_schedules(now)[0]
+    repository.reschedule_random_event(
+        schedule.id,
+        now + timedelta(minutes=3),
+        now + timedelta(minutes=1),
+    )
+    repository.run_random_event_jobs(now + timedelta(minutes=1))
+
+    with session_factory() as session:
+        previews = list(
+            session.scalars(
+                select(OutboundRecord).where(
+                    OutboundRecord.group_chat_id == group.id,
+                    OutboundRecord.text.like("【随机事件预告】%"),
+                ).order_by(OutboundRecord.created_at)
+            )
+        )
+    assert len(previews) == 2
+    assert "即将开放" in previews[-1].text
+
+
+def test_random_event_reschedule_checks_the_gameplay_gate(repository, monkeypatch):
+    now = datetime(2026, 8, 6, 10, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=event-reschedule-gate", now
+    )
+    repository.create_random_event_scene(
+        "会议室", "报名", ["正式开始。"], 1, 1, [("员工", 1)]
+    )
+    repository.set_random_event_settings(
+        ["10:10"], "可选身份：{可选身份}", 15, 5
+    )
+    schedule = repository.schedule_random_events(now)[0]
+
+    def reject_unlocked_reschedule(session):
+        raise RuntimeError("gameplay gate checked")
+
+    monkeypatch.setattr(
+        repository, "_lock_gameplay_gate", reject_unlocked_reschedule
+    )
+
+    with pytest.raises(RuntimeError, match="gameplay gate checked"):
+        repository.reschedule_random_event(
+            schedule.id, now + timedelta(minutes=20), now
+        )
+
+
 def test_random_events_run_and_accept_participants_independently_per_group(repository):
     now = datetime(2026, 8, 6, 10, 0, tzinfo=BEIJING)
     primary = repository.bootstrap_primary_group(
@@ -9811,6 +9890,161 @@ def test_postgres_random_event_tips_cannot_overdraw_sender(
     assert sorted(statuses) == ["insufficient_balance", "tipped"]
     assert setup.find_user("tip-donor").balance == 3
     engine.dispose()
+
+
+def test_postgres_dark_market_notice_waits_for_random_event_start_gate(
+    migrated_postgres_url,
+):
+    from dzmm_bot.core.repository import CoreRepository
+    from dzmm_bot.core.schema import DarkMarketDeferredNoticeRecord
+    from dzmm_bot.runtime.contracts import InboundMessage
+
+    now = datetime(2026, 8, 26, 10, 0, tzinfo=BEIJING)
+    factory = sessionmaker(
+        create_engine(migrated_postgres_url), expire_on_commit=False
+    )
+    setup = CoreRepository(factory)
+    starter = CoreRepository(factory)
+    bidder = CoreRepository(factory)
+    setup.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=dark-event-race", now
+    )
+    setup.create_user("race-seller", "竞态卖家", now, 100)
+    setup.create_user("race-buyer", "竞态买家", now, 100)
+    setup.upsert_direct_chats(
+        [("race-seller", "direct-race-seller"), ("race-buyer", "direct-race-buyer")],
+        now,
+    )
+    market = setup.get_dark_market_settings()
+    setup.set_dark_market_settings(
+        enabled=True,
+        announcement_group_id=PRIMARY_GROUP_CHAT_ID,
+        duration_hours=3,
+        fee_percent=5,
+        rank_limits={item.rank_id: item.daily_limit for item in market.rank_limits},
+        expected_version=market.version,
+    )
+    assert setup.start_dark_market_draft("race-seller", now).status == "started"
+    for value in ("竞态商品", "测试用途", "测试详情", "保密", "10"):
+        setup.advance_dark_market_draft("race-seller", value, now)
+    listed = setup.confirm_dark_market_listing("race-seller", uuid4(), now)
+    assert listed.listing is not None
+    setup.create_random_event_scene(
+        "竞态事件", "报名", ["正式开始。"], 1, 1, [("员工", 1)]
+    )
+    setup.set_random_event_settings(
+        ["10:10"], "可选身份：{可选身份}", 15, 5
+    )
+    schedule = setup.schedule_random_events(now)[0]
+    inbound, inserted = setup.accept_inbound(
+        InboundMessage(
+            "race-bid",
+            "race-buyer",
+            "/报价 1 20",
+            now,
+            source_type="direct",
+            chatroom_id="direct-race-buyer",
+        )
+    )
+    assert inserted
+    gate_held = Event()
+    allow_start = Event()
+    bid_waiting = Event()
+    original_lock = bidder._lock_gameplay_gate
+
+    def observed_lock(session):
+        bid_waiting.set()
+        original_lock(session)
+
+    bidder._lock_gameplay_gate = observed_lock
+
+    def start_event():
+        with starter.transaction():
+            starter.lock_gameplay_order()
+            gate_held.set()
+            assert allow_start.wait(timeout=10)
+            starter.trigger_random_event(schedule.id, now)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        start_future = executor.submit(start_event)
+        assert gate_held.wait(timeout=10)
+        bid_future = executor.submit(
+            bidder.place_dark_market_bid,
+            "race-buyer",
+            listed.listing.public_number,
+            20,
+            inbound.id,
+            now,
+        )
+        assert bid_waiting.wait(timeout=10)
+        assert not bid_future.done()
+        allow_start.set()
+        start_future.result(timeout=10)
+        assert bid_future.result(timeout=10).status == "accepted"
+
+    with factory() as session:
+        pending = session.get(
+            DarkMarketDeferredNoticeRecord, listed.listing.id
+        )
+    assert pending is not None
+    assert "最高报价：20" in pending.text
+
+
+def test_postgres_reschedule_waits_for_random_event_start_gate(
+    migrated_postgres_url,
+):
+    from dzmm_bot.core.repository import CoreRepository
+
+    now = datetime(2026, 8, 26, 10, 0, tzinfo=BEIJING)
+    factory = sessionmaker(
+        create_engine(migrated_postgres_url), expire_on_commit=False
+    )
+    setup = CoreRepository(factory)
+    starter = CoreRepository(factory)
+    updater = CoreRepository(factory)
+    setup.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=reschedule-race", now
+    )
+    setup.create_random_event_scene(
+        "改期竞态", "报名", ["正式开始。"], 1, 1, [("员工", 1)]
+    )
+    setup.set_random_event_settings(
+        ["10:10"], "可选身份：{可选身份}", 15, 5
+    )
+    schedule = setup.schedule_random_events(now)[0]
+    gate_held = Event()
+    allow_start = Event()
+    update_waiting = Event()
+    original_lock = updater._lock_gameplay_gate
+
+    def observed_lock(session):
+        update_waiting.set()
+        original_lock(session)
+
+    updater._lock_gameplay_gate = observed_lock
+
+    def start_event():
+        with starter.transaction():
+            starter.lock_gameplay_order()
+            gate_held.set()
+            assert allow_start.wait(timeout=10)
+            starter.trigger_random_event(schedule.id, now)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        start_future = executor.submit(start_event)
+        assert gate_held.wait(timeout=10)
+        update_future = executor.submit(
+            updater.reschedule_random_event,
+            schedule.id,
+            now + timedelta(minutes=20),
+            now,
+        )
+        assert update_waiting.wait(timeout=10)
+        assert not update_future.done()
+        allow_start.set()
+        start_future.result(timeout=10)
+        with pytest.raises(ValueError, match="仅待开始事件可以调整"):
+            update_future.result(timeout=10)
 
 
 def test_postgres_random_event_opposite_tips_finish_without_deadlock(

@@ -1725,7 +1725,10 @@ def test_balance_inventory_and_shop_require_employee_and_return_persisted_data()
     _receive(service, "message-4", "platform-xiaoming", "/商店", received_at)
     reply = _latest_reply(factory)
     assert "#1 初级赠送卡（3 摸鱼币，库存 不限，需 LV2）" in reply
-    assert "#23 工位午睡券（5 摸鱼币，库存 3）" in reply
+    assert (
+        "#23 工位午睡券（5 摸鱼币，库存 3）\n"
+        "说明：允许正大光明眯十分钟。"
+    ) in reply
 
 
 def test_shop_purchase_inventory_and_scratch_use_group_commands():

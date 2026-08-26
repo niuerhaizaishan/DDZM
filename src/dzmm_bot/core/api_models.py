@@ -448,12 +448,13 @@ class PaginatedItemsResponse(ApiModel):
 
 class CreateItemRequest(ApiModel):
     name: str = Field(min_length=1, max_length=64)
-    description: str = Field(min_length=1)
+    description: str = Field(min_length=1, max_length=200)
     price: int = Field(ge=0, le=999)
     stock: int = Field(ge=0, le=999)
 
 
 class UpdateItemRequest(ApiModel):
+    description: str = Field(min_length=1, max_length=200)
     enabled: bool
     minimum_rank_order: int | None = Field(default=None, ge=1, le=999)
     unlimited_stock: bool

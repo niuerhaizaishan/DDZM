@@ -119,6 +119,7 @@ from .schema import (
     DailyCheckinRecord,
     DarkMarketBidRecord,
     DarkMarketDailyListingRecord,
+    DarkMarketDeferredNoticeRecord,
     DarkMarketDisclosureRecord,
     DarkMarketDraftRecord,
     DarkMarketListingRecord,
@@ -6161,6 +6162,7 @@ class CoreRepository:
     ) -> DarkMarketListingResult:
         del inbound_id
         with self._session() as session:
+            self._lock_gameplay_gate(session)
             self._ensure_dark_market_defaults(session)
             configuration = self._active_dark_market_configuration(session)
             if configuration is None:
@@ -6256,10 +6258,12 @@ class CoreRepository:
             public_text = render_listing_detail(public_view).removeprefix(
                 f"#{listing.public_number} "
             )
-            self.enqueue_system_outbound(
+            self._enqueue_dark_market_public_notice(
+                session,
+                listing,
+                group,
                 f"暗网新商品 #{listing.public_number}\n{public_text}",
-                group_chat_id=group.id,
-                destination_chatroom_id=group.chatroom_id,
+                now,
             )
             return DarkMarketListingResult(
                 "listed", self._dark_market_listing_summary(listing)
@@ -6275,6 +6279,69 @@ class CoreRepository:
             )
         )
 
+    def _enqueue_dark_market_public_notice(
+        self,
+        session: Session,
+        listing: DarkMarketListingRecord,
+        group: GroupChatRecord,
+        text: str,
+        now: datetime,
+    ) -> None:
+        if group.chatroom_id is None:
+            raise RuntimeError("暗网播报群不存在")
+        self._lock_gameplay_gate(session)
+        if self._active_random_event(session, group.id) is not None:
+            pending = session.get(
+                DarkMarketDeferredNoticeRecord,
+                listing.id,
+                with_for_update=True,
+            )
+            if pending is None:
+                session.add(
+                    DarkMarketDeferredNoticeRecord(
+                        listing_id=listing.id,
+                        group_chat_id=group.id,
+                        text=text,
+                        updated_at=now,
+                    )
+                )
+            else:
+                pending.text = text
+                pending.updated_at = now
+            return
+        self.enqueue_system_outbound(
+            text,
+            group_chat_id=group.id,
+            destination_chatroom_id=group.chatroom_id,
+        )
+
+    def _flush_deferred_dark_market_notices(
+        self, session: Session, group_chat_id: UUID
+    ) -> None:
+        group = session.get(GroupChatRecord, group_chat_id)
+        if group is None or group.chatroom_id is None:
+            return
+        notices = list(
+            session.scalars(
+                select(DarkMarketDeferredNoticeRecord)
+                .where(
+                    DarkMarketDeferredNoticeRecord.group_chat_id == group_chat_id
+                )
+                .order_by(
+                    DarkMarketDeferredNoticeRecord.updated_at,
+                    DarkMarketDeferredNoticeRecord.listing_id,
+                )
+                .with_for_update()
+            )
+        )
+        for notice in notices:
+            self.enqueue_system_outbound(
+                notice.text,
+                group_chat_id=group.id,
+                destination_chatroom_id=group.chatroom_id,
+            )
+            session.delete(notice)
+
     def place_dark_market_bid(
         self,
         platform_id: str,
@@ -6285,6 +6352,7 @@ class CoreRepository:
     ) -> DarkMarketBidResult:
         with self.transaction():
             with self._session() as session:
+                self._lock_gameplay_gate(session)
                 if not isinstance(inbound_id, UUID):
                     resolved_inbound_id = session.scalar(
                         select(InboundRecord.id).where(
@@ -6410,10 +6478,12 @@ class CoreRepository:
                 group = session.get(GroupChatRecord, listing.announcement_group_id)
                 if group is None or group.chatroom_id is None:
                     raise RuntimeError("暗网播报群不存在")
-                self.enqueue_system_outbound(
+                self._enqueue_dark_market_public_notice(
+                    session,
+                    listing,
+                    group,
                     f"暗网商品 #{public_number} 出现新的最高报价：{amount} 摸鱼币。",
-                    group_chat_id=group.id,
-                    destination_chatroom_id=group.chatroom_id,
+                    now,
                 )
                 return DarkMarketBidResult(
                     "accepted", public_number, amount, amount, minimum_amount
@@ -6436,10 +6506,12 @@ class CoreRepository:
         listing.finished_at = now
         if current is None:
             listing.state = "unsold"
-            self.enqueue_system_outbound(
+            self._enqueue_dark_market_public_notice(
+                session,
+                listing,
+                group,
                 f"暗网商品 #{listing.public_number} 已流拍。",
-                group_chat_id=group.id,
-                destination_chatroom_id=group.chatroom_id,
+                now,
             )
             return
         user_ids = {listing.seller_user_id, current.bidder_user_id}
@@ -6464,11 +6536,13 @@ class CoreRepository:
         listing.receipt_deadline = now + timedelta(hours=72)
         listing.receipt_resolved_at = None
         listing.finished_at = None
-        self.enqueue_system_outbound(
+        self._enqueue_dark_market_public_notice(
+            session,
+            listing,
+            group,
             f"暗网商品 #{listing.public_number} 竞拍结束，成交价 {current.amount} "
             "摸鱼币，等待买家确认收货。",
-            group_chat_id=group.id,
-            destination_chatroom_id=group.chatroom_id,
+            now,
         )
         seller_destination = self._dark_market_direct_destination(
             session, seller.platform_id
@@ -6560,11 +6634,13 @@ class CoreRepository:
                 created_at=now,
             )
         )
-        self.enqueue_system_outbound(
+        self._enqueue_dark_market_public_notice(
+            session,
+            listing,
+            group,
             f"暗网商品 #{listing.public_number} 已确认收货，交易成功，成交价 "
             f"{current.amount} 摸鱼币。",
-            group_chat_id=group.id,
-            destination_chatroom_id=group.chatroom_id,
+            now,
         )
         for user in {seller.id: seller, buyer.id: buyer}.values():
             direct_chatroom_id = self._dark_market_direct_destination(
@@ -6622,14 +6698,16 @@ class CoreRepository:
         listing.fee_amount = None
         listing.receipt_resolved_at = now
         listing.finished_at = now
-        self.enqueue_system_outbound(
+        self._enqueue_dark_market_public_notice(
+            session,
+            listing,
+            group,
             "【暗网交易公开通报批评】"
             f"商品 #{listing.public_number} 的卖家 "
             f"{seller.display_name}（{format_employee_number(seller.employee_number)}）"
             f"未完成交付，已向买家退款 {current.amount} 摸鱼币，并处罚卖家 "
             f"{current.amount} 摸鱼币。",
-            group_chat_id=group.id,
-            destination_chatroom_id=group.chatroom_id,
+            now,
         )
 
     def resolve_dark_market_receipt(
@@ -6645,6 +6723,7 @@ class CoreRepository:
             raise ValueError("暗网收货操作无效")
         with self.transaction():
             with self._session() as session:
+                self._lock_gameplay_gate(session)
                 user = session.scalar(
                     select(UserRecord).where(UserRecord.platform_id == platform_id)
                 )
@@ -6725,6 +6804,7 @@ class CoreRepository:
             try:
                 with self.transaction():
                     with self._session() as session:
+                        self._lock_gameplay_gate(session)
                         listing = session.get(
                             DarkMarketListingRecord,
                             listing_id,
@@ -6758,6 +6838,7 @@ class CoreRepository:
             try:
                 with self.transaction():
                     with self._session() as session:
+                        self._lock_gameplay_gate(session)
                         listing = session.get(
                             DarkMarketListingRecord,
                             listing_id,
@@ -6806,6 +6887,7 @@ class CoreRepository:
     ) -> DarkMarketListingResult:
         with self.transaction():
             with self._session() as session:
+                self._lock_gameplay_gate(session)
                 listing = session.get(
                     DarkMarketListingRecord, listing_id, with_for_update=True
                 )
@@ -6844,11 +6926,13 @@ class CoreRepository:
                 group = session.get(GroupChatRecord, listing.announcement_group_id)
                 if group is None or group.chatroom_id is None:
                     raise RuntimeError("暗网播报群不存在")
-                self.enqueue_system_outbound(
+                self._enqueue_dark_market_public_notice(
+                    session,
+                    listing,
+                    group,
                     f"暗网商品 #{listing.public_number} 已由管理员强制下架。"
                     + ("最高报价冻结款已退回。" if current is not None else ""),
-                    group_chat_id=group.id,
-                    destination_chatroom_id=group.chatroom_id,
+                    now,
                 )
                 return DarkMarketListingResult(
                     "force_delisted", self._dark_market_listing_summary(listing)
@@ -7002,6 +7086,7 @@ class CoreRepository:
         del inbound_id
         with self.transaction():
             with self._session() as session:
+                self._lock_gameplay_gate(session)
                 user = session.scalar(
                     select(UserRecord).where(UserRecord.platform_id == platform_id)
                 )
@@ -7066,11 +7151,13 @@ class CoreRepository:
                 group = session.get(GroupChatRecord, listing.announcement_group_id)
                 if seller is None or buyer is None or group is None or group.chatroom_id is None:
                     raise RuntimeError("暗网公开身份数据不完整")
-                self.enqueue_system_outbound(
+                self._enqueue_dark_market_public_notice(
+                    session,
+                    listing,
+                    group,
                     f"暗网商品 #{listing.public_number} 身份公开："
                     f"卖家 {seller.display_name}，买家 {buyer.display_name}。",
-                    group_chat_id=group.id,
-                    destination_chatroom_id=group.chatroom_id,
+                    now,
                 )
                 return DarkMarketDisclosureResult("revealed")
 
@@ -8905,6 +8992,7 @@ class CoreRepository:
             with self._session() as session:
                 self._lock_gameplay_gate(session)
                 ended = False
+                ended_random_event = False
                 if game_type == "texas_holdem":
                     ended = self.abort_texas_holdem(
                         game_id, now, group_chat_id
@@ -8992,6 +9080,7 @@ class CoreRepository:
                         event.ended_at = now
                         event.next_reminder_at = None
                         ended = True
+                        ended_random_event = True
                 if not ended:
                     return False
                 definition = template_definition("/结束游戏", "admin_forced")
@@ -9011,6 +9100,10 @@ class CoreRepository:
                     group_chat_id=group_chat_id,
                     destination_chatroom_id=(None if group is None else group.chatroom_id),
                 )
+                if ended_random_event:
+                    self._flush_deferred_dark_market_notices(
+                        session, group_chat_id
+                    )
                 return True
 
     def start_number_bomb_game(
@@ -14398,25 +14491,30 @@ class CoreRepository:
         scheduled_at = scheduled_at.astimezone(BEIJING).replace(second=0, microsecond=0)
         if scheduled_at.date() != now.date() or scheduled_at <= now:
             raise ValueError("调整时间必须是今日未来时刻")
-        with self._session() as session:
-            record = session.get(RandomEventScheduleRecord, schedule_id)
-            if record is None:
-                raise ValueError("随机事件不存在")
-            if record.event_date != now.date() or record.status != "pending":
-                raise ValueError("仅待开始事件可以调整")
-            conflict = session.scalar(
-                select(RandomEventScheduleRecord.id).where(
-                    RandomEventScheduleRecord.group_chat_id == record.group_chat_id,
-                    RandomEventScheduleRecord.event_date == now.date(),
-                    RandomEventScheduleRecord.id != record.id,
-                    RandomEventScheduleRecord.scheduled_at == scheduled_at,
+        with self.transaction():
+            with self._session() as session:
+                self._lock_gameplay_gate(session)
+                record = session.get(
+                    RandomEventScheduleRecord, schedule_id, with_for_update=True
                 )
-            )
-            if conflict is not None:
-                raise ValueError("今日已有该时刻的随机事件")
-            record.scheduled_at = scheduled_at
-            session.flush()
-            return _random_event_schedule(record)
+                if record is None:
+                    raise ValueError("随机事件不存在")
+                if record.event_date != now.date() or record.status != "pending":
+                    raise ValueError("仅待开始事件可以调整")
+                conflict = session.scalar(
+                    select(RandomEventScheduleRecord.id).where(
+                        RandomEventScheduleRecord.group_chat_id == record.group_chat_id,
+                        RandomEventScheduleRecord.event_date == now.date(),
+                        RandomEventScheduleRecord.id != record.id,
+                        RandomEventScheduleRecord.scheduled_at == scheduled_at,
+                    )
+                )
+                if conflict is not None:
+                    raise ValueError("今日已有该时刻的随机事件")
+                record.scheduled_at = scheduled_at
+                record.pre_notice_sent_at = None
+                session.flush()
+                return _random_event_schedule(record)
 
     def create_today_random_event(
         self,
@@ -14725,7 +14823,14 @@ class CoreRepository:
                         .distinct()
                     )
                 )
-                for group_chat_id in dict.fromkeys((*group_ids, *active_group_ids)):
+                deferred_group_ids = tuple(
+                    session.scalars(
+                        select(DarkMarketDeferredNoticeRecord.group_chat_id).distinct()
+                    )
+                )
+                for group_chat_id in dict.fromkeys(
+                    (*group_ids, *active_group_ids, *deferred_group_ids)
+                ):
                     active = self._active_random_event(session, group_chat_id)
                     if (
                         active is not None
@@ -14765,6 +14870,58 @@ class CoreRepository:
                             active.next_reminder_at = now + timedelta(
                                 minutes=settings.reminder_interval_minutes
                             )
+                    if active is None:
+                        self._flush_deferred_dark_market_notices(
+                            session, group_chat_id
+                        )
+                        preview_schedules = list(
+                            session.scalars(
+                                select(RandomEventScheduleRecord)
+                                .where(
+                                    RandomEventScheduleRecord.group_chat_id
+                                    == group_chat_id,
+                                    RandomEventScheduleRecord.status == "pending",
+                                    RandomEventScheduleRecord.event_date == now.date(),
+                                    RandomEventScheduleRecord.scheduled_at > now,
+                                    RandomEventScheduleRecord.scheduled_at
+                                    <= now + timedelta(minutes=5),
+                                    RandomEventScheduleRecord.pre_notice_sent_at.is_(
+                                        None
+                                    ),
+                                )
+                                .order_by(RandomEventScheduleRecord.scheduled_at)
+                                .with_for_update()
+                            )
+                        )
+                        group = session.get(GroupChatRecord, group_chat_id)
+                        if (
+                            group is not None
+                            and group.deleted_at is None
+                            and group.listening_enabled
+                            and group.random_events_enabled
+                            and group.chatroom_id is not None
+                        ):
+                            for schedule in preview_schedules:
+                                if not self._fill_random_event_schedule_snapshot(
+                                    session, schedule
+                                ):
+                                    continue
+                                remaining = schedule.scheduled_at - now
+                                timing = (
+                                    "约 5 分钟后将"
+                                    if remaining >= timedelta(minutes=4)
+                                    else "即将"
+                                )
+                                event_label = schedule.scene_name or "随机事件"
+                                if schedule.event_name:
+                                    event_label += f"－{schedule.event_name}"
+                                self.enqueue_system_outbound(
+                                    "【随机事件预告】\n"
+                                    f"{timing}开放「{event_label}」报名，请留意群内通知。",
+                                    group_chat_id=group_chat_id,
+                                    destination_chatroom_id=group.chatroom_id,
+                                )
+                                schedule.pre_notice_sent_at = now
                     due_schedules = list(
                         session.scalars(
                             select(RandomEventScheduleRecord)
@@ -15326,6 +15483,9 @@ class CoreRepository:
             destination_chatroom_id=self.group_chat_destination(
                 event.group_chat_id
             ),
+        )
+        self._flush_deferred_dark_market_notices(
+            session, event.group_chat_id
         )
 
     def last_random_event_reward(
@@ -19672,11 +19832,15 @@ class CoreRepository:
         self,
         public_number: int,
         *,
+        description: str,
         enabled: bool,
         minimum_rank_order: int | None,
         unlimited_stock: bool,
         stock: int,
     ) -> ItemRecord:
+        description = description.strip()
+        if not 1 <= len(description) <= 200:
+            raise ValueError("商品描述长度无效")
         if minimum_rank_order is not None and minimum_rank_order < 1:
             raise ValueError("最低职位无效")
         if stock < 0:
@@ -19691,6 +19855,7 @@ class CoreRepository:
                 )
                 if item is None:
                     raise LookupError("item_not_found")
+                item.description = description
                 item.enabled = enabled
                 item.minimum_rank_order = minimum_rank_order
                 item.unlimited_stock = unlimited_stock

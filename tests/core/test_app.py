@@ -1313,6 +1313,17 @@ def test_game_management_lists_commands_employees_and_shop_items(client, headers
         headers=headers,
         json={"name": "工位午睡券", "description": "眯十分钟。", "price": 5, "stock": 3},
     )
+    updated_item = client.patch(
+        "/internal/game/items/23",
+        headers=headers,
+        json={
+            "description": "使用后可以安心休息十分钟。",
+            "enabled": True,
+            "minimum_rank_order": None,
+            "unlimited_stock": False,
+            "stock": 3,
+        },
+    )
     items = client.get("/internal/game/items", headers=headers)
 
     assert commands.status_code == 200
@@ -1341,13 +1352,15 @@ def test_game_management_lists_commands_employees_and_shop_items(client, headers
         "pages": 0,
     }
     assert created_item.status_code == 201
+    assert updated_item.status_code == 200
+    assert updated_item.json()["description"] == "使用后可以安心休息十分钟。"
     item_page = items.json()
     assert item_page["total"] == 23
     assert item_page["pages"] == 2
     assert item_page["items"][0] == {
         "public_number": 23,
         "name": "工位午睡券",
-        "description": "眯十分钟。",
+        "description": "使用后可以安心休息十分钟。",
         "price": 5,
         "stock": 3,
         "unlimited_stock": False,

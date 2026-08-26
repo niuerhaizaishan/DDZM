@@ -779,6 +779,7 @@ def create_app(
         ] = None,
     ) -> JSONResponse:
         required = {
+            "description",
             "enabled",
             "minimum_rank_order",
             "unlimited_stock",
@@ -787,7 +788,9 @@ def create_app(
         if set(request) != required:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid item")
         if (
-            not isinstance(request["enabled"], bool)
+            not isinstance(request["description"], str)
+            or not 1 <= len(request["description"].strip()) <= 200
+            or not isinstance(request["enabled"], bool)
             or not isinstance(request["unlimited_stock"], bool)
             or not isinstance(request["stock"], int)
             or request["stock"] < 0

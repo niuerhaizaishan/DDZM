@@ -1070,6 +1070,19 @@ class DarkMarketDisclosureRecord(Base):
     finished_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
 
 
+class DarkMarketDeferredNoticeRecord(Base):
+    __tablename__ = "dark_market_deferred_notices"
+
+    listing_id: Mapped[UUID] = mapped_column(
+        ForeignKey("dark_market_listings.id"), primary_key=True
+    )
+    group_chat_id: Mapped[UUID] = mapped_column(
+        ForeignKey("group_chats.id"), nullable=False
+    )
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+
+
 class DarkMarketDailyListingRecord(Base):
     __tablename__ = "dark_market_daily_listings"
     __table_args__ = (
@@ -1353,6 +1366,7 @@ class RandomEventScheduleRecord(Base):
     reward: Mapped[int | None] = mapped_column(Integer)
     target_rounds: Mapped[int | None] = mapped_column(Integer)
     seats: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON)
+    pre_notice_sent_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
     created_at: Mapped[datetime] = mapped_column(
         BeijingDateTime, default=beijing_now, nullable=False
     )

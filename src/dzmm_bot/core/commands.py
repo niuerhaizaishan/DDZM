@@ -1333,11 +1333,11 @@ class GroupCommandHandler:
             "items_available",
             received_at,
             {
-                "{商店列表}": "\n".join(
+                "{商店列表}": "\n\n".join(
                     f"#{item.public_number} {item.name}（{item.price} {currency_name}，库存 "
                     f"{'不限' if item.unlimited_stock else item.stock}"
                     f"{'，需 LV' + str(item.minimum_rank_order) if item.minimum_rank_order else ''}）"
-                    f"：{item.description}"
+                    f"\n说明：{item.description}"
                     for item in items
                 )
             },

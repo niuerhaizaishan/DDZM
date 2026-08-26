@@ -1038,6 +1038,7 @@ def create_app(
         try:
             record = repository.update_shop_item(
                 public_number,
+                description=request.description,
                 enabled=request.enabled,
                 minimum_rank_order=request.minimum_rank_order,
                 unlimited_stock=request.unlimited_stock,

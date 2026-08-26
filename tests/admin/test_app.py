@@ -1617,6 +1617,8 @@ def test_admin_dashboard_exposes_pagination_and_mutation_controls(client):
     assert "employee.employee_number" in script
     assert "/api/game/users?page=${page}&page_size=${pageSizeFor(\"employees\")}" in script
     assert "/api/game/items?page=${page}&page_size=${pageSizeFor(\"shop\")}" in script
+    assert "data-item-description" in script
+    assert 'description: row.querySelector("[data-item-description]").value.trim()' in script
     assert '"保存中…"' in script
     assert '"上架中…"' in script
     assert "请填写场景名称、报名公告和每个事件的名称、开场白" in script
@@ -1639,6 +1641,23 @@ def test_admin_accepts_the_browser_item_form_json_body(client, headers):
 
     assert response.status_code == 201
     assert response.json()["name"] == "午休券"
+
+
+def test_admin_updates_an_existing_item_description(client, headers):
+    response = client.patch(
+        "/api/game/items/7",
+        headers=headers,
+        json={
+            "description": "使用后增加一次小游戏发起次数。",
+            "enabled": True,
+            "minimum_rank_order": None,
+            "unlimited_stock": True,
+            "stock": 0,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["description"] == "使用后增加一次小游戏发起次数。"
 
 
 def test_admin_proxies_game_settings(client, headers, core):

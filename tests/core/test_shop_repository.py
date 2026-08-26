@@ -277,6 +277,7 @@ def test_disabled_owned_system_card_can_still_be_used(setup_repository, now) -> 
     )
     repository.update_shop_item(
         number,
+        description="随机获得 1–10 摸鱼币",
         enabled=False,
         minimum_rank_order=None,
         unlimited_stock=True,
