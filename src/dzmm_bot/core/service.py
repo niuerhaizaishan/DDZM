@@ -120,7 +120,11 @@ class CoreService:
                 draft_step = self._repository.performance_draft_step(
                     message.sender_platform_id, message.received_at
                 )
-                draft_control_command = command in {"/确认", "/跳过"}
+                draft_control_command = (
+                    command == "/确认" and draft_step == "confirm"
+                ) or (
+                    command == "/跳过" and draft_step == "cover"
+                )
                 if draft_step is not None and (
                     draft_control_command
                     or not message.content.lstrip().startswith("/")

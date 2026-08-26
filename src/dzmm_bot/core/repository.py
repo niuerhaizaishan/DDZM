@@ -5611,6 +5611,12 @@ class CoreRepository:
     ) -> RedPacketCreateResult:
         now = now.astimezone(BEIJING)
         with self.transaction():
+            with self._session() as session:
+                self._lock_gameplay_gate(session)
+                if self._performance_blocks_new_game_locked(
+                    session, group_chat_id
+                ):
+                    return RedPacketCreateResult("performance_active")
             for message in self.expire_red_packets(now, group_chat_id):
                 self.enqueue_system_outbound(
                     message,
@@ -20459,6 +20465,7 @@ class CoreRepository:
         now = now.astimezone(BEIJING)
         with self.transaction():
             with self._session() as session:
+                self._lock_gameplay_gate(session)
                 user = session.scalar(
                     select(UserRecord).where(UserRecord.platform_id == platform_id)
                 )
@@ -20766,6 +20773,7 @@ class CoreRepository:
             return ShopUseResult("authorization_reply_required")
         with self.transaction():
             with self._session() as session:
+                self._lock_gameplay_gate(session)
                 user = session.scalar(
                     select(UserRecord).where(UserRecord.platform_id == platform_id)
                 )
@@ -20946,6 +20954,7 @@ class CoreRepository:
         processed = 0
         with self.transaction():
             with self._session() as session:
+                self._lock_gameplay_gate(session)
                 sessions = list(
                     session.scalars(
                         select(AdultCardSessionRecord)
@@ -21378,6 +21387,7 @@ class CoreRepository:
         now = now.astimezone(BEIJING)
         with self.transaction():
             with self._session() as session:
+                self._lock_gameplay_gate(session)
                 state = session.get(
                     ShopCommonSenseStateRecord, state_id, with_for_update=True
                 )

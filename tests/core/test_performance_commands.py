@@ -211,6 +211,24 @@ def test_performance_draft_does_not_consume_other_direct_commands(
     assert repository.performance_draft_step("owner", now) == "title"
 
 
+def test_performance_draft_only_consumes_control_commands_at_their_step(
+    command_context,
+) -> None:
+    service, repository, group, now = command_context
+    repository.begin_performance_draft("owner", group.id, now)
+
+    _receive(
+        service,
+        "owner",
+        "/确认",
+        now,
+        room="direct-owner",
+        source="direct",
+    )
+
+    assert repository.performance_draft_step("owner", now) == "title"
+
+
 def test_my_performance_shows_rejection_reason(command_context) -> None:
     service, repository, group, now = command_context
     submitted = _complete_command_draft(repository, group, now)

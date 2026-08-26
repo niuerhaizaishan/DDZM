@@ -349,3 +349,16 @@ def test_game_creation_rechecks_performance_gate_inside_transaction(
     result = repository.start_number_bomb_game("actor-a", now, group.id)
 
     assert result.status == "multiplayer_active"
+
+
+def test_red_packet_creation_rechecks_performance_gate_inside_transaction(
+    reservation_context,
+) -> None:
+    repository, group, now = reservation_context
+    submitted = _complete_draft(repository, group, now)
+    repository.review_performance(submitted.reservation.id, True, "admin:a", now)
+    repository.run_performance_jobs(now + timedelta(days=1, minutes=-5))
+
+    result = repository.create_red_packet("actor-a", 2, 2, now, group.id)
+
+    assert result.status == "performance_active"

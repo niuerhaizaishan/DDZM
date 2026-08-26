@@ -42,6 +42,7 @@ TEMPLATE_DEFINITIONS = (
     TemplateDefinition("/发红包", "insufficient_balance", "余额不足", "余额不足，无法发出这个红包。", ("{日期}",)),
     TemplateDefinition("/发红包", "daily_limit", "次数用尽", "你今天的 5 次发红包机会已经用完了。", ("{日期}",)),
     TemplateDefinition("/发红包", "active_packet", "已有红包", "当前还有一个红包未结束，请抢完或等待过期。", ("{日期}",)),
+    TemplateDefinition("/发红包", "performance_active", "公演占用", "公演即将开始或正在进行，暂时不能发红包。", ("{日期}",)),
     TemplateDefinition("/发红包", "created", "红包已发出", "【随机运气红包】{发起者}发出 {人数} 份共 {总金额} {货币}的红包，{过期分钟} 分钟内发送 /抢红包。", ("{发起者}", "{人数}", "{总金额}", "{过期分钟}", "{货币}", "{日期}")),
     TemplateDefinition("/发红包", "expired", "红包过期", "【随机运气红包已过期】{发起者}发出的红包已领取 {已领份数}/{人数} 份，未领取金额已退回 {退款金额} {货币}。", ("{发起者}", "{已领份数}", "{人数}", "{退款金额}", "{货币}", "{日期}")),
     TemplateDefinition("/抢红包", "group_only", "仅限群聊", "请回到群里发送 /抢红包。", ("{日期}",)),
