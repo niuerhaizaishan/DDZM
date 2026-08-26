@@ -231,6 +231,14 @@ class GroupCommandHandler:
         if command == "/抢红包":
             return self._red_packet_claim(message, received_at, group_chat_id)
         if command == "/打赏":
+            if (
+                group_chat_id is not None
+                and self._repository.active_performance_state(group_chat_id)
+                == "tipping"
+            ):
+                return self._performance_tip(
+                    message, content, received_at, group_chat_id
+                )
             return self._random_event_tip(
                 message, content, received_at, group_chat_id
             )
@@ -2804,6 +2812,61 @@ class GroupCommandHandler:
             else "failed"
         )
         return self._reply("/打赏", scenario, received_at)
+
+    def _performance_tip(
+        self,
+        message: InboundMessage,
+        content: str,
+        received_at,
+        group_chat_id,
+    ) -> str:
+        payload = content[len("/打赏") :].strip()
+        recipient_name = None
+        reference_message_id = None
+        if message.reference is not None:
+            if not payload.isascii() or not payload.isdigit() or int(payload) <= 0:
+                return "回复参演人员本场消息后，请发送 /打赏 金额。"
+            amount = int(payload)
+            reference_message_id = message.reference.message_id
+        else:
+            parts = payload.rsplit(maxsplit=1)
+            if (
+                len(parts) != 2
+                or not parts[0].strip()
+                or not parts[1].isascii()
+                or not parts[1].isdigit()
+                or int(parts[1]) <= 0
+            ):
+                return "请发送 /打赏 参演人员名称 金额，或回复参演人员本场消息发送 /打赏 金额。"
+            recipient_name = parts[0].strip()
+            amount = int(parts[1])
+        result = self._repository.tip_performance(
+            message.sender_platform_id,
+            recipient_name,
+            amount,
+            message.platform_message_id,
+            received_at,
+            group_chat_id,
+            reference_message_id,
+        )
+        currency = self._repository.get_game_settings().currency_name
+        if result.status in {"sent", "duplicate"}:
+            return (
+                f"{result.sender_display_name} 已打赏 {result.recipient_display_name} "
+                f"{result.amount} {currency}。"
+            )
+        if result.status == "insufficient_balance":
+            return f"余额不足，当前仅有 {result.sender_balance or 0} {currency}。"
+        return {
+            "not_joined": "请先用 /入职 名称 加入摸鱼公司。",
+            "not_tipping": "当前不在公演打赏阶段。",
+            "expired": "公演打赏时间已结束。",
+            "invalid_amount": "打赏金额必须是正整数。",
+            "recipient_not_found": "没有找到该参演人员。",
+            "recipient_not_participant": "只能打赏本场参演人员。",
+            "invalid_reference": "引用消息不是本场参演人员的演出内容。",
+            "self_tip": "不能给自己打赏。",
+        }.get(result.status, "打赏失败，请稍后重试。")
 
     def _hide_and_seek(
         self, platform_id: str, content: str, received_at, group_chat_id=None

@@ -14,9 +14,11 @@ from dzmm_bot.core.schema import (
     GroupChatRecord,
     OutboundRecord,
     PerformanceMessageRecord,
+    UserRecord,
 )
 from dzmm_bot.core.service import CoreService
 from dzmm_bot.runtime.contracts import InboundMessage
+from dzmm_bot.runtime.contracts import MessageReference
 
 
 HTTPS_URL = "https://cdn.example/cover"
@@ -86,15 +88,26 @@ def command_context():
     repository.create_user("owner", "发起人", now, 100)
     repository.create_user("actor", "演员甲", now, 100)
     repository.create_user("observer", "观众甲", now, 100)
+    repository.create_user("fan", "观众乙", now, 100)
     repository.upsert_direct_chats([("owner", "direct-owner")], now)
     service = CoreService(repository, GroupCommandHandler(repository))
     return service, repository, group, now
 
 
-def _receive(service, sender, content, now, *, room, source="group", **kwargs):
+def _receive(
+    service,
+    sender,
+    content,
+    now,
+    *,
+    room,
+    source="group",
+    platform_message_id=None,
+    **kwargs,
+):
     return service.receive_inbound(
         InboundMessage(
-            str(uuid4()),
+            platform_message_id or str(uuid4()),
             sender,
             content,
             now,
@@ -297,3 +310,69 @@ def test_participant_end_opens_tipping(command_context) -> None:
     reply = _claim(repository, group.chatroom_id, stage_time)
     assert "180 秒打赏" in reply.text
     assert repository.performance_blocks_new_game(group.id) is True
+
+
+def test_performance_tip_moves_real_balance(command_context) -> None:
+    service, repository, group, stage_time = _open_performance(command_context)
+    _receive(
+        service,
+        "actor",
+        "第一幕开始。",
+        stage_time,
+        room=group.chatroom_id,
+        platform_message_id="performance-line-1",
+    )
+    _receive(service, "actor", "/end", stage_time, room=group.chatroom_id)
+    _confirm(repository, _claim(repository, group.chatroom_id, stage_time), stage_time)
+
+    _receive(
+        service,
+        "fan",
+        "/打赏 演员甲 5",
+        stage_time + timedelta(seconds=1),
+        room=group.chatroom_id,
+    )
+
+    reply = _claim(repository, group.chatroom_id, stage_time)
+    assert "观众乙" in reply.text
+    assert "演员甲" in reply.text
+    assert "5" in reply.text
+    with repository._session_factory() as session:
+        assert session.scalar(
+            select(UserRecord.balance).where(UserRecord.platform_id == "fan")
+        ) == 95
+        assert session.scalar(
+            select(UserRecord.balance).where(UserRecord.platform_id == "actor")
+        ) == 105
+
+
+def test_performance_tip_can_resolve_reply_target(command_context) -> None:
+    service, repository, group, stage_time = _open_performance(command_context)
+    _receive(
+        service,
+        "actor",
+        "第一幕开始。",
+        stage_time,
+        room=group.chatroom_id,
+        platform_message_id="performance-line-2",
+    )
+    _receive(service, "actor", "/end", stage_time, room=group.chatroom_id)
+    _confirm(repository, _claim(repository, group.chatroom_id, stage_time), stage_time)
+
+    _receive(
+        service,
+        "fan",
+        "/打赏 6",
+        stage_time + timedelta(seconds=1),
+        room=group.chatroom_id,
+        reference=MessageReference(
+            "performance-line-2", "actor", "text", text="第一幕开始。"
+        ),
+    )
+
+    reply = _claim(repository, group.chatroom_id, stage_time)
+    assert "演员甲" in reply.text
+    with repository._session_factory() as session:
+        assert session.scalar(
+            select(UserRecord.balance).where(UserRecord.platform_id == "actor")
+        ) == 106

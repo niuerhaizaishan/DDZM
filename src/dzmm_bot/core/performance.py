@@ -76,6 +76,8 @@ class PerformanceTipResult:
     sender_display_name: str | None = None
     recipient_display_name: str | None = None
     amount: int | None = None
+    sender_balance: int | None = None
+    recipient_balance: int | None = None
 
 
 @dataclass(frozen=True)
@@ -121,6 +123,30 @@ def render_performance_tipping_open(view: PerformanceView) -> str:
     return (
         f"公演《{view.title}》演出部分已结束，进入 180 秒打赏环节。\n"
         "仅开放 /打赏 参演人员名称 金额，或回复参演人员本场消息发送 /打赏 金额。"
+    )
+
+
+def render_performance_settlement(
+    total: int,
+    participant_totals: tuple[tuple[str, int], ...],
+    top_tips: tuple[tuple[str, str, int], ...],
+    currency_name: str,
+) -> str:
+    participant_lines = "\n".join(
+        f"{name}：{amount} {currency_name}" for name, amount in participant_totals
+    )
+    top_lines = "\n".join(
+        f"{index}. {sender} → {recipient}：{amount} {currency_name}"
+        for index, (sender, recipient, amount) in enumerate(top_tips, 1)
+    )
+    if not top_lines:
+        top_lines = "本场无人打赏。"
+    return (
+        "公演打赏结束\n"
+        f"总打赏：{total} {currency_name}\n\n"
+        f"参演人员：\n{participant_lines}\n\n"
+        f"最高打赏明细：\n{top_lines}\n\n"
+        "-------------------------演出结束-----------------------"
     )
 
 

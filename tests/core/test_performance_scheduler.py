@@ -107,3 +107,21 @@ def test_pending_review_expires_at_preview_boundary(scheduled_context) -> None:
 
     assert repository.performance_details(reservation_id).state == "expired"
     assert any("审核未完成" in item.text for item in _outbounds(factory))
+
+
+def test_tipping_settles_after_180_seconds_and_records_memory(scheduled_context) -> None:
+    repository, factory, group, reservation_id, now = scheduled_context
+    stage_time = now + timedelta(hours=1)
+    repository.run_performance_jobs(stage_time)
+    repository.end_performance("actor", group.id, stage_time)
+
+    repository.run_performance_jobs(stage_time + timedelta(seconds=180))
+
+    assert repository.performance_details(reservation_id).state == "completed"
+    assert any(
+        item.text.endswith("-------------------------演出结束-----------------------")
+        for item in _outbounds(factory)
+    )
+    facts = repository.list_ai_activity_facts("actor")
+    assert len(facts) == 1
+    assert facts[0].activity_type == "performance"

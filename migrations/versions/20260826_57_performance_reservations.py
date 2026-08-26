@@ -19,6 +19,14 @@ _LIVE = (
 
 
 def upgrade() -> None:
+    if sa.inspect(op.get_bind()).has_table("ai_activity_events"):
+        with op.batch_alter_table("ai_activity_events") as batch:
+            batch.alter_column(
+                "detail",
+                existing_type=sa.String(length=32),
+                type_=sa.String(length=64),
+                existing_nullable=True,
+            )
     with op.batch_alter_table("group_chats") as batch:
         batch.add_column(
             sa.Column(
@@ -245,5 +253,13 @@ def downgrade() -> None:
     )
     op.drop_table("performance_reservations")
     op.drop_table("performance_settings")
+    if sa.inspect(op.get_bind()).has_table("ai_activity_events"):
+        with op.batch_alter_table("ai_activity_events") as batch:
+            batch.alter_column(
+                "detail",
+                existing_type=sa.String(length=64),
+                type_=sa.String(length=32),
+                existing_nullable=True,
+            )
     with op.batch_alter_table("group_chats") as batch:
         batch.drop_column("performances_enabled")

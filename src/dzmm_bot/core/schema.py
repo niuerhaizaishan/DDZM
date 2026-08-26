@@ -1936,7 +1936,7 @@ class AIActivityEventRecord(Base):
     user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
     activity_type: Mapped[str] = mapped_column(String(48), nullable=False)
     result: Mapped[str] = mapped_column(String(32), nullable=False)
-    detail: Mapped[str | None] = mapped_column(String(32))
+    detail: Mapped[str | None] = mapped_column(String(64))
     occurred_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
 
 

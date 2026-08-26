@@ -66,11 +66,13 @@ from .performance import (
     PerformanceExtensionView,
     PerformancePostponementResult,
     PerformanceSettings,
+    PerformanceTipResult,
     PerformanceView,
     parse_performance_datetime,
     parse_performance_participants,
     render_performance_opening,
     render_performance_preview,
+    render_performance_settlement,
     render_performance_tipping_open,
 )
 from .number_bomb import (
@@ -408,6 +410,8 @@ _BALANCE_SOURCE_LABELS = {
     "random_event": "随机事件奖励",
     "random_event_tip_out": "随机事件打赏支出",
     "random_event_tip_in": "随机事件打赏收入",
+    "performance_tip_out": "公演打赏支出",
+    "performance_tip_in": "公演打赏收入",
     "hide_and_seek": "摸鱼躲猫猫报名",
     "hide_and_seek_win": "摸鱼躲猫猫获胜",
     "hide_and_seek_penalty": "摸鱼躲猫猫处罚",
@@ -575,6 +579,7 @@ _SOCIAL_ACTIVITY_LABELS = {
     "blame_bomb": "甩锅游戏",
     "hide_and_seek": "摸鱼躲猫猫",
     "random_event": "随机事件",
+    "performance": "公演",
     "随机事件投稿": "随机事件投稿",
 }
 _SOCIAL_GAME_STATE_LABELS = {
@@ -5056,6 +5061,19 @@ class CoreRepository:
                     f"最近结果 {fact.last_result}（{fact.last_result_at.astimezone(BEIJING).strftime('%Y-%m-%d %H:%M:%S')}）"
                     for fact in facts
                 )
+            latest_performance = session.scalar(
+                select(AIActivityEventRecord)
+                .where(
+                    AIActivityEventRecord.user_id == user.id,
+                    AIActivityEventRecord.activity_type == "performance",
+                )
+                .order_by(AIActivityEventRecord.occurred_at.desc())
+                .limit(1)
+            )
+            if latest_performance is not None and latest_performance.detail:
+                lines.append(
+                    f"最近公演：参与了《{latest_performance.detail}》公演"
+                )
         if "organization" in topics:
             promotion = session.scalar(
                 select(PromotionRequestRecord)
@@ -5127,6 +5145,11 @@ class CoreRepository:
             game_name = _SOCIAL_ACTIVITY_LABELS.get(
                 ordered_rows[0].activity_type, ordered_rows[0].activity_type
             )
+            if (
+                ordered_rows[0].activity_type == "performance"
+                and ordered_rows[0].detail
+            ):
+                game_name = f"《{ordered_rows[0].detail}》公演"
             results = "；".join(
                 f"{employee_by_id[row.user_id].display_name}={row.result}"
                 for row in ordered_rows
@@ -6626,6 +6649,231 @@ class CoreRepository:
                     return PerformanceActionResult("not_participant")
             return self._start_performance_tipping(session, reservation, now)
 
+    def _performance_tip_result_for_inbound(
+        self, session: Session, inbound_id: UUID
+    ) -> PerformanceTipResult | None:
+        sender = aliased(UserRecord)
+        recipient = aliased(UserRecord)
+        row = session.execute(
+            select(PerformanceTipRecord, sender, recipient)
+            .join(sender, sender.id == PerformanceTipRecord.sender_user_id)
+            .join(recipient, recipient.id == PerformanceTipRecord.recipient_user_id)
+            .where(PerformanceTipRecord.inbound_message_id == inbound_id)
+        ).one_or_none()
+        if row is None:
+            return None
+        tip, sender_user, recipient_user = row
+        return PerformanceTipResult(
+            "duplicate",
+            sender_display_name=sender_user.display_name,
+            recipient_display_name=recipient_user.display_name,
+            amount=tip.amount,
+            sender_balance=sender_user.balance,
+            recipient_balance=recipient_user.balance,
+        )
+
+    def tip_performance(
+        self,
+        sender_platform_id: str,
+        recipient_name: str | None,
+        amount: int,
+        platform_message_id: str,
+        now: datetime,
+        group_chat_id: UUID,
+        reference_message_id: str | None = None,
+    ) -> PerformanceTipResult:
+        now = now.astimezone(BEIJING)
+        with self.transaction():
+            with self._session() as session:
+                self._lock_gameplay_gate(session)
+                inbound = session.scalar(
+                    select(InboundRecord).where(
+                        InboundRecord.platform_message_id == platform_message_id,
+                        InboundRecord.group_chat_id == group_chat_id,
+                    )
+                )
+                if inbound is None:
+                    return PerformanceTipResult("inbound_not_found")
+                existing = self._performance_tip_result_for_inbound(
+                    session, inbound.id
+                )
+                if existing is not None:
+                    return existing
+                if isinstance(amount, bool) or not isinstance(amount, int) or amount <= 0:
+                    return PerformanceTipResult("invalid_amount")
+                reservation = self._stage_active_performance(session, group_chat_id)
+                if reservation is None or reservation.state != "tipping":
+                    return PerformanceTipResult("not_tipping")
+                if (
+                    reservation.tipping_deadline is None
+                    or now >= reservation.tipping_deadline
+                ):
+                    self._settle_performance_tipping(session, reservation, now)
+                    return PerformanceTipResult("expired")
+                sender_id = session.scalar(
+                    select(UserRecord.id).where(
+                        UserRecord.platform_id == sender_platform_id
+                    )
+                )
+                if sender_id is None:
+                    return PerformanceTipResult("not_joined")
+                recipient_id = None
+                if reference_message_id is not None:
+                    recipient_id = session.scalar(
+                        select(PerformanceMessageRecord.user_id)
+                        .join(
+                            InboundRecord,
+                            InboundRecord.id
+                            == PerformanceMessageRecord.inbound_message_id,
+                        )
+                        .where(
+                            PerformanceMessageRecord.reservation_id == reservation.id,
+                            InboundRecord.group_chat_id == group_chat_id,
+                            InboundRecord.platform_message_id == reference_message_id,
+                        )
+                    )
+                    if recipient_id is None:
+                        return PerformanceTipResult("invalid_reference")
+                else:
+                    normalized_name = (recipient_name or "").strip()
+                    recipient_id = session.scalar(
+                        select(UserRecord.id).where(
+                            UserRecord.display_name == normalized_name
+                        )
+                    )
+                    if recipient_id is None:
+                        return PerformanceTipResult("recipient_not_found")
+                if session.scalar(
+                    select(PerformanceParticipantRecord.id).where(
+                        PerformanceParticipantRecord.reservation_id == reservation.id,
+                        PerformanceParticipantRecord.user_id == recipient_id,
+                    )
+                ) is None:
+                    return PerformanceTipResult("recipient_not_participant")
+                if sender_id == recipient_id:
+                    return PerformanceTipResult("self_tip")
+                locked_users = list(
+                    session.scalars(
+                        select(UserRecord)
+                        .where(UserRecord.id.in_((sender_id, recipient_id)))
+                        .order_by(UserRecord.id)
+                        .with_for_update()
+                        .execution_options(populate_existing=True)
+                    )
+                )
+                users = {user.id: user for user in locked_users}
+                sender = users.get(sender_id)
+                recipient = users.get(recipient_id)
+                if sender is None or recipient is None:
+                    raise RuntimeError("公演打赏员工在交易期间消失")
+                if sender.balance < amount:
+                    return PerformanceTipResult(
+                        "insufficient_balance",
+                        sender.display_name,
+                        recipient.display_name,
+                        amount,
+                        sender.balance,
+                        recipient.balance,
+                    )
+                self._apply_balance_change(
+                    sender, -amount, "performance_tip_out", now
+                )
+                self._apply_balance_change(
+                    recipient, amount, "performance_tip_in", now
+                )
+                session.add(
+                    PerformanceTipRecord(
+                        reservation_id=reservation.id,
+                        sender_user_id=sender.id,
+                        recipient_user_id=recipient.id,
+                        inbound_message_id=inbound.id,
+                        amount=amount,
+                        created_at=now,
+                    )
+                )
+                session.flush()
+                return PerformanceTipResult(
+                    "sent",
+                    sender.display_name,
+                    recipient.display_name,
+                    amount,
+                    sender.balance,
+                    recipient.balance,
+                )
+
+    def _settle_performance_tipping(
+        self,
+        session: Session,
+        reservation: PerformanceReservationRecord,
+        now: datetime,
+        *,
+        forced: bool = False,
+    ) -> None:
+        if reservation.state != "tipping":
+            return
+        participant_rows = list(
+            session.execute(
+                select(PerformanceParticipantRecord, UserRecord)
+                .join(UserRecord, UserRecord.id == PerformanceParticipantRecord.user_id)
+                .where(
+                    PerformanceParticipantRecord.reservation_id == reservation.id
+                )
+                .order_by(PerformanceParticipantRecord.display_order)
+            )
+        )
+        sender_alias = aliased(UserRecord)
+        recipient_alias = aliased(UserRecord)
+        tips = list(
+            session.execute(
+                select(PerformanceTipRecord, sender_alias, recipient_alias)
+                .join(sender_alias, sender_alias.id == PerformanceTipRecord.sender_user_id)
+                .join(
+                    recipient_alias,
+                    recipient_alias.id == PerformanceTipRecord.recipient_user_id,
+                )
+                .where(PerformanceTipRecord.reservation_id == reservation.id)
+                .order_by(
+                    PerformanceTipRecord.amount.desc(),
+                    PerformanceTipRecord.created_at,
+                    PerformanceTipRecord.id,
+                )
+            )
+        )
+        totals: dict[UUID, int] = {}
+        for tip, _sender, _recipient in tips:
+            totals[tip.recipient_user_id] = totals.get(tip.recipient_user_id, 0) + tip.amount
+        currency = self.get_game_settings().currency_name
+        text_value = render_performance_settlement(
+            sum(tip.amount for tip, _sender, _recipient in tips),
+            tuple((user.display_name, totals.get(user.id, 0)) for _row, user in participant_rows),
+            tuple(
+                (sender.display_name, recipient.display_name, tip.amount)
+                for tip, sender, recipient in tips[:5]
+            ),
+            currency,
+        )
+        reservation.state = "completed"
+        reservation.ended_at = now
+        group = session.get(GroupChatRecord, reservation.group_chat_id)
+        if group is not None:
+            self._enqueue_performance_group_outbound(
+                session,
+                reservation,
+                group,
+                text_value=text_value,
+                now=now,
+            )
+        for _participant, user in participant_rows:
+            self._record_ai_activity_fact(
+                session,
+                event_key=f"performance:{reservation.id}:{user.id}",
+                user_id=user.id,
+                activity_type="performance",
+                result="ended",
+                occurred_at=now,
+                detail=reservation.title,
+            )
+
     @staticmethod
     def _enqueue_performance_group_outbound(
         session: Session,
@@ -6795,6 +7043,18 @@ class CoreRepository:
                     maximum = reservation.maximum_duration_minutes_snapshot or 360
                     if reservation.started_at + timedelta(minutes=maximum) <= now:
                         self._start_performance_tipping(session, reservation, now)
+                tipping = list(
+                    session.scalars(
+                        select(PerformanceReservationRecord)
+                        .where(
+                            PerformanceReservationRecord.state == "tipping",
+                            PerformanceReservationRecord.tipping_deadline <= now,
+                        )
+                        .with_for_update()
+                    )
+                )
+                for reservation in tipping:
+                    self._settle_performance_tipping(session, reservation, now)
 
     def update_performance_settings(
         self, maximum_duration_minutes: int
