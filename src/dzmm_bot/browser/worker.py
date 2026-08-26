@@ -41,6 +41,9 @@ _DIRECT_ENTRY_COMMANDS = {
     "/登陆暗网",
     "/登录暗网",
     "/暗网",
+    "/我的公演预约",
+    "/取消公演预约",
+    "/延期",
 }
 _OUTBOUND_BATCH_SIZE = 20
 _OUTBOUND_BATCH_BUDGET_SECONDS = 2.0

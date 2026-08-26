@@ -1,7 +1,17 @@
 import httpx
 import pytest
+from datetime import datetime, timedelta
+from uuid import uuid4
+from zoneinfo import ZoneInfo
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from dzmm_bot.core import performance
+from dzmm_bot.core.commands import GroupCommandHandler
+from dzmm_bot.core.repository import CoreRepository
+from dzmm_bot.core.schema import Base, GroupChatRecord
+from dzmm_bot.core.service import CoreService
+from dzmm_bot.runtime.contracts import InboundMessage
 
 
 HTTPS_URL = "https://cdn.example/cover"
@@ -51,3 +61,143 @@ def test_cover_validator_rejects_redirects() -> None:
 def test_cover_validator_requires_https() -> None:
     with pytest.raises(ValueError, match="HTTPS"):
         _validator(b"anything").validate("http://cdn.example/cover")
+
+
+BEIJING = ZoneInfo("Asia/Shanghai")
+
+
+@pytest.fixture
+def command_context():
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(engine, expire_on_commit=False)
+    repository = CoreRepository(factory)
+    now = datetime(2026, 8, 26, 12, 0, tzinfo=BEIJING)
+    group = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=performance-room", now
+    )
+    with factory.begin() as session:
+        session.get(GroupChatRecord, group.id).performances_enabled = True
+    repository.create_user("owner", "发起人", now, 100)
+    repository.create_user("actor", "演员甲", now, 100)
+    repository.upsert_direct_chats([("owner", "direct-owner")], now)
+    service = CoreService(repository, GroupCommandHandler(repository))
+    return service, repository, group, now
+
+
+def _receive(service, sender, content, now, *, room, source="group", **kwargs):
+    return service.receive_inbound(
+        InboundMessage(
+            str(uuid4()),
+            sender,
+            content,
+            now,
+            source_type=source,
+            chatroom_id=room,
+            **kwargs,
+        )
+    )
+
+
+def _claim(repository, room, now):
+    return repository.claim_outbound(
+        "worker", now, 30, required_delivery_key=room
+    )
+
+
+def _confirm(repository, outbound, now):
+    assert repository.confirm_sent(
+        outbound.id, "worker", outbound.lease_token, str(uuid4()), now
+    )
+
+
+def test_group_entry_starts_private_guide(command_context) -> None:
+    service, repository, group, now = command_context
+
+    _receive(service, "owner", "/预约公演", now, room=group.chatroom_id)
+
+    group_reply = _claim(repository, group.chatroom_id, now)
+    _confirm(repository, group_reply, now)
+    direct_reply = _claim(repository, "direct-owner", now)
+    assert group_reply.text == "公演预约向导已通过私聊发送。"
+    assert direct_reply.text == "请发送公演标题（1–50字）。"
+
+
+def test_active_performance_draft_has_private_routing_priority(command_context) -> None:
+    service, repository, group, now = command_context
+    _receive(service, "owner", "/预约公演", now, room=group.chatroom_id)
+    _confirm(repository, _claim(repository, group.chatroom_id, now), now)
+    _confirm(repository, _claim(repository, "direct-owner", now), now)
+    values = (
+        ("夜航", "请发送公演简介（1–500字）。"),
+        ("夜间公演", "请发送公演时间，格式：2026/12/01-12:00:00。"),
+        (
+            (now + timedelta(days=1)).strftime("%Y/%m/%d-%H:%M:%S"),
+            "请发送参演人员名称，多人请用顿号分隔（1–30人）。",
+        ),
+        ("演员甲", "请发送公演封面图片，或发送 /跳过。"),
+        ("/跳过", "预约信息已填写完成，发送 /确认 提交审核。"),
+        ("/确认", "公演预约已提交审核。"),
+    )
+    for index, (content, expected) in enumerate(values, 1):
+        _receive(
+            service,
+            "owner",
+            content,
+            now + timedelta(seconds=index),
+            room="direct-owner",
+            source="direct",
+        )
+        reply = _claim(repository, "direct-owner", now + timedelta(seconds=index))
+        assert reply.text == expected
+        _confirm(repository, reply, now + timedelta(seconds=index))
+
+    assert repository.own_performance("owner", now).state == "pending_review"
+
+
+def test_private_image_advances_cover_step(command_context) -> None:
+    class Validator:
+        def validate(self, url):
+            return performance.ValidatedCover(url, "image/webp", 123)
+
+    _, repository, group, now = command_context
+    service = CoreService(
+        repository,
+        GroupCommandHandler(repository),
+        cover_image_validator=Validator(),
+    )
+    repository.begin_performance_draft("owner", group.id, now)
+    for value in (
+        "夜航",
+        "夜间公演",
+        (now + timedelta(days=1)).strftime("%Y/%m/%d-%H:%M:%S"),
+        "演员甲",
+    ):
+        repository.consume_performance_draft_input(
+            "owner", uuid4(), now, text=value
+        )
+
+    _receive(
+        service,
+        "owner",
+        "[图片]",
+        now,
+        room="direct-owner",
+        source="direct",
+        content_type="image",
+        image_url="https://cdn.example/cover.webp",
+        image_alt="封面",
+    )
+
+    reply = _claim(repository, "direct-owner", now)
+    assert reply.text == "预约信息已填写完成，发送 /确认 提交审核。"
+
+
+def test_performance_requires_direct_room(command_context) -> None:
+    service, repository, group, now = command_context
+    repository.create_user("no-room", "无私聊", now, 100)
+
+    _receive(service, "no-room", "/预约公演", now, room=group.chatroom_id)
+
+    reply = _claim(repository, group.chatroom_id, now)
+    assert reply.text == "请先私聊总监事发送任意消息，再回群预约公演。"

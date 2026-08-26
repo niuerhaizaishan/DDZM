@@ -20,7 +20,7 @@ from .service import CommandReply
 
 _BEIJING = ZoneInfo("Asia/Shanghai")
 _COMMANDS = {
-    "/入职", "/我的物品", "/购买", "/使用", "/邀请参与", "/取消使用", "/同意使用", "/拒绝使用", "/打卡", "/余额", "/修改名称", "/编辑档案", "/编辑档案形象", "/我的档案", "/发奖金", "/发红包", "/抢红包", "/打赏", "/我", "/商店", "/帮助", "/当前游戏", "/加入", "/退出", "/开始", "/摸鱼躲猫猫", "/记忆考核", "/继续", "/收手", "/投降", "/部门", "/部门人数", "/我的部门人数", "/加入部门", "/切换部门", "/部门申请列表", "/同意部门", "/全部同意部门", "/拒绝部门", "/全部拒绝部门", "/职位", "/晋升", "/晋升申请列表", "/同意", "/全部同意", "/拒绝", "/全部拒绝", "/谁是卧底", "/开始投票", "/投票", "/退出谁是卧底", "/结束游戏", "/甩锅游戏", "/甩锅", "/退出甩锅", "/蹦蹦数字炸弹", "/报数", "/跳过", "/德州扑克", "/看牌", "/过牌", "/跟注", "/加注", "/全下", "/弃牌", "/上架暗网", "/取消上架", "/确认", "/报价", "/公开", "/不公开", "/查看暗网", "/确认收货", "/投诉",
+    "/入职", "/我的物品", "/购买", "/使用", "/邀请参与", "/取消使用", "/同意使用", "/拒绝使用", "/打卡", "/余额", "/修改名称", "/编辑档案", "/编辑档案形象", "/我的档案", "/发奖金", "/发红包", "/抢红包", "/打赏", "/我", "/商店", "/帮助", "/当前游戏", "/加入", "/退出", "/开始", "/摸鱼躲猫猫", "/记忆考核", "/继续", "/收手", "/投降", "/部门", "/部门人数", "/我的部门人数", "/加入部门", "/切换部门", "/部门申请列表", "/同意部门", "/全部同意部门", "/拒绝部门", "/全部拒绝部门", "/职位", "/晋升", "/晋升申请列表", "/同意", "/全部同意", "/拒绝", "/全部拒绝", "/谁是卧底", "/开始投票", "/投票", "/退出谁是卧底", "/结束游戏", "/甩锅游戏", "/甩锅", "/退出甩锅", "/蹦蹦数字炸弹", "/报数", "/跳过", "/德州扑克", "/看牌", "/过牌", "/跟注", "/加注", "/全下", "/弃牌", "/上架暗网", "/取消上架", "/确认", "/报价", "/公开", "/不公开", "/查看暗网", "/确认收货", "/投诉", "/预约公演", "/我的公演预约", "/取消公演预约", "/公演日程", "/延期", "/end",
 }
 
 _DARK_MARKET_QUERY_ALIASES = {
@@ -72,6 +72,59 @@ class GroupCommandHandler:
             else None
         )
         group_chat_id = None if group is None else group.id
+        if command == "/预约公演":
+            if message.source_type != "group" or group_chat_id is None:
+                return "请在已启用的群聊中发送 /预约公演。"
+            result = self._repository.begin_performance_draft(
+                message.sender_platform_id, group_chat_id, received_at
+            )
+            error_messages = {
+                "not_joined": "请先用 /入职 名称 加入摸鱼公司。",
+                "disabled": "本群未开放公演预约。",
+                "no_direct_chat": "请先私聊总监事发送任意消息，再回群预约公演。",
+                "owner_busy": "你已有一个未结束的公演预约。",
+            }
+            if result.status in error_messages:
+                return error_messages[result.status]
+            return [
+                "公演预约向导已通过私聊发送。",
+                CommandReply(
+                    "请发送公演标题（1–50字）。",
+                    destination_chatroom_id=result.direct_chatroom_id,
+                    delivery_kind="direct",
+                ),
+            ]
+        if command == "/我的公演预约":
+            view = self._repository.own_performance(
+                message.sender_platform_id, received_at
+            )
+            if view is None:
+                return "你当前没有公演预约。"
+            return (
+                f"公演：{view.title}\n状态：{view.state}\n"
+                f"时间：{view.scheduled_at.strftime('%Y/%m/%d-%H:%M:%S')}\n"
+                f"参演人员：{'、'.join(view.participant_names)}"
+            )
+        if command == "/取消公演预约":
+            result = self._repository.cancel_own_performance(
+                message.sender_platform_id, received_at
+            )
+            return {
+                "draft_cancelled": "公演预约草稿已取消。",
+                "cancelled": "公演预约已取消。",
+                "too_late": "公演已进入开场前 5 分钟，请联系董事会成员处理。",
+                "not_joined": "请先用 /入职 名称 加入摸鱼公司。",
+            }.get(result.status, "你当前没有可取消的公演预约。")
+        if command == "/公演日程":
+            if group_chat_id is None:
+                return "请在群聊中发送 /公演日程。"
+            views = self._repository.upcoming_performances(group_chat_id, received_at)
+            if not views:
+                return "本群暂无已审核的未来公演。"
+            return "公演日程\n" + "\n".join(
+                f"{index}. {view.title}｜{view.scheduled_at.strftime('%Y/%m/%d-%H:%M:%S')}"
+                for index, view in enumerate(views, 1)
+            )
         if command == "/上架暗网":
             return self._dark_market_start(message, received_at)
         if command == "/取消上架":

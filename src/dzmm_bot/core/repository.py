@@ -59,6 +59,14 @@ from .dark_market import (
     render_listing_summary,
 )
 from .group_games import GROUP_GAME_TYPES, normalized_group_game_types
+from .performance import (
+    PERFORMANCE_ACTIVE_STATES,
+    PerformanceActionResult,
+    PerformanceDraftResult,
+    PerformanceView,
+    parse_performance_datetime,
+    parse_performance_participants,
+)
 from .number_bomb import (
     NUMBER_BOMB_MULTIPLIER_TENTHS,
     NumberBombEntry,
@@ -158,6 +166,13 @@ from .schema import (
     TexasHoldemPotRecord,
     TexasHoldemSettingsRecord,
     ProfileImageUploadRecord,
+    PerformanceDraftRecord,
+    PerformanceExtensionRequestRecord,
+    PerformanceMessageRecord,
+    PerformanceParticipantRecord,
+    PerformanceReservationRecord,
+    PerformanceSettingsRecord,
+    PerformanceTipRecord,
     OutboundRecord,
     UndercoverGamePlayerRecord,
     UndercoverGameRecord,
@@ -1718,6 +1733,12 @@ _COMMAND_DEFINITIONS = (
     ("/查看暗网", "/查看暗网 [商品编号]", "在暗网群或私聊查看竞价中的商品"),
     ("/确认收货", "/确认收货 [商品编号]（仅私聊）", "确认暗网商品收货"),
     ("/投诉", "/投诉 [商品编号]（仅私聊）", "投诉暗网商品未交付"),
+    ("/预约公演", "/预约公演", "在群内发起公演预约私聊向导"),
+    ("/我的公演预约", "/我的公演预约", "私聊查看自己的公演预约"),
+    ("/取消公演预约", "/取消公演预约", "私聊取消草稿或预约"),
+    ("/公演日程", "/公演日程", "查看本群已审核的未来公演"),
+    ("/延期", "/延期 30m", "私聊申请推迟公演开始时间"),
+    ("/end", "/end", "参演人员结束当前公演并进入打赏"),
     ("/投稿", "/投稿 随机事件", "进入随机事件私聊投稿向导"),
     ("/我的投稿", "/我的投稿", "查看自己最近的随机事件投稿状态"),
     ("/撤回投稿", "/撤回投稿 编号", "撤回自己仍在等待审核的随机事件投稿"),
@@ -5432,6 +5453,30 @@ class CoreRepository:
                     )
                 )
             )
+            active_platform_ids.update(
+                session.scalars(
+                    select(UserRecord.platform_id)
+                    .join(
+                        PerformanceDraftRecord,
+                        PerformanceDraftRecord.user_id == UserRecord.id,
+                    )
+                    .where(PerformanceDraftRecord.expires_at > now)
+                )
+            )
+            active_platform_ids.update(
+                session.scalars(
+                    select(UserRecord.platform_id)
+                    .join(
+                        PerformanceReservationRecord,
+                        PerformanceReservationRecord.owner_user_id == UserRecord.id,
+                    )
+                    .where(
+                        PerformanceReservationRecord.state.in_(
+                            PERFORMANCE_ACTIVE_STATES
+                        )
+                    )
+                )
+            )
             if not active_platform_ids:
                 return ()
             return tuple(
@@ -5801,6 +5846,356 @@ class CoreRepository:
                 return (
                     message,
                 )
+
+    @staticmethod
+    def _performance_view(
+        session: Session, reservation: PerformanceReservationRecord
+    ) -> PerformanceView:
+        owner = session.get(UserRecord, reservation.owner_user_id)
+        if owner is None:
+            raise RuntimeError("公演发起人不存在")
+        participant_names = tuple(
+            session.scalars(
+                select(UserRecord.display_name)
+                .join(
+                    PerformanceParticipantRecord,
+                    PerformanceParticipantRecord.user_id == UserRecord.id,
+                )
+                .where(
+                    PerformanceParticipantRecord.reservation_id == reservation.id
+                )
+                .order_by(PerformanceParticipantRecord.display_order)
+            )
+        )
+        return PerformanceView(
+            id=reservation.id,
+            owner_platform_id=owner.platform_id,
+            owner_display_name=owner.display_name,
+            group_chat_id=reservation.group_chat_id,
+            title=reservation.title,
+            introduction=reservation.introduction,
+            scheduled_at=reservation.scheduled_at,
+            event_date=reservation.event_date,
+            participant_names=participant_names,
+            cover_url=reservation.cover_url,
+            cover_alt=reservation.cover_alt,
+            state=reservation.state,
+            pre_notice_sent_at=reservation.pre_notice_sent_at,
+            tipping_deadline=reservation.tipping_deadline,
+        )
+
+    def begin_performance_draft(
+        self, platform_id: str, group_chat_id: UUID, now: datetime
+    ) -> PerformanceDraftResult:
+        now = now.astimezone(BEIJING)
+        with self._session() as session:
+            user = session.scalar(
+                select(UserRecord)
+                .where(UserRecord.platform_id == platform_id)
+                .with_for_update()
+            )
+            if user is None:
+                return PerformanceDraftResult("not_joined")
+            group = session.get(GroupChatRecord, group_chat_id)
+            if (
+                group is None
+                or group.deleted_at is not None
+                or not group.listening_enabled
+                or not group.performances_enabled
+            ):
+                return PerformanceDraftResult("disabled")
+            direct_chatroom_id = session.scalar(
+                select(DirectChatRecord.chatroom_id).where(
+                    DirectChatRecord.platform_user_id == platform_id
+                )
+            )
+            if direct_chatroom_id is None:
+                return PerformanceDraftResult("no_direct_chat")
+            active = session.scalar(
+                select(PerformanceReservationRecord.id).where(
+                    PerformanceReservationRecord.owner_user_id == user.id,
+                    PerformanceReservationRecord.state.in_(PERFORMANCE_ACTIVE_STATES),
+                )
+            )
+            if active is not None:
+                return PerformanceDraftResult("owner_busy")
+            draft = session.scalar(
+                select(PerformanceDraftRecord)
+                .where(PerformanceDraftRecord.user_id == user.id)
+                .with_for_update()
+            )
+            if draft is not None and draft.expires_at > now:
+                draft.last_activity_at = now
+                draft.expires_at = now + timedelta(minutes=30)
+                return PerformanceDraftResult(
+                    "resumed", current_step=draft.current_step,
+                    direct_chatroom_id=direct_chatroom_id,
+                )
+            if draft is not None:
+                session.delete(draft)
+                session.flush()
+            session.add(
+                PerformanceDraftRecord(
+                    user_id=user.id,
+                    group_chat_id=group_chat_id,
+                    current_step="title",
+                    payload={},
+                    last_activity_at=now,
+                    expires_at=now + timedelta(minutes=30),
+                )
+            )
+            return PerformanceDraftResult(
+                "started", current_step="title",
+                direct_chatroom_id=direct_chatroom_id,
+            )
+
+    def consume_performance_draft_input(
+        self,
+        platform_id: str,
+        inbound_id: UUID,
+        now: datetime,
+        *,
+        text: str,
+        image_url: str | None = None,
+        image_alt: str | None = None,
+    ) -> PerformanceDraftResult | None:
+        del inbound_id
+        now = now.astimezone(BEIJING)
+        with self._session() as session:
+            user = session.scalar(
+                select(UserRecord).where(UserRecord.platform_id == platform_id)
+            )
+            if user is None:
+                return None
+            draft = session.scalar(
+                select(PerformanceDraftRecord)
+                .where(PerformanceDraftRecord.user_id == user.id)
+                .with_for_update()
+            )
+            if draft is None:
+                return None
+            if draft.expires_at <= now:
+                session.delete(draft)
+                return PerformanceDraftResult("expired")
+            step = draft.current_step
+            payload = dict(draft.payload or {})
+            value = text.strip()
+            try:
+                next_step = self._advance_performance_draft(
+                    session, draft, payload, step, value, image_url, image_alt, now
+                )
+            except (KeyError, ValueError):
+                return PerformanceDraftResult("invalid", current_step=step)
+            if isinstance(next_step, PerformanceDraftResult):
+                return next_step
+            draft.payload = payload
+            draft.current_step = next_step
+            draft.last_activity_at = now
+            draft.expires_at = now + timedelta(minutes=30)
+            return PerformanceDraftResult("advanced", current_step=next_step)
+
+    def performance_draft_step(
+        self, platform_id: str, now: datetime
+    ) -> str | None:
+        with self._session() as session:
+            return session.scalar(
+                select(PerformanceDraftRecord.current_step)
+                .join(UserRecord, UserRecord.id == PerformanceDraftRecord.user_id)
+                .where(
+                    UserRecord.platform_id == platform_id,
+                    PerformanceDraftRecord.expires_at > now,
+                )
+            )
+
+    def _advance_performance_draft(
+        self,
+        session: Session,
+        draft: PerformanceDraftRecord,
+        payload: dict[str, Any],
+        step: str,
+        value: str,
+        image_url: str | None,
+        image_alt: str | None,
+        now: datetime,
+    ) -> str | PerformanceDraftResult:
+        if step == "title":
+            if not 1 <= len(value) <= 50:
+                raise ValueError
+            payload["title"] = value
+            return "introduction"
+        if step == "introduction":
+            if not 1 <= len(value) <= 500:
+                raise ValueError
+            payload["introduction"] = value
+            return "scheduled_at"
+        if step == "scheduled_at":
+            payload["scheduled_at"] = parse_performance_datetime(value, now).isoformat()
+            return "participants"
+        if step == "participants":
+            names = parse_performance_participants(value)
+            found = set(
+                session.scalars(
+                    select(UserRecord.display_name).where(
+                        UserRecord.display_name.in_(names)
+                    )
+                )
+            )
+            if found != set(names):
+                raise ValueError
+            payload["participants"] = list(names)
+            return "cover"
+        if step == "cover":
+            if value == "/跳过":
+                payload["cover_url"] = None
+                payload["cover_alt"] = None
+            elif image_url is not None:
+                payload["cover_url"] = image_url
+                payload["cover_alt"] = image_alt
+            else:
+                return PerformanceDraftResult("image_required", current_step=step)
+            return "confirm"
+        if step != "confirm":
+            raise RuntimeError(f"unknown performance draft step: {step}")
+        if value != "/确认":
+            return PerformanceDraftResult("confirmation_required", current_step=step)
+        return self._submit_performance_draft(session, draft, payload, now)
+
+    def _submit_performance_draft(
+        self,
+        session: Session,
+        draft: PerformanceDraftRecord,
+        payload: dict[str, Any],
+        now: datetime,
+    ) -> PerformanceDraftResult:
+        self._lock_gameplay_gate(session)
+        scheduled_at = datetime.fromisoformat(payload["scheduled_at"])
+        live_filter = PerformanceReservationRecord.state.in_(PERFORMANCE_ACTIVE_STATES)
+        if session.scalar(
+            select(PerformanceReservationRecord.id)
+            .where(
+                PerformanceReservationRecord.owner_user_id == draft.user_id,
+                live_filter,
+            )
+            .with_for_update()
+        ) is not None:
+            return PerformanceDraftResult("owner_busy", current_step="confirm")
+        if session.scalar(
+            select(PerformanceReservationRecord.id)
+            .where(
+                PerformanceReservationRecord.event_date == scheduled_at.date(),
+                live_filter,
+            )
+            .with_for_update()
+        ) is not None:
+            return PerformanceDraftResult("date_taken", current_step="confirm")
+        participants = list(
+            session.scalars(
+                select(UserRecord)
+                .where(UserRecord.display_name.in_(payload["participants"]))
+                .with_for_update()
+            )
+        )
+        by_name = {participant.display_name: participant for participant in participants}
+        reservation = PerformanceReservationRecord(
+            owner_user_id=draft.user_id,
+            group_chat_id=draft.group_chat_id,
+            title=payload["title"],
+            introduction=payload["introduction"],
+            scheduled_at=scheduled_at,
+            event_date=scheduled_at.date(),
+            cover_url=payload.get("cover_url"),
+            cover_alt=payload.get("cover_alt"),
+            state="pending_review",
+            submitted_at=now,
+        )
+        session.add(reservation)
+        session.flush()
+        session.add_all(
+            PerformanceParticipantRecord(
+                reservation_id=reservation.id,
+                user_id=by_name[name].id,
+                display_order=index,
+            )
+            for index, name in enumerate(payload["participants"], 1)
+        )
+        session.delete(draft)
+        session.flush()
+        return PerformanceDraftResult(
+            "submitted", reservation=self._performance_view(session, reservation)
+        )
+
+    def own_performance(
+        self, platform_id: str, now: datetime
+    ) -> PerformanceView | None:
+        del now
+        with self._session() as session:
+            reservation = session.scalar(
+                select(PerformanceReservationRecord)
+                .join(UserRecord, UserRecord.id == PerformanceReservationRecord.owner_user_id)
+                .where(
+                    UserRecord.platform_id == platform_id,
+                    PerformanceReservationRecord.state.in_(PERFORMANCE_ACTIVE_STATES),
+                )
+                .order_by(PerformanceReservationRecord.submitted_at.desc())
+            )
+            return None if reservation is None else self._performance_view(session, reservation)
+
+    def upcoming_performances(
+        self, group_chat_id: UUID, now: datetime
+    ) -> tuple[PerformanceView, ...]:
+        with self._session() as session:
+            reservations = session.scalars(
+                select(PerformanceReservationRecord)
+                .where(
+                    PerformanceReservationRecord.group_chat_id == group_chat_id,
+                    PerformanceReservationRecord.state.in_(("approved", "previewed", "waiting")),
+                    PerformanceReservationRecord.scheduled_at >= now,
+                )
+                .order_by(PerformanceReservationRecord.scheduled_at)
+            )
+            return tuple(self._performance_view(session, row) for row in reservations)
+
+    def cancel_own_performance(
+        self, platform_id: str, now: datetime
+    ) -> PerformanceActionResult:
+        now = now.astimezone(BEIJING)
+        with self._session() as session:
+            user = session.scalar(
+                select(UserRecord).where(UserRecord.platform_id == platform_id)
+            )
+            if user is None:
+                return PerformanceActionResult("not_joined")
+            draft = session.scalar(
+                select(PerformanceDraftRecord)
+                .where(PerformanceDraftRecord.user_id == user.id)
+                .with_for_update()
+            )
+            if draft is not None:
+                session.delete(draft)
+                return PerformanceActionResult("draft_cancelled")
+            reservation = session.scalar(
+                select(PerformanceReservationRecord)
+                .where(
+                    PerformanceReservationRecord.owner_user_id == user.id,
+                    PerformanceReservationRecord.state.in_(PERFORMANCE_ACTIVE_STATES),
+                )
+                .with_for_update()
+            )
+            if reservation is None:
+                return PerformanceActionResult("not_found")
+            if (
+                reservation.pre_notice_sent_at is not None
+                or now >= reservation.scheduled_at - timedelta(minutes=5)
+            ):
+                return PerformanceActionResult(
+                    "too_late", self._performance_view(session, reservation)
+                )
+            reservation.state = "cancelled"
+            reservation.cancelled_at = now
+            reservation.cancellation_reason = "发起人取消"
+            return PerformanceActionResult(
+                "cancelled", self._performance_view(session, reservation)
+            )
 
     @staticmethod
     def _default_dark_market_limit(rank: RankRecord) -> int:

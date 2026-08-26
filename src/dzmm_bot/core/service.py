@@ -2,6 +2,8 @@ from dataclasses import dataclass
 from typing import Protocol
 from uuid import UUID, uuid4
 
+import httpx
+
 from dzmm_bot.runtime.contracts import InboundMessage
 
 from .ai_mentions import ai_mention_content
@@ -23,6 +25,7 @@ _DIRECT_COMMANDS = {
     "/答案", "/继续", "/收手", "/投降", "/跳过", "/结束游戏", "/看牌",
     "/上架暗网", "/取消上架", "/确认", "/报价", "/公开", "/不公开",
     "/查看暗网", "/登陆暗网", "/登录暗网", "/暗网", "/确认收货", "/投诉",
+    "/我的公演预约", "/取消公演预约", "/延期",
 }
 _RANDOM_EVENT_INDEPENDENT_COMMANDS = {
     "/发红包", "/抢红包", "/打赏", "/余额", "/当前游戏"
@@ -113,7 +116,44 @@ class CoreService:
                 return ReceiveResult(stored.id, True)
             if message.source_type == "direct":
                 parts = message.content.strip().split(maxsplit=1)
-                if parts and parts[0] in _DIRECT_COMMANDS:
+                command = parts[0] if parts else ""
+                draft_step = self._repository.performance_draft_step(
+                    message.sender_platform_id, message.received_at
+                )
+                if draft_step is not None and command not in {
+                    "/我的公演预约", "/取消公演预约", "/延期"
+                }:
+                    if message.content_type == "image" and draft_step == "cover":
+                        if self._cover_image_validator is None or message.image_url is None:
+                            direct_reply = "公演封面读取失败，请重新发送图片。"
+                        else:
+                            try:
+                                cover = self._cover_image_validator.validate(
+                                    message.image_url
+                                )
+                            except ValueError as error:
+                                direct_reply = str(error)
+                            except httpx.HTTPError:
+                                direct_reply = "公演封面读取失败，请重新发送图片。"
+                            else:
+                                result = self._repository.consume_performance_draft_input(
+                                    message.sender_platform_id,
+                                    stored.id,
+                                    message.received_at,
+                                    text=message.content,
+                                    image_url=cover.url,
+                                    image_alt=message.image_alt,
+                                )
+                                direct_reply = self._performance_draft_reply(result)
+                    else:
+                        result = self._repository.consume_performance_draft_input(
+                            message.sender_platform_id,
+                            stored.id,
+                            message.received_at,
+                            text=message.content,
+                        )
+                        direct_reply = self._performance_draft_reply(result)
+                elif parts and command in _DIRECT_COMMANDS:
                     direct_reply = self._command_handler.handle(message)
                 elif not message.content.lstrip().startswith("/"):
                     direct_reply = self._submission_handler.handle(message)
@@ -363,6 +403,37 @@ class CoreService:
             "starting_price": "请发送起拍价（1–99999 的整数）。",
         }
         return prompts.get(result.step)
+
+    @staticmethod
+    def _performance_draft_reply(result):
+        if result is None:
+            return None
+        if result.status == "expired":
+            return "公演预约草稿已超时，请回群重新发送 /预约公演。"
+        if result.status == "submitted":
+            return "公演预约已提交审核。"
+        if result.status == "date_taken":
+            return "该日期已有公演预约，请修改时间后重新提交。"
+        if result.status == "owner_busy":
+            return "你已有一个未结束的公演预约。"
+        if result.status == "image_required":
+            return "请发送公演封面图片，或发送 /跳过。"
+        if result.status == "confirmation_required":
+            return "预约信息已填写完成，发送 /确认 提交审核。"
+        if result.status == "invalid":
+            return {
+                "title": "标题需为 1–50 字，请重新发送。",
+                "introduction": "简介需为 1–500 字，请重新发送。",
+                "scheduled_at": "时间格式或范围无效，请按 YYYY/MM/DD-HH:MM:SS 重新发送。",
+                "participants": "请填写 1–30 名不重复的已入职员工名称。",
+            }.get(result.current_step, "填写内容无效，请重新发送。")
+        return {
+            "introduction": "请发送公演简介（1–500字）。",
+            "scheduled_at": "请发送公演时间，格式：2026/12/01-12:00:00。",
+            "participants": "请发送参演人员名称，多人请用顿号分隔（1–30人）。",
+            "cover": "请发送公演封面图片，或发送 /跳过。",
+            "confirm": "预约信息已填写完成，发送 /确认 提交审核。",
+        }.get(result.current_step)
 
     def _enqueue_replies(
         self,

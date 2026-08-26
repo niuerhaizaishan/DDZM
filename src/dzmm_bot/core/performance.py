@@ -1,10 +1,13 @@
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
+import re
 from typing import Protocol
 from urllib.parse import urlsplit
 from uuid import UUID
 
 import httpx
+
+from .schema import BEIJING
 
 
 PERFORMANCE_ACTIVE_STATES = frozenset(
@@ -96,3 +99,31 @@ class HttpCoverImageValidator:
         if mime_type is None:
             raise ValueError("公演封面仅支持 JPEG、PNG、WebP")
         return ValidatedCover(url=url, mime_type=mime_type, byte_size=len(body))
+
+
+def parse_performance_datetime(value: str, now: datetime) -> datetime:
+    try:
+        parsed = datetime.strptime(
+            value.strip(), "%Y/%m/%d-%H:%M:%S"
+        ).replace(tzinfo=BEIJING)
+    except ValueError as error:
+        raise ValueError("公演时间格式应为 YYYY/MM/DD-HH:MM:SS") from error
+    local_now = now.astimezone(BEIJING)
+    if parsed < local_now + timedelta(minutes=30):
+        raise ValueError("公演时间至少需要提前 30 分钟")
+    if parsed > local_now + timedelta(days=30):
+        raise ValueError("只能预约未来 30 天内的公演")
+    return parsed
+
+
+def parse_performance_participants(value: str) -> tuple[str, ...]:
+    names = tuple(
+        part.strip()
+        for part in re.split(r"[、,，\n]+", value.strip())
+        if part.strip()
+    )
+    if not 1 <= len(names) <= 30:
+        raise ValueError("参演人员需要填写 1–30 名已入职员工")
+    if len(set(names)) != len(names):
+        raise ValueError("参演人员不能重复")
+    return names
