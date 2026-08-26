@@ -2215,7 +2215,7 @@ def test_department_commands_apply_only_after_target_department_approval():
     assert "核心技术部" in _latest_reply(factory)
 
 
-def test_department_headcount_commands_show_totals_and_rank_counts_only():
+def test_department_headcount_commands_show_totals_rank_counts_and_members():
     from dzmm_bot.core.schema import DepartmentRecord, RankRecord, UserRecord
 
     service, repository, factory = _service()
@@ -2244,26 +2244,45 @@ def test_department_headcount_commands_show_totals_and_rank_counts_only():
             select(UserRecord).where(UserRecord.platform_id == "tech-2")
         ).rank_id = rank_two.id
 
+    tech_headcount = repository.get_user_department_headcount("mine")
+    assert tech_headcount is not None
+    assert [
+        (rank.rank_name, [member.display_name for member in rank.members])
+        for rank in tech_headcount.ranks
+    ] == [
+        ("实习生", ["查询人", "技术甲"]),
+        ("正式员工", ["技术乙"]),
+    ]
+    all_headcounts = repository.list_department_headcounts()
+    listed_tech = next(
+        item for item in all_headcounts if item.department_name == "核心技术部"
+    )
+    assert [
+        (rank.rank_name, [member.display_name for member in rank.members])
+        for rank in listed_tech.ranks
+    ] == [
+        ("实习生", ["查询人", "技术甲"]),
+        ("正式员工", ["技术乙"]),
+    ]
+
     all_result = _receive(service, "all-counts", "mine", "/部门人数", now)
-    all_reply = _replies_for(factory, all_result.message_id)[0]
+    all_reply = "\n".join(_replies_for(factory, all_result.message_id))
     assert all_reply == (
         "【部门人数统计】\n"
         "未分配部门：共 1 人\n实习生：1 人\n"
-        "最高职位者：实习生 未分配同事\n\n"
+        "职位人员：\n1. 实习生：未分配同事\n\n"
         "核心技术部：共 3 人\n实习生：2 人\n正式员工：1 人\n"
-        "最高职位者：正式员工 技术乙"
+        "职位人员：\n1. 正式员工：技术乙\n2. 实习生：查询人、技术甲"
     )
-    assert "查询人" not in all_reply
-    assert "技术甲" not in all_reply
 
     mine_result = _receive(
         service, "mine-counts", "mine", "/我的部门人数", now
     )
-    assert _replies_for(factory, mine_result.message_id) == [
+    assert "\n".join(_replies_for(factory, mine_result.message_id)) == (
         "【我的部门人数统计】\n"
         "核心技术部：共 3 人\n实习生：2 人\n正式员工：1 人\n"
-        "最高职位者：正式员工 技术乙"
-    ]
+        "职位人员：\n1. 正式员工：技术乙\n2. 实习生：查询人、技术甲"
+    )
 
 
 def test_department_headcount_shows_all_tied_highest_rank_members():
@@ -2295,8 +2314,65 @@ def test_department_headcount_shows_all_tied_highest_rank_members():
     result = _receive(service, "duplicate-heads", "viewer", "/部门人数", now)
     reply = _replies_for(factory, result.message_id)[0]
 
-    assert "最高职位者：正式员工 最高甲、最高乙" in reply
+    assert "1. 正式员工：最高甲、最高乙" in reply
+    assert "2. 实习生：查询人" in reply
     assert "查询人 #" not in reply
+
+
+def test_department_headcount_shows_all_members_of_top_three_ranks():
+    from dzmm_bot.core.schema import DepartmentRecord, RankRecord, UserRecord
+
+    service, repository, factory = _service()
+    now = datetime(2026, 8, 12, 12, 0, tzinfo=UTC)
+    employees = (
+        ("viewer", "查询人", 1),
+        ("rank-two", "正式甲", 2),
+        ("rank-three", "组长甲", 3),
+        ("rank-four-a", "副主管甲", 4),
+        ("rank-four-b", "副主管乙", 4),
+    )
+    for platform_id, name, _ in employees:
+        repository.create_user(platform_id, name, now, 0)
+    with factory.begin() as session:
+        tech = session.scalar(
+            select(DepartmentRecord).where(DepartmentRecord.name == "核心技术部")
+        )
+        ranks = {
+            rank.sort_order: rank
+            for rank in session.scalars(
+                select(RankRecord).where(RankRecord.sort_order.in_((1, 2, 3, 4)))
+            )
+        }
+        assert tech is not None
+        assert set(ranks) == {1, 2, 3, 4}
+        for platform_id, _, sort_order in employees:
+            employee = session.scalar(
+                select(UserRecord).where(UserRecord.platform_id == platform_id)
+            )
+            employee.department_id = tech.id
+            employee.rank_id = ranks[sort_order].id
+
+    headcount = repository.get_user_department_headcount("viewer")
+    assert headcount is not None
+    assert [
+        (rank.rank_name, [member.display_name for member in rank.members])
+        for rank in headcount.ranks
+    ] == [
+        ("实习生", ["查询人"]),
+        ("正式员工", ["正式甲"]),
+        ("小组长", ["组长甲"]),
+        ("副主管", ["副主管甲", "副主管乙"]),
+    ]
+
+    result = _receive(service, "top-three-ranks", "viewer", "/部门人数", now)
+    reply = _replies_for(factory, result.message_id)[0]
+
+    assert "职位人员：\n" in reply
+    assert "1. 副主管：副主管甲、副主管乙" in reply
+    assert "2. 小组长：组长甲" in reply
+    assert "3. 正式员工：正式甲" in reply
+    assert "4. 实习生" not in reply
+    assert "查询人" not in reply
 
 
 @pytest.mark.parametrize("command", ("/部门人数", "/我的部门人数"))

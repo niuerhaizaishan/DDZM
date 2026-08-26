@@ -1255,22 +1255,27 @@ class GroupCommandHandler:
                 f"{item.department_name}：共 {item.total_count} 人",
                 *(f"{rank.rank_name}：{rank.count} 人" for rank in item.ranks),
             ]
-            if item.highest_rank_name and item.highest_rank_members:
-                name_counts = Counter(
-                    member.display_name for member in item.highest_rank_members
-                )
-                member_labels = [
-                    (
-                        f"{member.display_name} "
-                        f"{format_employee_number(member.employee_number)}"
-                        if name_counts[member.display_name] > 1
-                        else member.display_name
+            top_ranks = [
+                rank for rank in reversed(item.ranks) if rank.members
+            ][:3]
+            if top_ranks:
+                lines.append("职位人员：")
+                for index, rank in enumerate(top_ranks, 1):
+                    name_counts = Counter(
+                        member.display_name for member in rank.members
                     )
-                    for member in item.highest_rank_members
-                ]
-                lines.append(
-                    f"最高职位者：{item.highest_rank_name} {'、'.join(member_labels)}"
-                )
+                    member_labels = [
+                        (
+                            f"{member.display_name} "
+                            f"{format_employee_number(member.employee_number)}"
+                            if name_counts[member.display_name] > 1
+                            else member.display_name
+                        )
+                        for member in rank.members
+                    ]
+                    lines.append(
+                        f"{index}. {rank.rank_name}：{'、'.join(member_labels)}"
+                    )
             blocks.append("\n".join(lines))
         return self._reply(
             command, "shown", received_at, {"{部门统计}": "\n\n".join(blocks)}

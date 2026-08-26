@@ -1538,16 +1538,17 @@ def balance_source_label(source: str) -> str:
 
 
 @dataclass(frozen=True)
+class DepartmentRankMember:
+    display_name: str
+    employee_number: int
+
+
+@dataclass(frozen=True)
 class DepartmentRankHeadcount:
     rank_name: str
     count: int
     sort_order: int | None
-
-
-@dataclass(frozen=True)
-class DepartmentHighestRankMember:
-    display_name: str
-    employee_number: int
+    members: tuple[DepartmentRankMember, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1556,8 +1557,6 @@ class DepartmentHeadcount:
     department_name: str
     total_count: int
     ranks: tuple[DepartmentRankHeadcount, ...]
-    highest_rank_name: str | None
-    highest_rank_members: tuple[DepartmentHighestRankMember, ...]
 
 
 @dataclass(frozen=True)
@@ -18926,8 +18925,9 @@ class CoreRepository:
                     sort_order=sort_order,
                 )
             )
-        highest_ranks: dict[UUID, tuple[str, int]] = {}
-        highest_rank_members: dict[UUID, list[DepartmentHighestRankMember]] = {}
+        rank_members: dict[
+            tuple[UUID, int], list[DepartmentRankMember]
+        ] = {}
         department_ids = [key[0] for key in grouped]
         if department_ids:
             member_rows = session.execute(
@@ -18946,31 +18946,48 @@ class CoreRepository:
                     UserRecord.employee_number,
                 )
             ).all()
-            for member_department_id, rank_name, sort_order, display_name, employee_number in member_rows:
-                highest_rank = highest_ranks.get(member_department_id)
-                if highest_rank is None:
-                    highest_ranks[member_department_id] = (rank_name, sort_order)
-                    highest_rank_members[member_department_id] = []
-                elif sort_order != highest_rank[1]:
-                    continue
-                highest_rank_members[member_department_id].append(
-                    DepartmentHighestRankMember(display_name, employee_number)
+            for (
+                member_department_id,
+                _,
+                sort_order,
+                display_name,
+                employee_number,
+            ) in member_rows:
+                rank_members.setdefault(
+                    (member_department_id, sort_order), []
+                ).append(
+                    DepartmentRankMember(display_name, employee_number)
                 )
         results: list[DepartmentHeadcount] = []
         for (current_department_id, department_name, _), ranks in sorted(
             grouped.items(), key=lambda item: (not item[0][2], item[0][1])
         ):
+            sorted_ranks = sorted(
+                ranks,
+                key=lambda rank: (
+                    rank.sort_order is None,
+                    rank.sort_order if rank.sort_order is not None else 0,
+                ),
+            )
+            rank_order_known = all(
+                rank.sort_order is not None for rank in sorted_ranks
+            )
             ordered_ranks = tuple(
-                sorted(
-                    ranks,
-                    key=lambda rank: (
-                        rank.sort_order is None,
-                        rank.sort_order if rank.sort_order is not None else 0,
+                DepartmentRankHeadcount(
+                    rank_name=rank.rank_name,
+                    count=rank.count,
+                    sort_order=rank.sort_order,
+                    members=(
+                        tuple(
+                            rank_members.get(
+                                (current_department_id, rank.sort_order), ()
+                            )
+                        )
+                        if rank_order_known and rank.sort_order is not None
+                        else ()
                     ),
                 )
-            )
-            highest_rank_known = all(
-                rank.sort_order is not None for rank in ordered_ranks
+                for rank in sorted_ranks
             )
             results.append(
                 DepartmentHeadcount(
@@ -18978,17 +18995,6 @@ class CoreRepository:
                     department_name=department_name,
                     total_count=sum(rank.count for rank in ordered_ranks),
                     ranks=ordered_ranks,
-                    highest_rank_name=(
-                        highest_ranks[current_department_id][0]
-                        if highest_rank_known
-                        and current_department_id in highest_ranks
-                        else None
-                    ),
-                    highest_rank_members=tuple(
-                        highest_rank_members.get(current_department_id, ())
-                        if highest_rank_known
-                        else ()
-                    ),
                 )
             )
         return tuple(results)

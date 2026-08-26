@@ -6956,7 +6956,7 @@ def test_user_department_headcount_returns_only_current_department(
 def test_department_headcounts_include_all_highest_rank_members(
     repository, session_factory, now
 ):
-    from dzmm_bot.core.repository import DepartmentHighestRankMember
+    from dzmm_bot.core.repository import DepartmentRankMember
     from dzmm_bot.core.schema import DepartmentRecord, RankRecord, UserRecord
 
     repository.create_user("junior", "初级员工", now, 0)
@@ -6983,10 +6983,11 @@ def test_department_headcounts_include_all_highest_rank_members(
     headcount = repository.get_user_department_headcount("junior")
 
     assert headcount is not None
-    assert headcount.highest_rank_name == "正式员工"
-    assert headcount.highest_rank_members == (
-        DepartmentHighestRankMember("最高甲", first.employee_number),
-        DepartmentHighestRankMember("最高乙", second.employee_number),
+    highest_rank = headcount.ranks[-1]
+    assert highest_rank.rank_name == "正式员工"
+    assert highest_rank.members == (
+        DepartmentRankMember("最高甲", first.employee_number),
+        DepartmentRankMember("最高乙", second.employee_number),
     )
 
 
@@ -7025,8 +7026,7 @@ def test_department_headcounts_hide_highest_rank_when_any_rank_is_unknown(
         ("正式员工", 1),
         ("未知职位", 1),
     ]
-    assert headcount.highest_rank_name is None
-    assert headcount.highest_rank_members == ()
+    assert all(rank.members == () for rank in headcount.ranks)
 
 
 def test_department_application_changes_department_only_after_eligible_approval(
