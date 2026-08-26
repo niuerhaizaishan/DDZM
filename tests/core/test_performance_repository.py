@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from dzmm_bot.core import schema
+from dzmm_bot.core.performance import parse_postponement
 from dzmm_bot.core.repository import CoreRepository
 
 
@@ -252,3 +253,49 @@ def test_cancel_and_query_performance(reservation_context) -> None:
 
     assert cancelled.status == "cancelled"
     assert repository.own_performance("owner", now) is None
+
+
+@pytest.mark.parametrize(
+    ("raw", "minutes"), (("30m", 30), ("1h", 60), ("1d", 1440))
+)
+def test_parse_postponement(raw, minutes) -> None:
+    assert parse_postponement(raw) == timedelta(minutes=minutes)
+
+
+@pytest.mark.parametrize("raw", ("", "0m", "1H", "1.5h", "30", "-1d"))
+def test_postponement_rejects_invalid_duration(raw) -> None:
+    with pytest.raises(ValueError, match="延期格式"):
+        parse_postponement(raw)
+
+
+def test_approved_postponement_moves_calendar_atomically(reservation_context) -> None:
+    repository, group, now = reservation_context
+    submitted = _complete_draft(repository, group, now)
+    repository.review_performance(submitted.reservation.id, True, "admin:a", now)
+
+    requested = repository.request_performance_postponement(
+        "owner", timedelta(days=1), now
+    )
+    reviewed = repository.review_performance_postponement(
+        requested.request.id, True, "admin:a", now
+    )
+
+    assert reviewed.status == "approved"
+    assert reviewed.reservation.event_date == (now + timedelta(days=2)).date()
+    assert reviewed.reservation.pre_notice_sent_at is None
+
+
+def test_only_one_postponement_can_be_pending(reservation_context) -> None:
+    repository, group, now = reservation_context
+    submitted = _complete_draft(repository, group, now)
+    repository.review_performance(submitted.reservation.id, True, "admin:a", now)
+
+    first = repository.request_performance_postponement(
+        "owner", timedelta(hours=1), now
+    )
+    second = repository.request_performance_postponement(
+        "owner", timedelta(hours=2), now
+    )
+
+    assert first.status == "requested"
+    assert second.status == "already_pending"

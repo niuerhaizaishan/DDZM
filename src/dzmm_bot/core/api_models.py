@@ -142,6 +142,25 @@ class ReviewPerformanceRequest(ApiModel):
     reason: str | None = Field(default=None, max_length=500)
 
 
+class ReviewPerformanceExtensionRequest(ApiModel):
+    actor: str = Field(min_length=1, max_length=255)
+    now: AwareDatetime
+    reason: str | None = Field(default=None, max_length=500)
+    allow_post_preview: bool = False
+
+
+class PerformanceExtensionResponse(ApiModel):
+    id: UUID
+    reservation_id: UUID
+    duration_minutes: int
+    original_scheduled_at: datetime
+    proposed_scheduled_at: datetime
+    state: str
+    rejection_reason: str | None
+    requested_at: datetime
+    reviewed_at: datetime | None
+
+
 class PerformanceResponse(ApiModel):
     id: UUID
     owner_platform_id: str
@@ -157,6 +176,7 @@ class PerformanceResponse(ApiModel):
     state: str
     pre_notice_sent_at: datetime | None
     tipping_deadline: datetime | None
+    extension: PerformanceExtensionResponse | None
 
 
 class GroupChatTargetResponse(ApiModel):

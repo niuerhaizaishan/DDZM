@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 from dzmm_bot.runtime.contracts import InboundMessage
 
 from .group_games import GROUP_GAME_COMMANDS, GROUP_GAME_LABELS
+from .performance import parse_postponement
 from .reply_templates import render_template, template_definition
 from .schema import PRIMARY_GROUP_CHAT_ID
 from .repository import (
@@ -100,10 +101,17 @@ class GroupCommandHandler:
             )
             if view is None:
                 return "你当前没有公演预约。"
+            extension_text = ""
+            if view.extension is not None:
+                extension_text = (
+                    f"\n延期：{view.extension.state}｜"
+                    f"{view.extension.original_scheduled_at.strftime('%Y/%m/%d-%H:%M:%S')} → "
+                    f"{view.extension.proposed_scheduled_at.strftime('%Y/%m/%d-%H:%M:%S')}"
+                )
             return (
                 f"公演：{view.title}\n状态：{view.state}\n"
                 f"时间：{view.scheduled_at.strftime('%Y/%m/%d-%H:%M:%S')}\n"
-                f"参演人员：{'、'.join(view.participant_names)}"
+                f"参演人员：{'、'.join(view.participant_names)}{extension_text}"
             )
         if command == "/取消公演预约":
             result = self._repository.cancel_own_performance(
@@ -115,6 +123,35 @@ class GroupCommandHandler:
                 "too_late": "公演已进入开场前 5 分钟，请联系董事会成员处理。",
                 "not_joined": "请先用 /入职 名称 加入摸鱼公司。",
             }.get(result.status, "你当前没有可取消的公演预约。")
+        if command == "/延期":
+            if message.source_type != "direct":
+                return "请私聊总监事发送 /延期 30m、/延期 1h 或 /延期 1d。"
+            parts = content.split(maxsplit=1)
+            if len(parts) != 2:
+                return "延期格式应为 /延期 30m、/延期 1h 或 /延期 1d。"
+            try:
+                duration = parse_postponement(parts[1])
+            except ValueError as error:
+                return f"{error}。"
+            result = self._repository.request_performance_postponement(
+                message.sender_platform_id, duration, received_at
+            )
+            messages = {
+                "not_joined": "请先用 /入职 名称 加入摸鱼公司。",
+                "not_schedulable": "你当前没有可延期的公演预约。",
+                "expired": "原定公演时间已到，不能再申请延期。",
+                "already_pending": "当前已有一条待审核延期申请。",
+                "out_of_range": "延期后的时间须在未来 30 分钟至 30 天内。",
+                "date_taken": "延期目标日期已有公演，请更换延期时长。",
+                "invalid_duration": "延期格式应为 /延期 30m、/延期 1h 或 /延期 1d。",
+            }
+            if result.status != "requested":
+                return messages.get(result.status, "延期申请失败，请稍后重试。")
+            return (
+                f"已申请延期 {result.request.duration_minutes} 分钟，"
+                f"新时间为 {result.request.proposed_scheduled_at.strftime('%Y/%m/%d-%H:%M:%S')}，"
+                "等待管理员审核。"
+            )
         if command == "/公演日程":
             if group_chat_id is None:
                 return "请在群聊中发送 /公演日程。"

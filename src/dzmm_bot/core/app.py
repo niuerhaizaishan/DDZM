@@ -63,8 +63,10 @@ from .api_models import (
     ProfileImageUploadClaimResponse,
     ProfileImageUploadStatusResponse,
     ProfileSettingsResponse,
+    PerformanceExtensionResponse,
     PerformanceResponse,
     PerformanceSettingsResponse,
+    ReviewPerformanceExtensionRequest,
     ReviewPerformanceRequest,
     UpdatePerformanceSettingsRequest,
     HealthResponse,
@@ -502,6 +504,61 @@ def create_app(
         except ValueError as error:
             raise HTTPException(status.HTTP_409_CONFLICT, str(error))
         return _performance_response(view)
+
+    @app.post(
+        "/internal/game/performance-extensions/{request_id}/approve",
+        response_model=PerformanceResponse,
+    )
+    def approve_performance_extension(
+        request_id: UUID,
+        request: ReviewPerformanceExtensionRequest,
+        _: Annotated[None, Depends(authorize)],
+    ) -> PerformanceResponse:
+        try:
+            result = repository.review_performance_postponement(
+                request_id,
+                True,
+                request.actor,
+                request.now,
+                allow_post_preview=request.allow_post_preview,
+            )
+        except LookupError as error:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(error))
+        except PermissionError as error:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, str(error))
+        except ValueError as error:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(error))
+        if result.reservation is None:
+            raise HTTPException(status.HTTP_409_CONFLICT, result.status)
+        return _performance_response(result.reservation)
+
+    @app.post(
+        "/internal/game/performance-extensions/{request_id}/reject",
+        response_model=PerformanceResponse,
+    )
+    def reject_performance_extension(
+        request_id: UUID,
+        request: ReviewPerformanceExtensionRequest,
+        _: Annotated[None, Depends(authorize)],
+    ) -> PerformanceResponse:
+        try:
+            result = repository.review_performance_postponement(
+                request_id,
+                False,
+                request.actor,
+                request.now,
+                request.reason,
+                allow_post_preview=request.allow_post_preview,
+            )
+        except LookupError as error:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(error))
+        except PermissionError as error:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, str(error))
+        except ValueError as error:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(error))
+        if result.reservation is None:
+            raise HTTPException(status.HTTP_409_CONFLICT, result.status)
+        return _performance_response(result.reservation)
 
     @app.delete(
         "/internal/group-chats/{group_id}", response_model=GroupChatResponse
@@ -2848,6 +2905,19 @@ def _performance_response(view) -> PerformanceResponse:
         state=view.state,
         pre_notice_sent_at=view.pre_notice_sent_at,
         tipping_deadline=view.tipping_deadline,
+        extension=None
+        if view.extension is None
+        else PerformanceExtensionResponse(
+            id=view.extension.id,
+            reservation_id=view.extension.reservation_id,
+            duration_minutes=view.extension.duration_minutes,
+            original_scheduled_at=view.extension.original_scheduled_at,
+            proposed_scheduled_at=view.extension.proposed_scheduled_at,
+            state=view.extension.state,
+            rejection_reason=view.extension.rejection_reason,
+            requested_at=view.extension.requested_at,
+            reviewed_at=view.extension.reviewed_at,
+        ),
     )
 
 

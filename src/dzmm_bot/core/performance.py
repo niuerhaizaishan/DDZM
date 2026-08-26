@@ -14,6 +14,20 @@ PERFORMANCE_ACTIVE_STATES = frozenset(
     {"pending_review", "approved", "previewed", "waiting", "performing", "tipping"}
 )
 PERFORMANCE_STAGE_STATES = frozenset({"performing", "tipping"})
+_POSTPONEMENT_PATTERN = re.compile(r"^(?P<amount>[1-9]\d*)(?P<unit>[mhd])$")
+
+
+@dataclass(frozen=True)
+class PerformanceExtensionView:
+    id: UUID
+    reservation_id: UUID
+    duration_minutes: int
+    original_scheduled_at: datetime
+    proposed_scheduled_at: datetime
+    state: str
+    rejection_reason: str | None
+    requested_at: datetime
+    reviewed_at: datetime | None
 
 
 @dataclass(frozen=True)
@@ -32,6 +46,7 @@ class PerformanceView:
     state: str
     pre_notice_sent_at: datetime | None
     tipping_deadline: datetime | None
+    extension: PerformanceExtensionView | None = None
 
 
 @dataclass(frozen=True)
@@ -45,6 +60,13 @@ class PerformanceDraftResult:
 @dataclass(frozen=True)
 class PerformanceActionResult:
     status: str
+    reservation: PerformanceView | None = None
+
+
+@dataclass(frozen=True)
+class PerformancePostponementResult:
+    status: str
+    request: PerformanceExtensionView | None = None
     reservation: PerformanceView | None = None
 
 
@@ -67,6 +89,14 @@ class ValidatedCover:
     url: str
     mime_type: str
     byte_size: int
+
+
+def parse_postponement(value: str) -> timedelta:
+    match = _POSTPONEMENT_PATTERN.fullmatch(value.strip())
+    if match is None:
+        raise ValueError("延期格式应为 /延期 30m、/延期 1h 或 /延期 1d")
+    factor = {"m": 1, "h": 60, "d": 1440}[match.group("unit")]
+    return timedelta(minutes=int(match.group("amount")) * factor)
 
 
 class CoverImageValidator(Protocol):

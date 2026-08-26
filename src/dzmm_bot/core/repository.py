@@ -63,6 +63,8 @@ from .performance import (
     PERFORMANCE_ACTIVE_STATES,
     PerformanceActionResult,
     PerformanceDraftResult,
+    PerformanceExtensionView,
+    PerformancePostponementResult,
     PerformanceSettings,
     PerformanceView,
     parse_performance_datetime,
@@ -5877,6 +5879,27 @@ class CoreRepository:
                 .order_by(PerformanceParticipantRecord.display_order)
             )
         )
+        extension_record = session.scalar(
+            select(PerformanceExtensionRequestRecord)
+            .where(
+                PerformanceExtensionRequestRecord.reservation_id == reservation.id
+            )
+            .order_by(PerformanceExtensionRequestRecord.requested_at.desc())
+            .limit(1)
+        )
+        extension = None
+        if extension_record is not None:
+            extension = PerformanceExtensionView(
+                id=extension_record.id,
+                reservation_id=extension_record.reservation_id,
+                duration_minutes=extension_record.duration_minutes,
+                original_scheduled_at=extension_record.original_scheduled_at,
+                proposed_scheduled_at=extension_record.proposed_scheduled_at,
+                state=extension_record.state,
+                rejection_reason=extension_record.rejection_reason,
+                requested_at=extension_record.requested_at,
+                reviewed_at=extension_record.reviewed_at,
+            )
         return PerformanceView(
             id=reservation.id,
             owner_platform_id=owner.platform_id,
@@ -5892,6 +5915,7 @@ class CoreRepository:
             state=reservation.state,
             pre_notice_sent_at=reservation.pre_notice_sent_at,
             tipping_deadline=reservation.tipping_deadline,
+            extension=extension,
         )
 
     def begin_performance_draft(
@@ -6205,6 +6229,237 @@ class CoreRepository:
             reservation.cancellation_reason = "发起人取消"
             return PerformanceActionResult(
                 "cancelled", self._performance_view(session, reservation)
+            )
+
+    @staticmethod
+    def _performance_extension_view(
+        record: PerformanceExtensionRequestRecord,
+    ) -> PerformanceExtensionView:
+        return PerformanceExtensionView(
+            id=record.id,
+            reservation_id=record.reservation_id,
+            duration_minutes=record.duration_minutes,
+            original_scheduled_at=record.original_scheduled_at,
+            proposed_scheduled_at=record.proposed_scheduled_at,
+            state=record.state,
+            rejection_reason=record.rejection_reason,
+            requested_at=record.requested_at,
+            reviewed_at=record.reviewed_at,
+        )
+
+    def request_performance_postponement(
+        self, platform_id: str, duration: timedelta, now: datetime
+    ) -> PerformancePostponementResult:
+        now = now.astimezone(BEIJING)
+        duration_minutes = int(duration.total_seconds() // 60)
+        if duration_minutes <= 0 or duration != timedelta(minutes=duration_minutes):
+            return PerformancePostponementResult("invalid_duration")
+        with self._session() as session:
+            self._lock_gameplay_gate(session)
+            user = session.scalar(
+                select(UserRecord)
+                .where(UserRecord.platform_id == platform_id)
+                .with_for_update()
+            )
+            if user is None:
+                return PerformancePostponementResult("not_joined")
+            reservation = session.scalar(
+                select(PerformanceReservationRecord)
+                .where(
+                    PerformanceReservationRecord.owner_user_id == user.id,
+                    PerformanceReservationRecord.state.in_(
+                        ("pending_review", "approved", "previewed")
+                    ),
+                )
+                .with_for_update()
+            )
+            if reservation is None:
+                return PerformancePostponementResult("not_schedulable")
+            if now >= reservation.scheduled_at:
+                return PerformancePostponementResult("expired")
+            pending = session.scalar(
+                select(PerformanceExtensionRequestRecord)
+                .where(
+                    PerformanceExtensionRequestRecord.reservation_id
+                    == reservation.id,
+                    PerformanceExtensionRequestRecord.state == "pending",
+                )
+                .with_for_update()
+            )
+            if pending is not None:
+                return PerformancePostponementResult(
+                    "already_pending",
+                    self._performance_extension_view(pending),
+                    self._performance_view(session, reservation),
+                )
+            proposed = reservation.scheduled_at + duration
+            if proposed < now + timedelta(minutes=30) or proposed > now + timedelta(days=30):
+                return PerformancePostponementResult("out_of_range")
+            live_filter = PerformanceReservationRecord.state.in_(
+                PERFORMANCE_ACTIVE_STATES
+            )
+            conflict = session.scalar(
+                select(PerformanceReservationRecord.id)
+                .where(
+                    PerformanceReservationRecord.event_date == proposed.date(),
+                    PerformanceReservationRecord.id != reservation.id,
+                    live_filter,
+                )
+                .with_for_update()
+            )
+            if conflict is not None:
+                return PerformancePostponementResult("date_taken")
+            extension = PerformanceExtensionRequestRecord(
+                reservation_id=reservation.id,
+                requester_user_id=user.id,
+                duration_minutes=duration_minutes,
+                original_scheduled_at=reservation.scheduled_at,
+                proposed_scheduled_at=proposed,
+                state="pending",
+                requested_at=now,
+            )
+            session.add(extension)
+            session.flush()
+            return PerformancePostponementResult(
+                "requested",
+                self._performance_extension_view(extension),
+                self._performance_view(session, reservation),
+            )
+
+    def review_performance_postponement(
+        self,
+        request_id: UUID | str,
+        approve: bool,
+        actor: str,
+        now: datetime,
+        reason: str | None = None,
+        allow_post_preview: bool = False,
+    ) -> PerformancePostponementResult:
+        now = now.astimezone(BEIJING)
+        with self._session() as session:
+            self._lock_gameplay_gate(session)
+            extension = session.get(
+                PerformanceExtensionRequestRecord,
+                UUID(str(request_id)),
+                with_for_update=True,
+            )
+            if extension is None:
+                raise LookupError("performance_extension_not_found")
+            reservation = session.get(
+                PerformanceReservationRecord,
+                extension.reservation_id,
+                with_for_update=True,
+            )
+            if reservation is None:
+                raise LookupError("performance_not_found")
+            if extension.state != "pending":
+                raise ValueError("延期申请已经处理")
+            if now >= extension.original_scheduled_at:
+                extension.state = "expired"
+                extension.reviewed_at = now
+                return PerformancePostponementResult(
+                    "expired",
+                    self._performance_extension_view(extension),
+                    self._performance_view(session, reservation),
+                )
+            if reservation.state not in ("pending_review", "approved", "previewed"):
+                extension.state = "expired"
+                extension.reviewed_at = now
+                return PerformancePostponementResult(
+                    "not_schedulable",
+                    self._performance_extension_view(extension),
+                    self._performance_view(session, reservation),
+                )
+            if reservation.pre_notice_sent_at is not None and not allow_post_preview:
+                raise PermissionError("预告发布后仅董事会成员可审批延期")
+            extension.reviewer = actor
+            extension.reviewed_at = now
+            if not approve:
+                extension.state = "rejected"
+                extension.rejection_reason = (reason or "管理员拒绝").strip()
+                self._enqueue_performance_direct_notice(
+                    session,
+                    reservation,
+                    f"公演《{reservation.title}》延期申请未通过：{extension.rejection_reason}",
+                )
+                session.add(
+                    AuditEventRecord(
+                        event_type="performance_postponement_rejected",
+                        payload={
+                            "performance_id": str(reservation.id),
+                            "extension_id": str(extension.id),
+                            "actor": actor,
+                            "reason": extension.rejection_reason,
+                        },
+                        created_at=now,
+                    )
+                )
+                return PerformancePostponementResult(
+                    "rejected",
+                    self._performance_extension_view(extension),
+                    self._performance_view(session, reservation),
+                )
+            proposed = extension.proposed_scheduled_at
+            if proposed < now + timedelta(minutes=30) or proposed > now + timedelta(days=30):
+                raise ValueError("延期后的时间须在未来 30 分钟至 30 天内")
+            conflict = session.scalar(
+                select(PerformanceReservationRecord.id)
+                .where(
+                    PerformanceReservationRecord.event_date == proposed.date(),
+                    PerformanceReservationRecord.id != reservation.id,
+                    PerformanceReservationRecord.state.in_(PERFORMANCE_ACTIVE_STATES),
+                )
+                .with_for_update()
+            )
+            if conflict is not None:
+                raise ValueError("延期目标日期已有公演")
+            preview_was_sent = reservation.pre_notice_sent_at is not None
+            reservation.scheduled_at = proposed
+            reservation.event_date = proposed.date()
+            reservation.pre_notice_sent_at = None
+            if reservation.state == "previewed":
+                reservation.state = "approved"
+            extension.state = "approved"
+            if preview_was_sent:
+                group = session.get(GroupChatRecord, reservation.group_chat_id)
+                if group is not None and group.chatroom_id:
+                    session.add(
+                        OutboundRecord(
+                            inbound_message_id=None,
+                            group_chat_id=group.id,
+                            destination_chatroom_id=group.chatroom_id,
+                            delivery_key=group.chatroom_id,
+                            delivery_kind="group",
+                            text=(
+                                f"公演《{reservation.title}》时间已变更为 "
+                                f"{proposed.strftime('%Y/%m/%d-%H:%M:%S')}。"
+                            ),
+                            reply_index=0,
+                            status="pending",
+                        )
+                    )
+            self._enqueue_performance_direct_notice(
+                session,
+                reservation,
+                f"公演《{reservation.title}》延期已通过，新时间：{proposed.strftime('%Y/%m/%d-%H:%M:%S')}。",
+            )
+            session.add(
+                AuditEventRecord(
+                    event_type="performance_postponement_approved",
+                    payload={
+                        "performance_id": str(reservation.id),
+                        "extension_id": str(extension.id),
+                        "actor": actor,
+                        "original_scheduled_at": extension.original_scheduled_at.isoformat(),
+                        "proposed_scheduled_at": proposed.isoformat(),
+                    },
+                    created_at=now,
+                )
+            )
+            return PerformancePostponementResult(
+                "approved",
+                self._performance_extension_view(extension),
+                self._performance_view(session, reservation),
             )
 
     def get_performance_settings(self) -> PerformanceSettings:

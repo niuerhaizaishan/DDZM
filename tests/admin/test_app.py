@@ -425,6 +425,19 @@ class FakeCore:
         item.update(state="cancelled", cancellation_reason=reason)
         return item
 
+    def review_performance_extension(
+        self, request_id, approve, actor, reason, now, allow_post_preview
+    ):
+        item = next(
+            item
+            for item in self.performances
+            if item.get("extension", {}).get("id") == request_id
+        )
+        item["extension"]["state"] = "approved" if approve else "rejected"
+        if approve:
+            item["scheduled_at"] = item["extension"]["proposed_scheduled_at"]
+        return item
+
     def login_state(self):
         return self.login_state_value
 
@@ -1243,6 +1256,30 @@ def test_admin_can_approve_pending_performance(client, headers, core):
 
     assert response.status_code == 200
     assert response.json()["state"] == "approved"
+
+
+def test_admin_can_approve_performance_postponement(client, headers, core):
+    core.performances.append(
+        {
+            "id": "00000000-0000-0000-0000-000000000777",
+            "scheduled_at": "2026-08-27T12:00:00+08:00",
+            "state": "approved",
+            "extension": {
+                "id": "00000000-0000-0000-0000-000000000778",
+                "proposed_scheduled_at": "2026-08-27T13:00:00+08:00",
+                "state": "pending",
+            },
+        }
+    )
+
+    response = client.post(
+        "/api/game/performance-extensions/00000000-0000-0000-0000-000000000778/approve",
+        headers={**headers, "Idempotency-Key": "approve-postponement"},
+        json={},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["extension"]["state"] == "approved"
 
 
 def test_admin_proxies_categorized_ai_impression_crud(client, headers):

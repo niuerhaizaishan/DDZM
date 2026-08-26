@@ -2047,6 +2047,42 @@ def create_app(
             scope=f"performance:{performance_id}:cancel",
         )
 
+    @app.post("/api/game/performance-extensions/{request_id}/{decision}")
+    def review_performance_extension(
+        request_id: str,
+        decision: str,
+        request: dict,
+        identity: Annotated[AdminIdentity, Depends(authorize)],
+        idempotency_key: Annotated[
+            str | None, Header(alias="Idempotency-Key")
+        ] = None,
+    ) -> JSONResponse:
+        if decision not in {"approve", "reject"}:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown decision")
+        reason = request.get("reason")
+        if decision == "reject" and (
+            not isinstance(reason, str) or not reason.strip()
+        ):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "拒绝原因不能为空")
+        return idempotent_response(
+            identity,
+            idempotency_key,
+            lambda: (
+                200,
+                _relay_core(
+                    lambda: core.review_performance_extension(
+                        request_id,
+                        decision == "approve",
+                        identity.username,
+                        reason.strip() if isinstance(reason, str) else None,
+                        beijing_now().isoformat(),
+                        identity.role == "super_admin",
+                    )
+                ),
+            ),
+            scope=f"performance-extension:{request_id}:{decision}",
+        )
+
     @app.get("/api/game/random-events/submissions")
     def random_event_submissions(
         _: Annotated[AdminIdentity, Depends(authorize)],

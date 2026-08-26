@@ -170,6 +170,16 @@ class AdminCorePort(Protocol):
         force: bool = False,
     ) -> dict: ...
 
+    def review_performance_extension(
+        self,
+        request_id: str,
+        approve: bool,
+        actor: str,
+        reason: str | None,
+        now: str,
+        allow_post_preview: bool,
+    ) -> dict: ...
+
     def get_red_packet_settings(self) -> dict: ...
 
     def set_red_packet_settings(self, settings: dict) -> dict: ...
@@ -618,6 +628,28 @@ class CoreClient:
             f"/internal/game/performances/{performance_id}/cancel",
             params={"force": str(force).lower()},
             json={"actor": actor, "reason": reason, "now": now},
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def review_performance_extension(
+        self,
+        request_id: str,
+        approve: bool,
+        actor: str,
+        reason: str | None,
+        now: str,
+        allow_post_preview: bool,
+    ) -> dict:
+        response = self._client.post(
+            f"/internal/game/performance-extensions/{request_id}/"
+            f"{'approve' if approve else 'reject'}",
+            json={
+                "actor": actor,
+                "reason": reason,
+                "now": now,
+                "allow_post_preview": allow_post_preview,
+            },
         )
         response.raise_for_status()
         return response.json()

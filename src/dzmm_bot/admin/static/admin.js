@@ -1605,7 +1605,12 @@ function performanceStateLabel(state) {
 
 function performanceCard(item, actions = "") {
   const participants = (item.participant_names || []).join("、") || "暂无";
-  return `<article class="data-row"><div><b>${escapeHtml(item.title)}</b><small>${statusBadge(performanceStateLabel(item.state), ["performing", "tipping"].includes(item.state) ? "success" : item.state === "pending_review" ? "warning" : "")}</small><small>发起人：${escapeHtml(item.owner_display_name)} · 时间：${escapeHtml(formatHeartbeat(item.scheduled_at))}</small><small>参演：${escapeHtml(participants)}</small><p>${escapeHtml(item.introduction)}</p>${item.cover_url ? `<small><a href="${escapeHtml(item.cover_url)}" target="_blank" rel="noopener">查看封面</a></small>` : ""}</div>${actions ? `<div class="command-actions">${actions}</div>` : ""}</article>`;
+  const extension = item.extension;
+  const canReviewExtension = extension?.state === "pending" && (!item.pre_notice_sent_at || identity?.role === "super_admin");
+  const extensionText = extension ? `<small>延期：${escapeHtml(performanceStateLabel(extension.state))} · ${escapeHtml(formatHeartbeat(extension.original_scheduled_at))} → ${escapeHtml(formatHeartbeat(extension.proposed_scheduled_at))}</small>` : "";
+  const extensionActions = canReviewExtension ? `<button class="primary" data-performance-extension-action="approve" data-extension-id="${escapeHtml(extension.id)}" type="button">批准延期</button><button class="danger-button" data-performance-extension-action="reject" data-extension-id="${escapeHtml(extension.id)}" type="button">拒绝延期</button>` : "";
+  const allActions = actions + extensionActions;
+  return `<article class="data-row"><div><b>${escapeHtml(item.title)}</b><small>${statusBadge(performanceStateLabel(item.state), ["performing", "tipping"].includes(item.state) ? "success" : item.state === "pending_review" ? "warning" : "")}</small><small>发起人：${escapeHtml(item.owner_display_name)} · 时间：${escapeHtml(formatHeartbeat(item.scheduled_at))}</small><small>参演：${escapeHtml(participants)}</small>${extensionText}<p>${escapeHtml(item.introduction)}</p>${item.cover_url ? `<small><a href="${escapeHtml(item.cover_url)}" target="_blank" rel="noopener">查看封面</a></small>` : ""}</div>${allActions ? `<div class="command-actions">${allActions}</div>` : ""}</article>`;
 }
 
 function renderPerformances(items) {
@@ -3757,6 +3762,35 @@ document.querySelector("#edit-performance-settings").addEventListener("click", a
 });
 
 document.querySelector("#performances-view").addEventListener("click", async (event) => {
+  const extensionButton = event.target.closest("button[data-performance-extension-action]");
+  if (extensionButton) {
+    const {performanceExtensionAction: action, extensionId: id} = extensionButton.dataset;
+    let reason = null;
+    if (action === "reject") {
+      reason = window.prompt("请输入拒绝原因");
+      if (reason === null) return;
+      if (!reason.trim()) {
+        setResult("原因不能为空", "error");
+        return;
+      }
+    } else if (!window.confirm("确认批准该延期申请？")) {
+      return;
+    }
+    try {
+      await runMutation(extensionButton, "处理中…", async () => {
+        await requestGame(`/api/game/performance-extensions/${id}/${action}`, {
+          method: "POST",
+          headers: {"Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID()},
+          body: JSON.stringify(reason === null ? {} : {reason: reason.trim()}),
+        });
+        await loadPerformances();
+      });
+      setResult("延期申请已处理", "success");
+    } catch (error) {
+      setResult(`处理失败（${error.message}）`, "error");
+    }
+    return;
+  }
   const button = event.target.closest("button[data-performance-action]");
   if (!button) return;
   const {performanceAction: action, performanceId: id} = button.dataset;

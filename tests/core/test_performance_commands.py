@@ -201,3 +201,34 @@ def test_performance_requires_direct_room(command_context) -> None:
 
     reply = _claim(repository, group.chatroom_id, now)
     assert reply.text == "请先私聊总监事发送任意消息，再回群预约公演。"
+
+
+def test_owner_can_request_postponement_in_direct_chat(command_context) -> None:
+    service, repository, group, now = command_context
+    repository.begin_performance_draft("owner", group.id, now)
+    for value in (
+        "夜航",
+        "夜间公演",
+        (now + timedelta(days=1)).strftime("%Y/%m/%d-%H:%M:%S"),
+        "演员甲",
+        "/跳过",
+        "/确认",
+    ):
+        result = repository.consume_performance_draft_input(
+            "owner", uuid4(), now, text=value
+        )
+    repository.review_performance(result.reservation.id, True, "admin:a", now)
+    _confirm(repository, _claim(repository, "direct-owner", now), now)
+
+    _receive(
+        service,
+        "owner",
+        "/延期 30m",
+        now,
+        room="direct-owner",
+        source="direct",
+    )
+
+    reply = _claim(repository, "direct-owner", now)
+    assert "延期 30 分钟" in reply.text
+    assert "等待管理员审核" in reply.text
