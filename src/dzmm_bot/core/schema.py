@@ -16,6 +16,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     Uuid,
+    false,
     text,
     true,
 )
@@ -75,6 +76,9 @@ class GroupChatRecord(Base):
     announcements_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
     adult_shop_enabled: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
+    )
+    performances_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false(), nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
@@ -1469,6 +1473,183 @@ class RandomEventTipRecord(Base):
     created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
 
 
+class PerformanceSettingsRecord(Base):
+    __tablename__ = "performance_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    maximum_duration_minutes: Mapped[int] = mapped_column(
+        Integer, default=360, nullable=False
+    )
+
+
+class PerformanceReservationRecord(Base):
+    __tablename__ = "performance_reservations"
+    __table_args__ = (
+        Index(
+            "ux_performance_reservations_live_date",
+            "event_date",
+            unique=True,
+            sqlite_where=text(
+                "state IN ('pending_review', 'approved', 'previewed', 'waiting', "
+                "'performing', 'tipping')"
+            ),
+            postgresql_where=text(
+                "state IN ('pending_review', 'approved', 'previewed', 'waiting', "
+                "'performing', 'tipping')"
+            ),
+        ),
+        Index(
+            "ux_performance_reservations_live_owner",
+            "owner_user_id",
+            unique=True,
+            sqlite_where=text(
+                "state IN ('pending_review', 'approved', 'previewed', 'waiting', "
+                "'performing', 'tipping')"
+            ),
+            postgresql_where=text(
+                "state IN ('pending_review', 'approved', 'previewed', 'waiting', "
+                "'performing', 'tipping')"
+            ),
+        ),
+        Index(
+            "ux_performance_reservations_stage_group",
+            "group_chat_id",
+            unique=True,
+            sqlite_where=text("state IN ('performing', 'tipping')"),
+            postgresql_where=text("state IN ('performing', 'tipping')"),
+        ),
+        Index("ix_performance_reservations_state_scheduled", "state", "scheduled_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    owner_user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id"), nullable=False
+    )
+    group_chat_id: Mapped[UUID] = mapped_column(
+        ForeignKey("group_chats.id"), nullable=False
+    )
+    title: Mapped[str] = mapped_column(String(50), nullable=False)
+    introduction: Mapped[str] = mapped_column(String(500), nullable=False)
+    scheduled_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    event_date: Mapped[date] = mapped_column(Date, nullable=False)
+    cover_url: Mapped[str | None] = mapped_column(Text)
+    cover_alt: Mapped[str | None] = mapped_column(String(255))
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    pre_notice_sent_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    started_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    tipping_started_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    tipping_deadline: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    ended_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    maximum_duration_minutes_snapshot: Mapped[int | None] = mapped_column(Integer)
+    submitted_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    reviewed_by: Mapped[str | None] = mapped_column(String(255))
+    reviewed_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    rejection_reason: Mapped[str | None] = mapped_column(String(500))
+    cancellation_reason: Mapped[str | None] = mapped_column(String(500))
+    cancelled_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+
+
+class PerformanceParticipantRecord(Base):
+    __tablename__ = "performance_participants"
+    __table_args__ = (
+        UniqueConstraint("reservation_id", "user_id"),
+        UniqueConstraint("reservation_id", "display_order"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    reservation_id: Mapped[UUID] = mapped_column(
+        ForeignKey("performance_reservations.id"), nullable=False
+    )
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    display_order: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class PerformanceDraftRecord(Base):
+    __tablename__ = "performance_drafts"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id"), unique=True, nullable=False
+    )
+    group_chat_id: Mapped[UUID] = mapped_column(
+        ForeignKey("group_chats.id"), nullable=False
+    )
+    current_step: Mapped[str] = mapped_column(String(32), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), default=dict, nullable=False
+    )
+    last_activity_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+
+
+class PerformanceExtensionRequestRecord(Base):
+    __tablename__ = "performance_extension_requests"
+    __table_args__ = (
+        Index(
+            "ux_performance_extension_requests_pending",
+            "reservation_id",
+            unique=True,
+            sqlite_where=text("state = 'pending'"),
+            postgresql_where=text("state = 'pending'"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    reservation_id: Mapped[UUID] = mapped_column(
+        ForeignKey("performance_reservations.id"), nullable=False
+    )
+    requester_user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id"), nullable=False
+    )
+    duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    original_scheduled_at: Mapped[datetime] = mapped_column(
+        BeijingDateTime, nullable=False
+    )
+    proposed_scheduled_at: Mapped[datetime] = mapped_column(
+        BeijingDateTime, nullable=False
+    )
+    state: Mapped[str] = mapped_column(String(16), nullable=False)
+    reviewer: Mapped[str | None] = mapped_column(String(255))
+    rejection_reason: Mapped[str | None] = mapped_column(String(500))
+    requested_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    reviewed_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+
+
+class PerformanceMessageRecord(Base):
+    __tablename__ = "performance_messages"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    reservation_id: Mapped[UUID] = mapped_column(
+        ForeignKey("performance_reservations.id"), nullable=False
+    )
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    inbound_message_id: Mapped[UUID] = mapped_column(
+        ForeignKey("inbound_messages.id"), unique=True, nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+
+
+class PerformanceTipRecord(Base):
+    __tablename__ = "performance_tips"
+    __table_args__ = (Index("ix_performance_tips_reservation", "reservation_id"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    reservation_id: Mapped[UUID] = mapped_column(
+        ForeignKey("performance_reservations.id"), nullable=False
+    )
+    sender_user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id"), nullable=False
+    )
+    recipient_user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id"), nullable=False
+    )
+    inbound_message_id: Mapped[UUID] = mapped_column(
+        ForeignKey("inbound_messages.id"), unique=True, nullable=False
+    )
+    amount: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+
+
 class UserRecord(Base):
     __tablename__ = "users"
 
@@ -2107,6 +2288,18 @@ class OutboundRecord(Base):
             "reply_index",
             "id",
         ),
+        Index(
+            "ux_outbound_messages_held_performance_key",
+            "deferred_by_performance_id",
+            "performance_defer_key",
+            unique=True,
+            sqlite_where=text(
+                "status = 'held_performance' AND performance_defer_key IS NOT NULL"
+            ),
+            postgresql_where=text(
+                "status = 'held_performance' AND performance_defer_key IS NOT NULL"
+            ),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
@@ -2134,6 +2327,10 @@ class OutboundRecord(Base):
     )
     image_url: Mapped[str | None] = mapped_column(Text)
     image_alt: Mapped[str | None] = mapped_column(String(512))
+    deferred_by_performance_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("performance_reservations.id")
+    )
+    performance_defer_key: Mapped[str | None] = mapped_column(String(255))
     status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
     lease_worker_id: Mapped[str | None] = mapped_column(String(255))
     lease_token: Mapped[UUID | None] = mapped_column(Uuid)
