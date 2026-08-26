@@ -125,3 +125,57 @@ def test_tipping_settles_after_180_seconds_and_records_memory(scheduled_context)
     facts = repository.list_ai_activity_facts("actor")
     assert len(facts) == 1
     assert facts[0].activity_type == "performance"
+
+
+def test_same_group_system_notice_waits_until_performance_settlement(
+    scheduled_context,
+) -> None:
+    repository, factory, group, reservation_id, now = scheduled_context
+    stage_time = now + timedelta(hours=1)
+    repository.run_performance_jobs(stage_time)
+
+    held = repository.enqueue_system_outbound(
+        "暗网成交公告",
+        group_chat_id=group.id,
+        destination_chatroom_id=group.chatroom_id,
+        performance_defer_key="dark-market:listing-1",
+    )
+
+    with factory() as session:
+        assert session.get(schema.OutboundRecord, held.id).status == "held_performance"
+    repository.end_performance("actor", group.id, stage_time)
+    repository.run_performance_jobs(stage_time + timedelta(seconds=180))
+    with factory() as session:
+        notice = session.get(schema.OutboundRecord, held.id)
+        settlement = session.scalar(
+            select(schema.OutboundRecord)
+            .where(schema.OutboundRecord.text.like("公演打赏结束%"))
+            .order_by(schema.OutboundRecord.created_at.desc())
+        )
+        assert notice.status == "pending"
+        assert (settlement.created_at, settlement.reply_index) < (
+            notice.created_at,
+            notice.reply_index,
+        )
+
+
+def test_latest_keyed_performance_notice_replaces_held_text(scheduled_context) -> None:
+    repository, factory, group, _, now = scheduled_context
+    repository.run_performance_jobs(now + timedelta(hours=1))
+
+    first = repository.enqueue_system_outbound(
+        "报价 5",
+        group_chat_id=group.id,
+        destination_chatroom_id=group.chatroom_id,
+        performance_defer_key="dark-market:listing-2",
+    )
+    second = repository.enqueue_system_outbound(
+        "报价 8",
+        group_chat_id=group.id,
+        destination_chatroom_id=group.chatroom_id,
+        performance_defer_key="dark-market:listing-2",
+    )
+
+    assert first.id == second.id
+    with factory() as session:
+        assert session.get(schema.OutboundRecord, first.id).text == "报价 8"

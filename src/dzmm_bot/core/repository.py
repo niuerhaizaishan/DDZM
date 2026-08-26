@@ -6863,6 +6863,7 @@ class CoreRepository:
                 text_value=text_value,
                 now=now,
             )
+        self._flush_performance_deferred_notices(session, reservation, now)
         for _participant, user in participant_rows:
             self._record_ai_activity_fact(
                 session,
@@ -7728,6 +7729,7 @@ class CoreRepository:
             text,
             group_chat_id=group.id,
             destination_chatroom_id=group.chatroom_id,
+            performance_defer_key=f"dark-market:{listing.id}",
         )
 
     def _flush_deferred_dark_market_notices(
@@ -7754,6 +7756,7 @@ class CoreRepository:
                 notice.text,
                 group_chat_id=group.id,
                 destination_chatroom_id=group.chatroom_id,
+                performance_defer_key=f"dark-market:{notice.listing_id}",
             )
             session.delete(notice)
 
@@ -21401,6 +21404,8 @@ class CoreRepository:
         group_chat_id: UUID | None = None,
         destination_chatroom_id: str | None = None,
         delivery_kind: str = "group",
+        performance_defer_key: str | None = None,
+        bypass_performance_gate: bool = False,
     ) -> OutboundRecord:
         if recall_after_seconds is not None and recall_after_seconds < 1:
             raise ValueError("撤回秒数必须为正整数")
@@ -21410,6 +21415,24 @@ class CoreRepository:
             if self.group_chat_bootstrap_ready():
                 raise ValueError("群系统消息必须指定目标群")
         with self._session() as session:
+            if (
+                delivery_kind == "group"
+                and not bypass_performance_gate
+                and group_chat_id is not None
+            ):
+                self._lock_gameplay_gate(session)
+                performance = self._stage_active_performance(
+                    session, group_chat_id
+                )
+                if performance is not None:
+                    return self._hold_performance_outbound(
+                        session,
+                        performance,
+                        text,
+                        destination_chatroom_id,
+                        performance_defer_key,
+                        recall_after_seconds,
+                    )
             texts = [text] if self._keeps_group_reply_intact(
                 text,
                 recall_after_seconds=recall_after_seconds,
@@ -21442,6 +21465,69 @@ class CoreRepository:
                     raise ValueError("记忆考核轮次无法关联撤回消息")
                 round_record.outbound_message_id = records[0].id
             return records[0]
+
+    @staticmethod
+    def _hold_performance_outbound(
+        session: Session,
+        performance: PerformanceReservationRecord,
+        text_value: str,
+        destination_chatroom_id: str | None,
+        defer_key: str | None,
+        recall_after_seconds: int | None,
+    ) -> OutboundRecord:
+        if defer_key is not None:
+            existing = session.scalar(
+                select(OutboundRecord)
+                .where(
+                    OutboundRecord.deferred_by_performance_id == performance.id,
+                    OutboundRecord.performance_defer_key == defer_key,
+                    OutboundRecord.status == "held_performance",
+                )
+                .with_for_update()
+            )
+            if existing is not None:
+                existing.text = text_value
+                existing.recall_after_seconds = recall_after_seconds
+                return existing
+        record = OutboundRecord(
+            inbound_message_id=None,
+            group_chat_id=performance.group_chat_id,
+            destination_chatroom_id=destination_chatroom_id,
+            delivery_key=destination_chatroom_id or "__group__",
+            delivery_kind="group",
+            text=text_value,
+            reply_index=0,
+            recall_after_seconds=recall_after_seconds,
+            deferred_by_performance_id=performance.id,
+            performance_defer_key=defer_key,
+            status="held_performance",
+        )
+        session.add(record)
+        session.flush()
+        return record
+
+    @staticmethod
+    def _flush_performance_deferred_notices(
+        session: Session,
+        reservation: PerformanceReservationRecord,
+        now: datetime,
+    ) -> None:
+        held = list(
+            session.scalars(
+                select(OutboundRecord)
+                .where(
+                    OutboundRecord.deferred_by_performance_id == reservation.id,
+                    OutboundRecord.status == "held_performance",
+                )
+                .order_by(OutboundRecord.created_at, OutboundRecord.id)
+                .with_for_update()
+            )
+        )
+        for index, record in enumerate(held, 1):
+            record.status = "pending"
+            record.created_at = now
+            record.updated_at = now
+            record.reply_index = index
 
     def enqueue_image_outbound(
         self,
