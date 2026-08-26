@@ -1053,6 +1053,17 @@ class DarkMarketBidResponse(ApiModel):
     settled_at: AwareDatetime | None
 
 
+class DarkMarketBalanceTransactionResponse(ApiModel):
+    id: UUID
+    platform_id: str
+    display_name: str
+    employee_number: int
+    amount: int
+    source: str
+    source_label: str
+    occurred_at: AwareDatetime
+
+
 class DarkMarketListingResponse(ApiModel):
     id: UUID
     public_number: int
@@ -1082,6 +1093,8 @@ class DarkMarketListingResponse(ApiModel):
     complaint_reviewed_at: AwareDatetime | None
     complaint_reviewed_by: str | None
     complaint_decision: str | None
+    complaint_refund_amount: int | None = None
+    complaint_penalty_amount: int | None = None
     created_at: AwareDatetime
     finished_at: AwareDatetime | None
     disclosure_state: str | None
@@ -1089,6 +1102,9 @@ class DarkMarketListingResponse(ApiModel):
     seller_choice: bool | None
     buyer_choice: bool | None
     bids: list[DarkMarketBidResponse] = Field(default_factory=list)
+    balance_transactions: list[DarkMarketBalanceTransactionResponse] = Field(
+        default_factory=list
+    )
 
 
 class PaginatedDarkMarketListingsResponse(ApiModel):

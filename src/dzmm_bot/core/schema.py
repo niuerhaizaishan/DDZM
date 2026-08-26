@@ -2082,13 +2082,23 @@ class ActivityRewardSettlementRecord(Base):
 
 class BalanceTransactionRecord(Base):
     __tablename__ = "balance_transactions"
-    __table_args__ = (Index("ix_balance_transactions_user_occurred", "user_id", "occurred_at"),)
+    __table_args__ = (
+        Index("ix_balance_transactions_user_occurred", "user_id", "occurred_at"),
+        Index(
+            "ix_balance_transactions_dark_market_listing_occurred",
+            "dark_market_listing_id",
+            "occurred_at",
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
     amount: Mapped[int] = mapped_column(Integer, nullable=False)
     source: Mapped[str] = mapped_column(String(64), nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    dark_market_listing_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("dark_market_listings.id")
+    )
 
 
 class ItemRecord(Base):

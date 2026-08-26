@@ -1258,6 +1258,10 @@ def test_admin_page_contains_dark_market_complaint_review_actions(client):
     assert "data-dark-market-complaint-action" in script
     assert "/complaint/approve" in script
     assert "/complaint/reject" in script
+    assert "投诉退款" in script
+    assert "卖家罚款" in script
+    assert "相关余额流水" in script
+    assert 'item.state === "complained" ? "无"' in script
 
 
 def test_admin_can_review_dark_market_complaint(client, headers, core):

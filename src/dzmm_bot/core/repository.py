@@ -1058,6 +1058,18 @@ class DarkMarketAdminBid:
 
 
 @dataclass(frozen=True)
+class DarkMarketAdminBalanceTransaction:
+    id: UUID
+    platform_id: str
+    display_name: str
+    employee_number: int
+    amount: int
+    source: str
+    source_label: str
+    occurred_at: datetime
+
+
+@dataclass(frozen=True)
 class DarkMarketAdminListing:
     id: UUID
     public_number: int
@@ -1087,6 +1099,8 @@ class DarkMarketAdminListing:
     complaint_reviewed_at: datetime | None
     complaint_reviewed_by: str | None
     complaint_decision: str | None
+    complaint_refund_amount: int | None
+    complaint_penalty_amount: int | None
     created_at: datetime
     finished_at: datetime | None
     disclosure_state: str | None
@@ -1094,6 +1108,7 @@ class DarkMarketAdminListing:
     seller_choice: bool | None
     buyer_choice: bool | None
     bids: tuple[DarkMarketAdminBid, ...] = ()
+    balance_transactions: tuple[DarkMarketAdminBalanceTransaction, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -8032,6 +8047,7 @@ class CoreRepository:
                             current.amount,
                             "dark_market_bid_refund",
                             now,
+                            dark_market_listing_id=listing.id,
                         )
                         direct_chatroom_id = self._dark_market_direct_destination(
                             session, previous_bidder.platform_id
@@ -8044,7 +8060,11 @@ class CoreRepository:
                                 delivery_kind="direct",
                             )
                 self._apply_balance_change(
-                    bidder, -debit, "dark_market_bid_hold", now
+                    bidder,
+                    -debit,
+                    "dark_market_bid_hold",
+                    now,
+                    dark_market_listing_id=listing.id,
                 )
                 session.add(
                     DarkMarketBidRecord(
@@ -8169,6 +8189,7 @@ class CoreRepository:
         now: datetime,
         *,
         public_notice: str | None = None,
+        direct_notice: str = "已确认收货",
     ) -> None:
         if listing.state not in {"awaiting_receipt", "complaint_pending"}:
             return
@@ -8201,9 +8222,19 @@ class CoreRepository:
             raise RuntimeError("暗网播报群不存在")
         fee = calculate_fee(current.amount, listing.fee_percent_snapshot)
         self._apply_balance_change(
-            seller, current.amount, "dark_market_sale_income", now
+            seller,
+            current.amount,
+            "dark_market_sale_income",
+            now,
+            dark_market_listing_id=listing.id,
         )
-        self._apply_balance_change(seller, -fee, "dark_market_sale_fee", now)
+        self._apply_balance_change(
+            seller,
+            -fee,
+            "dark_market_sale_fee",
+            now,
+            dark_market_listing_id=listing.id,
+        )
         current.state = "settled"
         current.settled_at = now
         listing.state = "sold"
@@ -8237,7 +8268,8 @@ class CoreRepository:
             )
             if direct_chatroom_id is not None:
                 self.enqueue_system_outbound(
-                    f"暗网商品 #{listing.public_number} 已确认收货。是否公开买卖双方身份？"
+                    f"暗网商品 #{listing.public_number} {direct_notice}。"
+                    "是否公开买卖双方身份？"
                     "请在 10 分钟内发送 /公开 或 /不公开。",
                     destination_chatroom_id=direct_chatroom_id,
                     delivery_kind="direct",
@@ -8295,10 +8327,18 @@ class CoreRepository:
         if group is None or group.chatroom_id is None:
             raise RuntimeError("暗网播报群不存在")
         self._apply_balance_change(
-            buyer, current.amount, "dark_market_complaint_refund", now
+            buyer,
+            current.amount,
+            "dark_market_complaint_refund",
+            now,
+            dark_market_listing_id=listing.id,
         )
         self._apply_balance_change(
-            seller, -current.amount, "dark_market_complaint_penalty", now
+            seller,
+            -current.amount,
+            "dark_market_complaint_penalty",
+            now,
+            dark_market_listing_id=listing.id,
         )
         current.state = "refunded"
         current.refunded_at = now
@@ -8433,6 +8473,7 @@ class CoreRepository:
                         f"暗网商品 #{listing.public_number} 的投诉已被驳回，交易成功，"
                         f"成交价 {current.amount} 摸鱼币。"
                     ),
+                    direct_notice="投诉已被驳回，交易已结算",
                 )
                 return DarkMarketReceiptResult("rejected", listing.public_number)
 
@@ -8576,6 +8617,7 @@ class CoreRepository:
                         current.amount,
                         "dark_market_force_refund",
                         now,
+                        dark_market_listing_id=listing.id,
                     )
                     current.state = "refunded"
                     current.refunded_at = now
@@ -8626,6 +8668,7 @@ class CoreRepository:
             )
         )
         bid_views: tuple[DarkMarketAdminBid, ...] = ()
+        balance_views: tuple[DarkMarketAdminBalanceTransaction, ...] = ()
         if include_bids:
             bid_rows = session.execute(
                 select(DarkMarketBidRecord, UserRecord)
@@ -8647,6 +8690,30 @@ class CoreRepository:
                     settled_at=bid.settled_at,
                 )
                 for bid, user in bid_rows
+            )
+            balance_rows = session.execute(
+                select(BalanceTransactionRecord, UserRecord)
+                .join(UserRecord, UserRecord.id == BalanceTransactionRecord.user_id)
+                .where(BalanceTransactionRecord.dark_market_listing_id == listing.id)
+                .order_by(
+                    BalanceTransactionRecord.occurred_at,
+                    BalanceTransactionRecord.id,
+                )
+            )
+            balance_views = tuple(
+                DarkMarketAdminBalanceTransaction(
+                    id=transaction.id,
+                    platform_id=user.platform_id,
+                    display_name=user.display_name,
+                    employee_number=user.employee_number,
+                    amount=transaction.amount,
+                    source=transaction.source,
+                    source_label=_BALANCE_SOURCE_LABELS.get(
+                        transaction.source, transaction.source
+                    ),
+                    occurred_at=transaction.occurred_at,
+                )
+                for transaction, user in balance_rows
             )
         if seller is None:
             raise RuntimeError("暗网卖家不存在")
@@ -8683,6 +8750,16 @@ class CoreRepository:
             complaint_reviewed_at=listing.complaint_reviewed_at,
             complaint_reviewed_by=listing.complaint_reviewed_by,
             complaint_decision=listing.complaint_decision,
+            complaint_refund_amount=(
+                listing.final_amount
+                if listing.complaint_decision == "approved"
+                else None
+            ),
+            complaint_penalty_amount=(
+                listing.final_amount
+                if listing.complaint_decision == "approved"
+                else None
+            ),
             created_at=listing.created_at,
             finished_at=listing.finished_at,
             disclosure_state=None if disclosure is None else disclosure.state,
@@ -8690,6 +8767,7 @@ class CoreRepository:
             seller_choice=None if disclosure is None else disclosure.seller_choice,
             buyer_choice=None if disclosure is None else disclosure.buyer_choice,
             bids=bid_views,
+            balance_transactions=balance_views,
         )
 
     def list_dark_market_listings(
@@ -17643,7 +17721,13 @@ class CoreRepository:
         return PersonalActivity(level=rule.level, reward=rule.reward)
 
     def _apply_balance_change(
-        self, user: UserRecord, amount: int, source: str, occurred_at: datetime
+        self,
+        user: UserRecord,
+        amount: int,
+        source: str,
+        occurred_at: datetime,
+        *,
+        dark_market_listing_id: UUID | None = None,
     ) -> None:
         if amount == 0:
             return
@@ -17657,6 +17741,7 @@ class CoreRepository:
                 amount=amount,
                 source=source,
                 occurred_at=occurred_at,
+                dark_market_listing_id=dark_market_listing_id,
             )
         )
 

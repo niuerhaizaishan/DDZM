@@ -541,6 +541,8 @@ def test_dark_market_core_api_configures_lists_details_and_force_delists(
     )
     assert detail.status_code == 200
     assert detail.json()["bids"][0]["amount"] == 20
+    assert detail.json()["balance_transactions"][0]["source"] == "dark_market_bid_hold"
+    assert detail.json()["balance_transactions"][0]["amount"] == -20
     assert detail.json()["ends_at"] is not None
 
     removed = app_context.client.post(

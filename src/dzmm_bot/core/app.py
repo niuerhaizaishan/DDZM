@@ -90,6 +90,7 @@ from .api_models import (
     ShopSceneClaimResponse,
     DarkMarketListingResponse,
     DarkMarketBidResponse,
+    DarkMarketBalanceTransactionResponse,
     PaginatedDarkMarketListingsResponse,
     DarkMarketForceDelistResponse,
     RedPacketSettingsResponse,
@@ -1946,6 +1947,10 @@ def create_app(
             **{
                 **item.__dict__,
                 "bids": [DarkMarketBidResponse(**bid.__dict__) for bid in item.bids],
+                "balance_transactions": [
+                    DarkMarketBalanceTransactionResponse(**transaction.__dict__)
+                    for transaction in item.balance_transactions
+                ],
             }
         )
 

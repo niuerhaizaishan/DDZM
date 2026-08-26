@@ -609,6 +609,22 @@ def test_board_approves_complaint_refunds_buyer_and_fines_seller(repository, now
     assert notice is not None
     assert "真实卖家（#0001）" in notice
     assert "买家甲" not in notice
+    detail = repository.get_dark_market_listing(listing.id)
+    assert detail is not None
+    assert detail.complaint_refund_amount == 21
+    assert detail.complaint_penalty_amount == 21
+    assert {
+        (
+            transaction.platform_id,
+            transaction.amount,
+            transaction.source,
+        )
+        for transaction in detail.balance_transactions
+    } == {
+        ("buyer-a", -21, "dark_market_bid_hold"),
+        ("buyer-a", 21, "dark_market_complaint_refund"),
+        ("seller", -21, "dark_market_complaint_penalty"),
+    }
 
 
 def test_board_rejects_complaint_and_settles_sale(repository, now) -> None:
@@ -648,6 +664,14 @@ def test_board_rejects_complaint_and_settles_sale(repository, now) -> None:
                 ).where(BalanceTransactionRecord.source.like("dark_market_sale_%"))
             ).all()
         )
+        direct_notices = list(
+            session.scalars(
+                select(OutboundRecord.text).where(
+                    OutboundRecord.delivery_kind == "direct",
+                    OutboundRecord.text.like("%投诉已被驳回%"),
+                )
+            )
+        )
     assert stored is not None
     assert stored.state == "sold"
     assert stored.fee_amount == 2
@@ -660,6 +684,21 @@ def test_board_rejects_complaint_and_settles_sale(repository, now) -> None:
         (-2, "dark_market_sale_fee"),
     }
     assert disclosure is not None
+    assert len(direct_notices) == 2
+    assert all("交易已结算" in text for text in direct_notices)
+    assert all("已确认收货" not in text for text in direct_notices)
+    detail = repository.get_dark_market_listing(listing.id)
+    assert detail is not None
+    assert detail.complaint_refund_amount is None
+    assert detail.complaint_penalty_amount is None
+    assert {
+        (transaction.platform_id, transaction.amount, transaction.source)
+        for transaction in detail.balance_transactions
+    } == {
+        ("buyer-a", -21, "dark_market_bid_hold"),
+        ("seller", 21, "dark_market_sale_income"),
+        ("seller", -2, "dark_market_sale_fee"),
+    }
 
 
 def test_pending_complaint_never_auto_confirms_and_review_is_one_way(
