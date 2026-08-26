@@ -1,5 +1,5 @@
 from datetime import date, datetime
-from typing import Annotated, Literal
+from typing import Any, Annotated, Literal
 from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
@@ -161,6 +161,20 @@ class PerformanceExtensionResponse(ApiModel):
     reviewed_at: datetime | None
 
 
+class PerformanceTipResponse(ApiModel):
+    sender_display_name: str
+    recipient_display_name: str
+    amount: int
+    created_at: datetime
+
+
+class PerformanceAuditResponse(ApiModel):
+    event_type: str
+    actor: str | None
+    payload: dict[str, Any]
+    created_at: datetime
+
+
 class PerformanceResponse(ApiModel):
     id: UUID
     owner_platform_id: str
@@ -176,6 +190,15 @@ class PerformanceResponse(ApiModel):
     state: str
     pre_notice_sent_at: datetime | None
     tipping_deadline: datetime | None
+    reviewed_by: str | None
+    reviewed_at: datetime | None
+    rejection_reason: str | None
+    cancellation_reason: str | None
+    cancelled_at: datetime | None
+    started_at: datetime | None
+    ended_at: datetime | None
+    tips: list[PerformanceTipResponse]
+    audit_events: list[PerformanceAuditResponse]
     extension: PerformanceExtensionResponse | None
 
 

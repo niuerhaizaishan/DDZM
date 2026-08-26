@@ -62,11 +62,13 @@ from .group_games import GROUP_GAME_TYPES, normalized_group_game_types
 from .performance import (
     PERFORMANCE_ACTIVE_STATES,
     PerformanceActionResult,
+    PerformanceAuditView,
     PerformanceDraftResult,
     PerformanceExtensionView,
     PerformancePostponementResult,
     PerformanceSettings,
     PerformanceTipResult,
+    PerformanceTipView,
     PerformanceView,
     parse_performance_datetime,
     parse_performance_participants,
@@ -5947,6 +5949,42 @@ class CoreRepository:
                 requested_at=extension_record.requested_at,
                 reviewed_at=extension_record.reviewed_at,
             )
+        sender = aliased(UserRecord)
+        recipient = aliased(UserRecord)
+        tip_rows = session.execute(
+            select(PerformanceTipRecord, sender, recipient)
+            .join(sender, sender.id == PerformanceTipRecord.sender_user_id)
+            .join(recipient, recipient.id == PerformanceTipRecord.recipient_user_id)
+            .where(PerformanceTipRecord.reservation_id == reservation.id)
+            .order_by(PerformanceTipRecord.created_at, PerformanceTipRecord.id)
+        )
+        tips = tuple(
+            PerformanceTipView(
+                sender_display_name=sender_user.display_name,
+                recipient_display_name=recipient_user.display_name,
+                amount=tip.amount,
+                created_at=tip.created_at,
+            )
+            for tip, sender_user, recipient_user in tip_rows
+        )
+        audit_rows = session.scalars(
+            select(AuditEventRecord)
+            .where(
+                AuditEventRecord.event_type.like("performance_%"),
+                AuditEventRecord.payload["performance_id"].as_string()
+                == str(reservation.id),
+            )
+            .order_by(AuditEventRecord.created_at, AuditEventRecord.id)
+        )
+        audit_events = tuple(
+            PerformanceAuditView(
+                event_type=audit.event_type,
+                actor=audit.actor,
+                payload=dict(audit.payload or {}),
+                created_at=audit.created_at,
+            )
+            for audit in audit_rows
+        )
         return PerformanceView(
             id=reservation.id,
             owner_platform_id=owner.platform_id,
@@ -5962,6 +6000,15 @@ class CoreRepository:
             state=reservation.state,
             pre_notice_sent_at=reservation.pre_notice_sent_at,
             tipping_deadline=reservation.tipping_deadline,
+            reviewed_by=reservation.reviewed_by,
+            reviewed_at=reservation.reviewed_at,
+            rejection_reason=reservation.rejection_reason,
+            cancellation_reason=reservation.cancellation_reason,
+            cancelled_at=reservation.cancelled_at,
+            started_at=reservation.started_at,
+            ended_at=reservation.ended_at,
+            tips=tips,
+            audit_events=audit_events,
             extension=extension,
         )
 
@@ -6150,6 +6197,14 @@ class CoreRepository:
     ) -> PerformanceDraftResult:
         self._lock_gameplay_gate(session)
         scheduled_at = datetime.fromisoformat(payload["scheduled_at"])
+        if (
+            scheduled_at < now + timedelta(minutes=30)
+            or scheduled_at > now + timedelta(days=30)
+        ):
+            draft.current_step = "scheduled_at"
+            return PerformanceDraftResult(
+                "schedule_invalid", current_step="scheduled_at"
+            )
         live_filter = PerformanceReservationRecord.state.in_(PERFORMANCE_ACTIVE_STATES)
         if session.scalar(
             select(PerformanceReservationRecord.id)
@@ -6218,6 +6273,20 @@ class CoreRepository:
                     PerformanceReservationRecord.state.in_(PERFORMANCE_ACTIVE_STATES),
                 )
                 .order_by(PerformanceReservationRecord.submitted_at.desc())
+            )
+            return None if reservation is None else self._performance_view(session, reservation)
+
+    def latest_own_performance(self, platform_id: str) -> PerformanceView | None:
+        with self._session() as session:
+            reservation = session.scalar(
+                select(PerformanceReservationRecord)
+                .join(UserRecord, UserRecord.id == PerformanceReservationRecord.owner_user_id)
+                .where(UserRecord.platform_id == platform_id)
+                .order_by(
+                    PerformanceReservationRecord.submitted_at.desc(),
+                    PerformanceReservationRecord.id.desc(),
+                )
+                .limit(1)
             )
             return None if reservation is None else self._performance_view(session, reservation)
 
@@ -6524,19 +6593,24 @@ class CoreRepository:
 
     def performance_blocks_new_game(self, group_chat_id: UUID) -> bool:
         with self._session() as session:
-            return bool(
-                session.scalar(
-                    select(
-                        exists().where(
-                            PerformanceReservationRecord.group_chat_id
-                            == group_chat_id,
-                            PerformanceReservationRecord.state.in_(
-                                ("previewed", "waiting", "performing", "tipping")
-                            ),
-                        )
+            return self._performance_blocks_new_game_locked(session, group_chat_id)
+
+    @staticmethod
+    def _performance_blocks_new_game_locked(
+        session: Session, group_chat_id: UUID
+    ) -> bool:
+        return bool(
+            session.scalar(
+                select(
+                    exists().where(
+                        PerformanceReservationRecord.group_chat_id == group_chat_id,
+                        PerformanceReservationRecord.state.in_(
+                            ("previewed", "waiting", "performing", "tipping")
+                        ),
                     )
                 )
             )
+        )
 
     @staticmethod
     def _stage_active_performance(
@@ -7017,6 +7091,11 @@ class CoreRepository:
                     360 if settings is None else settings.maximum_duration_minutes
                 )
                 for reservation in due:
+                    if self._stage_active_performance(
+                        session, reservation.group_chat_id
+                    ) is not None:
+                        reservation.state = "waiting"
+                        continue
                     if self._group_has_active_gameplay(
                         session, reservation.group_chat_id
                     ):
@@ -7218,6 +7297,40 @@ class CoreRepository:
                 raise LookupError("performance_not_found")
             if record.state not in PERFORMANCE_ACTIVE_STATES:
                 raise ValueError("该公演已经结束")
+            if force and record.state in {"performing", "tipping"}:
+                event_type = (
+                    "performance_forced_end"
+                    if record.state == "performing"
+                    else "performance_forced_settle"
+                )
+                if record.state == "performing":
+                    self._start_performance_tipping(session, record, now)
+                    direct_notice = (
+                        f"你的公演《{record.title}》已由董事会结束演出，进入打赏环节。"
+                    )
+                else:
+                    self._settle_performance_tipping(
+                        session, record, now, forced=True
+                    )
+                    direct_notice = (
+                        f"你的公演《{record.title}》打赏环节已由董事会结束并完成结算。"
+                    )
+                self._enqueue_performance_direct_notice(
+                    session, record, direct_notice
+                )
+                session.add(
+                    AuditEventRecord(
+                        event_type=event_type,
+                        actor=actor,
+                        payload={
+                            "performance_id": str(record.id),
+                            "reason": reason.strip(),
+                        },
+                        created_at=now,
+                    )
+                )
+                session.flush()
+                return self._performance_view(session, record)
             if record.pre_notice_sent_at is not None and not force:
                 raise PermissionError("董事会权限不足")
             record.state = "cancelled"
@@ -12018,6 +12131,10 @@ class CoreRepository:
             with self._session() as session:
                 self._lock_gameplay_gate(session)
                 settings = self.get_undercover_settings()
+                if self._performance_blocks_new_game_locked(
+                    session, group_chat_id
+                ):
+                    return UndercoverGameResult("multiplayer_active")
                 user = self._undercover_user(session, platform_id)
                 if user is None:
                     return UndercoverGameResult("not_joined")
@@ -12892,6 +13009,23 @@ class CoreRepository:
                     )
                 )
             )
+            or session.scalar(
+                select(
+                    exists().where(
+                        PerformanceReservationRecord.state.in_(
+                            ("previewed", "waiting", "performing", "tipping")
+                        ),
+                        *(
+                            ()
+                            if group_chat_id is None
+                            else (
+                                PerformanceReservationRecord.group_chat_id
+                                == group_chat_id,
+                            )
+                        ),
+                    )
+                )
+            )
         )
 
     def _lock_gameplay_gate(self, session: Session) -> None:
@@ -13577,6 +13711,10 @@ class CoreRepository:
             with self._session() as session:
                 self._lock_gameplay_gate(session)
                 settings = self.get_memory_assessment_settings()
+                if self._performance_blocks_new_game_locked(
+                    session, group_chat_id
+                ):
+                    return MemoryAssessmentGameResult("already_active")
                 user = session.scalar(
                     select(UserRecord)
                     .where(UserRecord.platform_id == platform_id)
@@ -13712,6 +13850,10 @@ class CoreRepository:
             with self._session() as session:
                 self._lock_gameplay_gate(session)
                 settings = self.get_memory_assessment_settings()
+                if self._performance_blocks_new_game_locked(
+                    session, group_chat_id
+                ):
+                    return MemoryAssessmentGameResult("multiplayer_active")
                 user = session.scalar(
                     select(UserRecord)
                     .where(UserRecord.platform_id == platform_id)
@@ -14725,6 +14867,10 @@ class CoreRepository:
             with self._session() as session:
                 self._lock_gameplay_gate(session)
                 settings = self.get_blame_game_settings()
+                if self._performance_blocks_new_game_locked(
+                    session, group_chat_id
+                ):
+                    return BlameGameResult("multiplayer_active")
                 self._ensure_organization_defaults(session)
                 user = session.scalar(
                     select(UserRecord).where(UserRecord.platform_id == platform_id)
@@ -15601,6 +15747,10 @@ class CoreRepository:
             with self._session() as session:
                 self._lock_gameplay_gate(session)
                 settings = self.get_hide_and_seek_settings()
+                if self._performance_blocks_new_game_locked(
+                    session, group_chat_id
+                ):
+                    return HideAndSeekGameResult("already_active")
                 user = session.scalar(
                     select(UserRecord)
                     .where(UserRecord.platform_id == platform_id)
@@ -17559,6 +17709,8 @@ class CoreRepository:
         self.run_dark_market_jobs(now)
         self.run_shop_card_jobs(now)
         with self.transaction():
+            with self._session() as session:
+                self._lock_gameplay_gate(session)
             if should_backfill:
                 self._backfill_current_day_history(now)
             for game in self.expire_hide_and_seek_games(now):

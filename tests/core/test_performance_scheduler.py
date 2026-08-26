@@ -78,6 +78,7 @@ def test_preview_is_sent_once_at_five_minutes(scheduled_context) -> None:
 
     texts = [item.text for item in _outbounds(factory)]
     assert sum("公演即将开始" in text for text in texts) == 1
+    assert any("简介：一场夜间公演" in text for text in texts)
     assert repository.performance_details(reservation_id).state == "previewed"
 
 
@@ -125,6 +126,122 @@ def test_tipping_settles_after_180_seconds_and_records_memory(scheduled_context)
     facts = repository.list_ai_activity_facts("actor")
     assert len(facts) == 1
     assert facts[0].activity_type == "performance"
+
+
+def test_board_force_end_then_force_settle_preserves_performance_flow(
+    scheduled_context,
+) -> None:
+    repository, _, group, reservation_id, now = scheduled_context
+    stage_time = now + timedelta(hours=1)
+    repository.run_performance_jobs(stage_time)
+
+    tipping = repository.cancel_performance_by_admin(
+        reservation_id, "board", "后台强制结束演出", stage_time, force=True
+    )
+    settled = repository.cancel_performance_by_admin(
+        reservation_id,
+        "board",
+        "后台强制结束打赏",
+        stage_time + timedelta(seconds=1),
+        force=True,
+    )
+
+    assert tipping.state == "tipping"
+    assert settled.state == "completed"
+    assert repository.active_performance_state(group.id) is None
+
+
+def test_restart_opens_only_one_overdue_performance_per_group(
+    scheduled_context,
+) -> None:
+    repository, factory, group, reservation_id, now = scheduled_context
+    repository.create_user("owner-2", "发起人二", now, 100)
+    repository.create_user("actor-2", "演员乙", now, 100)
+    with factory.begin() as session:
+        owner = session.scalar(
+            select(schema.UserRecord).where(
+                schema.UserRecord.platform_id == "owner-2"
+            )
+        )
+        actor = session.scalar(
+            select(schema.UserRecord).where(
+                schema.UserRecord.platform_id == "actor-2"
+            )
+        )
+        second = schema.PerformanceReservationRecord(
+            owner_user_id=owner.id,
+            group_chat_id=group.id,
+            title="次日场",
+            introduction="第二场",
+            scheduled_at=now + timedelta(days=1),
+            event_date=(now + timedelta(days=1)).date(),
+            state="approved",
+            submitted_at=now,
+        )
+        session.add(second)
+        session.flush()
+        second_id = second.id
+        session.add(
+            schema.PerformanceParticipantRecord(
+                reservation_id=second.id, user_id=actor.id, display_order=1
+            )
+        )
+
+    repository.run_performance_jobs(now + timedelta(days=2))
+
+    assert repository.performance_details(reservation_id).state == "performing"
+    assert repository.performance_details(second_id).state == "waiting"
+
+
+def test_performance_history_exposes_audit_and_tip_ledger(
+    scheduled_context,
+) -> None:
+    repository, factory, group, reservation_id, now = scheduled_context
+    stage_time = now + timedelta(hours=1)
+    repository.run_performance_jobs(stage_time)
+    with factory.begin() as session:
+        fan = schema.UserRecord(
+            id=uuid4(),
+            platform_id="fan",
+            display_name="观众",
+            employee_number=99,
+            balance=100,
+            joined_at=now,
+        )
+        session.add(fan)
+        session.flush()
+        inbound = schema.InboundRecord(
+            platform_message_id="tip-history",
+            sender_platform_id="fan",
+            content="/打赏 演员甲 5",
+            source_type="group",
+            chatroom_id=group.chatroom_id,
+            group_chat_id=group.id,
+            received_at=stage_time,
+        )
+        session.add(inbound)
+        session.add(
+            schema.AuditEventRecord(
+                event_type="performance_approved",
+                actor="admin:test",
+                payload={"performance_id": str(reservation_id)},
+                created_at=now,
+            )
+        )
+    repository.end_performance("actor", group.id, stage_time)
+    repository.tip_performance(
+        "fan", "演员甲", 5, "tip-history", stage_time, group.id
+    )
+    repository.run_performance_jobs(stage_time + timedelta(seconds=180))
+
+    view = repository.performance_details(reservation_id)
+
+    assert view.reviewed_by == "admin:test"
+    assert len(view.tips) == 1
+    assert view.tips[0].sender_display_name == "观众"
+    assert view.tips[0].recipient_display_name == "演员甲"
+    assert view.tips[0].amount == 5
+    assert any(item.event_type == "performance_approved" for item in view.audit_events)
 
 
 def test_same_group_system_notice_waits_until_performance_settlement(

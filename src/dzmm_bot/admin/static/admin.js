@@ -1608,9 +1608,15 @@ function performanceCard(item, actions = "") {
   const extension = item.extension;
   const canReviewExtension = extension?.state === "pending" && (!item.pre_notice_sent_at || identity?.role === "super_admin");
   const extensionText = extension ? `<small>延期：${escapeHtml(performanceStateLabel(extension.state))} · ${escapeHtml(formatHeartbeat(extension.original_scheduled_at))} → ${escapeHtml(formatHeartbeat(extension.proposed_scheduled_at))}</small>` : "";
+  const reviewText = item.reviewed_at ? `<small>审核：${escapeHtml(item.reviewed_by || "系统")} · ${escapeHtml(formatHeartbeat(item.reviewed_at))}</small>` : "";
+  const reasonText = item.rejection_reason ? `<small>拒绝原因：${escapeHtml(item.rejection_reason)}</small>` : item.cancellation_reason ? `<small>取消原因：${escapeHtml(item.cancellation_reason)}</small>` : "";
+  const tips = item.tips || [];
+  const tipText = tips.length ? `<details><summary>打赏流水（${tips.length}）</summary>${tips.map((tip) => `<small>${escapeHtml(formatHeartbeat(tip.created_at))} · ${escapeHtml(tip.sender_display_name)} → ${escapeHtml(tip.recipient_display_name)}：${tip.amount}</small>`).join("")}</details>` : "";
+  const audits = item.audit_events || [];
+  const auditText = audits.length ? `<details><summary>审计记录（${audits.length}）</summary>${audits.map((audit) => `<small>${escapeHtml(formatHeartbeat(audit.created_at))} · ${escapeHtml(audit.event_type)} · ${escapeHtml(audit.actor || "系统")}</small>`).join("")}</details>` : "";
   const extensionActions = canReviewExtension ? `<button class="primary" data-performance-extension-action="approve" data-extension-id="${escapeHtml(extension.id)}" type="button">批准延期</button><button class="danger-button" data-performance-extension-action="reject" data-extension-id="${escapeHtml(extension.id)}" type="button">拒绝延期</button>` : "";
   const allActions = actions + extensionActions;
-  return `<article class="data-row"><div><b>${escapeHtml(item.title)}</b><small>${statusBadge(performanceStateLabel(item.state), ["performing", "tipping"].includes(item.state) ? "success" : item.state === "pending_review" ? "warning" : "")}</small><small>发起人：${escapeHtml(item.owner_display_name)} · 时间：${escapeHtml(formatHeartbeat(item.scheduled_at))}</small><small>参演：${escapeHtml(participants)}</small>${extensionText}<p>${escapeHtml(item.introduction)}</p>${item.cover_url ? `<small><a href="${escapeHtml(item.cover_url)}" target="_blank" rel="noopener">查看封面</a></small>` : ""}</div>${allActions ? `<div class="command-actions">${allActions}</div>` : ""}</article>`;
+  return `<article class="data-row"><div><b>${escapeHtml(item.title)}</b><small>${statusBadge(performanceStateLabel(item.state), ["performing", "tipping"].includes(item.state) ? "success" : item.state === "pending_review" ? "warning" : "")}</small><small>发起人：${escapeHtml(item.owner_display_name)} · 时间：${escapeHtml(formatHeartbeat(item.scheduled_at))}</small><small>参演：${escapeHtml(participants)}</small>${reviewText}${reasonText}${extensionText}<p>${escapeHtml(item.introduction)}</p>${item.cover_url ? `<small><a href="${escapeHtml(item.cover_url)}" target="_blank" rel="noopener">查看封面</a></small>` : ""}${tipText}${auditText}</div>${allActions ? `<div class="command-actions">${allActions}</div>` : ""}</article>`;
 }
 
 function renderPerformances(items) {
@@ -1619,7 +1625,11 @@ function renderPerformances(items) {
   const upcoming = items.filter((item) => upcomingStates.has(item.state));
   const history = items.filter((item) => !upcomingStates.has(item.state) && item.state !== "pending_review");
   document.querySelector("#performance-pending-list").innerHTML = pending.map((item) => performanceCard(item, `<button class="primary" data-performance-action="approve" data-performance-id="${escapeHtml(item.id)}" type="button">通过</button><button class="danger-button" data-performance-action="reject" data-performance-id="${escapeHtml(item.id)}" type="button">拒绝</button>`)).join("") || '<p class="muted">暂无待审核公演。</p>';
-  document.querySelector("#performance-list").innerHTML = upcoming.map((item) => performanceCard(item, (!item.pre_notice_sent_at || identity?.role === "super_admin") ? `<button class="danger-button" data-performance-action="cancel" data-performance-id="${escapeHtml(item.id)}" type="button">强制取消</button>` : "")).join("") || '<p class="muted">暂无未来或进行中的公演。</p>';
+  document.querySelector("#performance-list").innerHTML = upcoming.map((item) => {
+    const actionLabel = item.state === "performing" ? "强制结束演出" : item.state === "tipping" ? "强制结算" : "强制取消";
+    const canAct = (!item.pre_notice_sent_at || identity?.role === "super_admin");
+    return performanceCard(item, canAct ? `<button class="danger-button" data-performance-action="cancel" data-performance-id="${escapeHtml(item.id)}" type="button">${actionLabel}</button>` : "");
+  }).join("") || '<p class="muted">暂无未来或进行中的公演。</p>';
   document.querySelector("#performance-history-list").innerHTML = history.map((item) => performanceCard(item)).join("") || '<p class="muted">暂无历史公演。</p>';
 }
 

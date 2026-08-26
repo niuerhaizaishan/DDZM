@@ -130,6 +130,23 @@ def _confirm(repository, outbound, now):
     )
 
 
+def _complete_command_draft(repository, group, now):
+    repository.begin_performance_draft("owner", group.id, now)
+    result = None
+    for value in (
+        "夜航",
+        "夜间公演",
+        (now + timedelta(days=1)).strftime("%Y/%m/%d-%H:%M:%S"),
+        "演员甲",
+        "/跳过",
+        "/确认",
+    ):
+        result = repository.consume_performance_draft_input(
+            "owner", uuid4(), now, text=value
+        )
+    return result
+
+
 def test_group_entry_starts_private_guide(command_context) -> None:
     service, repository, group, now = command_context
 
@@ -172,6 +189,48 @@ def test_active_performance_draft_has_private_routing_priority(command_context) 
         _confirm(repository, reply, now + timedelta(seconds=index))
 
     assert repository.own_performance("owner", now).state == "pending_review"
+
+
+def test_performance_draft_does_not_consume_other_direct_commands(
+    command_context,
+) -> None:
+    service, repository, group, now = command_context
+    repository.begin_performance_draft("owner", group.id, now)
+
+    _receive(
+        service,
+        "owner",
+        "/余额",
+        now,
+        room="direct-owner",
+        source="direct",
+    )
+
+    reply = _claim(repository, "direct-owner", now)
+    assert "当前余额" in reply.text
+    assert repository.performance_draft_step("owner", now) == "title"
+
+
+def test_my_performance_shows_rejection_reason(command_context) -> None:
+    service, repository, group, now = command_context
+    submitted = _complete_command_draft(repository, group, now)
+    repository.review_performance(
+        submitted.reservation.id, False, "admin:a", now, "请补充简介"
+    )
+    _confirm(repository, _claim(repository, "direct-owner", now), now)
+
+    _receive(
+        service,
+        "owner",
+        "/我的公演预约",
+        now,
+        room="direct-owner",
+        source="direct",
+    )
+
+    reply = _claim(repository, "direct-owner", now)
+    assert "状态：rejected" in reply.text
+    assert "请补充简介" in reply.text
 
 
 def test_private_image_advances_cover_step(command_context) -> None:

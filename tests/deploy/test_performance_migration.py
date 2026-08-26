@@ -1,4 +1,5 @@
 from pathlib import Path
+from uuid import uuid4
 
 from alembic import command
 from alembic.config import Config
@@ -21,6 +22,12 @@ def test_migration_57_adds_performance_defaults(tmp_path, monkeypatch) -> None:
         metadata,
         Column("id", Uuid, primary_key=True),
         Column("status", String(32), nullable=False),
+    )
+    activity_events = Table(
+        "ai_activity_events",
+        metadata,
+        Column("id", Uuid, primary_key=True),
+        Column("detail", String(32)),
     )
     metadata.create_all(engine)
     config = Config(str(ROOT / "alembic.ini"))
@@ -52,12 +59,21 @@ def test_migration_57_adds_performance_defaults(tmp_path, monkeypatch) -> None:
         ).scalar_one()
     assert maximum_duration == 360
 
+    with engine.begin() as connection:
+        connection.execute(
+            activity_events.insert().values(id=uuid4(), detail="长" * 50)
+        )
+
     command.downgrade(config, "20260826_56")
     inspector = inspect(engine)
     assert "performance_settings" not in inspector.get_table_names()
     assert "performances_enabled" not in {
         column["name"] for column in inspector.get_columns("group_chats")
     }
+    with engine.connect() as connection:
+        assert connection.execute(
+            text("SELECT length(detail) FROM ai_activity_events")
+        ).scalar_one() == 32
 
 
 def test_migration_57_skips_incomplete_legacy_test_schema(

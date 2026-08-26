@@ -96,8 +96,8 @@ class GroupCommandHandler:
                 ),
             ]
         if command == "/我的公演预约":
-            view = self._repository.own_performance(
-                message.sender_platform_id, received_at
+            view = self._repository.latest_own_performance(
+                message.sender_platform_id
             )
             if view is None:
                 return "你当前没有公演预约。"
@@ -108,10 +108,16 @@ class GroupCommandHandler:
                     f"{view.extension.original_scheduled_at.strftime('%Y/%m/%d-%H:%M:%S')} → "
                     f"{view.extension.proposed_scheduled_at.strftime('%Y/%m/%d-%H:%M:%S')}"
                 )
+            reason_text = ""
+            if view.rejection_reason:
+                reason_text = f"\n拒绝原因：{view.rejection_reason}"
+            elif view.cancellation_reason:
+                reason_text = f"\n取消原因：{view.cancellation_reason}"
             return (
                 f"公演：{view.title}\n状态：{view.state}\n"
                 f"时间：{view.scheduled_at.strftime('%Y/%m/%d-%H:%M:%S')}\n"
-                f"参演人员：{'、'.join(view.participant_names)}{extension_text}"
+                f"参演人员：{'、'.join(view.participant_names)}"
+                f"{reason_text}{extension_text}"
             )
         if command == "/取消公演预约":
             result = self._repository.cancel_own_performance(
@@ -160,6 +166,7 @@ class GroupCommandHandler:
                 return "本群暂无已审核的未来公演。"
             return "公演日程\n" + "\n".join(
                 f"{index}. {view.title}｜{view.scheduled_at.strftime('%Y/%m/%d-%H:%M:%S')}"
+                f"｜参演：{'、'.join(view.participant_names)}"
                 for index, view in enumerate(views, 1)
             )
         if command == "/end":

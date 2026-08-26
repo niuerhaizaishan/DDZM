@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 import re
-from typing import Protocol
+from typing import Any, Protocol
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -31,6 +31,22 @@ class PerformanceExtensionView:
 
 
 @dataclass(frozen=True)
+class PerformanceTipView:
+    sender_display_name: str
+    recipient_display_name: str
+    amount: int
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class PerformanceAuditView:
+    event_type: str
+    actor: str | None
+    payload: dict[str, Any]
+    created_at: datetime
+
+
+@dataclass(frozen=True)
 class PerformanceView:
     id: UUID
     owner_platform_id: str
@@ -46,6 +62,15 @@ class PerformanceView:
     state: str
     pre_notice_sent_at: datetime | None
     tipping_deadline: datetime | None
+    reviewed_by: str | None = None
+    reviewed_at: datetime | None = None
+    rejection_reason: str | None = None
+    cancellation_reason: str | None = None
+    cancelled_at: datetime | None = None
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    tips: tuple[PerformanceTipView, ...] = ()
+    audit_events: tuple[PerformanceAuditView, ...] = ()
     extension: PerformanceExtensionView | None = None
 
 
@@ -105,6 +130,7 @@ def render_performance_preview(view: PerformanceView) -> str:
     return (
         "【公演即将开始】\n"
         f"公演：{view.title}\n"
+        f"简介：{view.introduction}\n"
         f"时间：{view.scheduled_at.strftime('%Y/%m/%d-%H:%M:%S')}\n"
         f"参演人员：{'、'.join(view.participant_names)}"
     )

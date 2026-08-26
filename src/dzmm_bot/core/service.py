@@ -120,9 +120,11 @@ class CoreService:
                 draft_step = self._repository.performance_draft_step(
                     message.sender_platform_id, message.received_at
                 )
-                if draft_step is not None and command not in {
-                    "/我的公演预约", "/取消公演预约", "/延期"
-                }:
+                draft_control_command = command in {"/确认", "/跳过"}
+                if draft_step is not None and (
+                    draft_control_command
+                    or not message.content.lstrip().startswith("/")
+                ):
                     if message.content_type == "image" and draft_step == "cover":
                         if self._cover_image_validator is None or message.image_url is None:
                             direct_reply = "公演封面读取失败，请重新发送图片。"
@@ -481,6 +483,8 @@ class CoreService:
             return "该日期已有公演预约，请修改时间后重新提交。"
         if result.status == "owner_busy":
             return "你已有一个未结束的公演预约。"
+        if result.status == "schedule_invalid":
+            return "公演时间已不在未来 30 分钟至 30 天内，请重新发送时间。"
         if result.status == "image_required":
             return "请发送公演封面图片，或发送 /跳过。"
         if result.status == "confirmation_required":

@@ -182,6 +182,29 @@ def test_confirmed_draft_locks_the_date_and_owner(reservation_context) -> None:
     assert repository.begin_performance_draft("owner", group.id, now).status == "owner_busy"
 
 
+def test_confirm_revalidates_reservation_time(reservation_context) -> None:
+    repository, group, now = reservation_context
+    repository.begin_performance_draft("owner", group.id, now)
+    for value in (
+        "夜航",
+        "一场夜间公演",
+        (now + timedelta(minutes=31)).strftime("%Y/%m/%d-%H:%M:%S"),
+        "演员甲",
+        "/跳过",
+    ):
+        repository.consume_performance_draft_input("owner", uuid4(), now, text=value)
+
+    result = repository.consume_performance_draft_input(
+        "owner", uuid4(), now + timedelta(minutes=2), text="/确认"
+    )
+
+    assert result.status == "schedule_invalid"
+    assert result.current_step == "scheduled_at"
+    assert repository.performance_draft_step(
+        "owner", now + timedelta(minutes=2)
+    ) == "scheduled_at"
+
+
 def test_second_draft_cannot_occupy_same_date(reservation_context) -> None:
     repository, group, now = reservation_context
     _complete_draft(repository, group, now)
@@ -255,6 +278,19 @@ def test_cancel_and_query_performance(reservation_context) -> None:
     assert repository.own_performance("owner", now) is None
 
 
+def test_latest_own_performance_keeps_terminal_reason(reservation_context) -> None:
+    repository, group, now = reservation_context
+    submitted = _complete_draft(repository, group, now)
+    repository.review_performance(
+        submitted.reservation.id, False, "admin:a", now, "标题不符合规范"
+    )
+
+    view = repository.latest_own_performance("owner")
+
+    assert view.state == "rejected"
+    assert view.rejection_reason == "标题不符合规范"
+
+
 @pytest.mark.parametrize(
     ("raw", "minutes"), (("30m", 30), ("1h", 60), ("1d", 1440))
 )
@@ -299,3 +335,17 @@ def test_only_one_postponement_can_be_pending(reservation_context) -> None:
 
     assert first.status == "requested"
     assert second.status == "already_pending"
+
+
+def test_game_creation_rechecks_performance_gate_inside_transaction(
+    reservation_context,
+) -> None:
+    repository, group, now = reservation_context
+    submitted = _complete_draft(repository, group, now)
+    repository.review_performance(submitted.reservation.id, True, "admin:a", now)
+    repository.upsert_direct_chats([("actor-a", "direct-actor-a")], now)
+    repository.run_performance_jobs(now + timedelta(days=1, minutes=-5))
+
+    result = repository.start_number_bomb_game("actor-a", now, group.id)
+
+    assert result.status == "multiplayer_active"

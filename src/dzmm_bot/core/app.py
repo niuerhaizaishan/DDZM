@@ -64,8 +64,10 @@ from .api_models import (
     ProfileImageUploadStatusResponse,
     ProfileSettingsResponse,
     PerformanceExtensionResponse,
+    PerformanceAuditResponse,
     PerformanceResponse,
     PerformanceSettingsResponse,
+    PerformanceTipResponse,
     ReviewPerformanceExtensionRequest,
     ReviewPerformanceRequest,
     UpdatePerformanceSettingsRequest,
@@ -2905,6 +2907,31 @@ def _performance_response(view) -> PerformanceResponse:
         state=view.state,
         pre_notice_sent_at=view.pre_notice_sent_at,
         tipping_deadline=view.tipping_deadline,
+        reviewed_by=view.reviewed_by,
+        reviewed_at=view.reviewed_at,
+        rejection_reason=view.rejection_reason,
+        cancellation_reason=view.cancellation_reason,
+        cancelled_at=view.cancelled_at,
+        started_at=view.started_at,
+        ended_at=view.ended_at,
+        tips=[
+            PerformanceTipResponse(
+                sender_display_name=tip.sender_display_name,
+                recipient_display_name=tip.recipient_display_name,
+                amount=tip.amount,
+                created_at=tip.created_at,
+            )
+            for tip in view.tips
+        ],
+        audit_events=[
+            PerformanceAuditResponse(
+                event_type=event.event_type,
+                actor=event.actor,
+                payload=event.payload,
+                created_at=event.created_at,
+            )
+            for event in view.audit_events
+        ],
         extension=None
         if view.extension is None
         else PerformanceExtensionResponse(

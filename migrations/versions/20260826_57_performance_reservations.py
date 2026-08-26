@@ -279,6 +279,13 @@ def downgrade() -> None:
     op.drop_table("performance_reservations")
     op.drop_table("performance_settings")
     if sa.inspect(op.get_bind()).has_table("ai_activity_events"):
+        op.execute(
+            sa.text(
+                "UPDATE ai_activity_events "
+                "SET detail = substr(detail, 1, 32) "
+                "WHERE length(detail) > 32"
+            )
+        )
         with op.batch_alter_table("ai_activity_events") as batch:
             batch.alter_column(
                 "detail",
