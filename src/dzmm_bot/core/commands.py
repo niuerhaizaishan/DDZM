@@ -182,6 +182,22 @@ class GroupCommandHandler:
             return self._dark_market_login(
                 message, content, received_at, group_chat_id
             )
+        game_type = GROUP_GAME_COMMANDS.get(command)
+        if (
+            group_chat_id is not None
+            and command
+            in {
+                "/发红包",
+                "/摸鱼躲猫猫",
+                "/记忆考核",
+                "/谁是卧底",
+                "/甩锅游戏",
+                "/蹦蹦数字炸弹",
+                "/德州扑克",
+            }
+            and self._repository.performance_blocks_new_game(group_chat_id)
+        ):
+            return "公演即将开始或正在进行，请稍后再创建游戏。"
         if (
             group is not None
             and not group.games_enabled
@@ -191,7 +207,6 @@ class GroupCommandHandler:
             }
         ):
             return self._reply(command, "disabled", received_at)
-        game_type = GROUP_GAME_COMMANDS.get(command)
         if (
             group is not None
             and game_type is not None

@@ -99,6 +99,24 @@ def parse_postponement(value: str) -> timedelta:
     return timedelta(minutes=int(match.group("amount")) * factor)
 
 
+def render_performance_preview(view: PerformanceView) -> str:
+    return (
+        "【公演即将开始】\n"
+        f"公演：{view.title}\n"
+        f"时间：{view.scheduled_at.strftime('%Y/%m/%d-%H:%M:%S')}\n"
+        f"参演人员：{'、'.join(view.participant_names)}"
+    )
+
+
+def render_performance_opening(view: PerformanceView) -> str:
+    return (
+        "-------------------------演出开始-----------------------\n"
+        f"公演：{view.title}\n"
+        f"简介：{view.introduction}\n"
+        f"参演人员：{'、'.join(view.participant_names)}"
+    )
+
+
 class CoverImageValidator(Protocol):
     def validate(self, url: str) -> ValidatedCover: ...
 

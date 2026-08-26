@@ -69,6 +69,8 @@ from .performance import (
     PerformanceView,
     parse_performance_datetime,
     parse_performance_participants,
+    render_performance_opening,
+    render_performance_preview,
 )
 from .number_bomb import (
     NUMBER_BOMB_MULTIPLIER_TENTHS,
@@ -6474,6 +6476,179 @@ class CoreRepository:
             return PerformanceSettings(
                 record.maximum_duration_minutes, record.version
             )
+
+    def performance_blocks_new_game(self, group_chat_id: UUID) -> bool:
+        with self._session() as session:
+            return bool(
+                session.scalar(
+                    select(
+                        exists().where(
+                            PerformanceReservationRecord.group_chat_id
+                            == group_chat_id,
+                            PerformanceReservationRecord.state.in_(
+                                ("previewed", "waiting", "performing", "tipping")
+                            ),
+                        )
+                    )
+                )
+            )
+
+    @staticmethod
+    def _enqueue_performance_group_outbound(
+        session: Session,
+        reservation: PerformanceReservationRecord,
+        group: GroupChatRecord,
+        *,
+        text_value: str = "",
+        content_type: str = "text",
+        image_url: str | None = None,
+        image_alt: str | None = None,
+        reply_index: int = 0,
+        now: datetime,
+    ) -> None:
+        if group.chatroom_id is None:
+            return
+        session.add(
+            OutboundRecord(
+                inbound_message_id=None,
+                group_chat_id=group.id,
+                destination_chatroom_id=group.chatroom_id,
+                delivery_key=group.chatroom_id,
+                delivery_kind="group",
+                text=text_value,
+                content_type=content_type,
+                image_url=image_url,
+                image_alt=image_alt,
+                reply_index=reply_index,
+                status="pending",
+                created_at=now,
+            )
+        )
+
+    def run_performance_jobs(self, now: datetime) -> None:
+        now = now.astimezone(BEIJING)
+        with self.transaction():
+            with self._session() as session:
+                self._lock_gameplay_gate(session)
+                pending_extensions = list(
+                    session.scalars(
+                        select(PerformanceExtensionRequestRecord)
+                        .where(
+                            PerformanceExtensionRequestRecord.state == "pending",
+                            PerformanceExtensionRequestRecord.original_scheduled_at
+                            <= now,
+                        )
+                        .with_for_update()
+                    )
+                )
+                for extension in pending_extensions:
+                    extension.state = "expired"
+                    extension.reviewed_at = now
+
+                review_deadline = now + timedelta(minutes=5)
+                unreviewed = list(
+                    session.scalars(
+                        select(PerformanceReservationRecord)
+                        .where(
+                            PerformanceReservationRecord.state == "pending_review",
+                            PerformanceReservationRecord.scheduled_at
+                            <= review_deadline,
+                        )
+                        .with_for_update()
+                    )
+                )
+                for reservation in unreviewed:
+                    reservation.state = "expired"
+                    reservation.cancelled_at = now
+                    reservation.cancellation_reason = "开始前 5 分钟仍未完成审核"
+                    self._enqueue_performance_direct_notice(
+                        session,
+                        reservation,
+                        f"公演《{reservation.title}》在开始前 5 分钟审核未完成，预约已自动取消。",
+                    )
+
+                preview_due = list(
+                    session.scalars(
+                        select(PerformanceReservationRecord)
+                        .where(
+                            PerformanceReservationRecord.state == "approved",
+                            PerformanceReservationRecord.scheduled_at
+                            <= review_deadline,
+                        )
+                        .order_by(PerformanceReservationRecord.scheduled_at)
+                        .with_for_update()
+                    )
+                )
+                previewed_now: set[UUID] = set()
+                for reservation in preview_due:
+                    group = session.get(GroupChatRecord, reservation.group_chat_id)
+                    if group is None or group.deleted_at is not None:
+                        continue
+                    view = self._performance_view(session, reservation)
+                    self._enqueue_performance_group_outbound(
+                        session,
+                        reservation,
+                        group,
+                        text_value=render_performance_preview(view),
+                        now=now,
+                    )
+                    reservation.pre_notice_sent_at = now
+                    reservation.state = "previewed"
+                    previewed_now.add(reservation.id)
+
+                due = list(
+                    session.scalars(
+                        select(PerformanceReservationRecord)
+                        .where(
+                            PerformanceReservationRecord.state.in_(
+                                ("approved", "previewed", "waiting")
+                            ),
+                            PerformanceReservationRecord.scheduled_at <= now,
+                        )
+                        .order_by(PerformanceReservationRecord.scheduled_at)
+                        .with_for_update()
+                    )
+                )
+                settings = session.get(PerformanceSettingsRecord, 1)
+                maximum_duration = (
+                    360 if settings is None else settings.maximum_duration_minutes
+                )
+                for reservation in due:
+                    if self._group_has_active_gameplay(
+                        session, reservation.group_chat_id
+                    ):
+                        reservation.state = "waiting"
+                        continue
+                    group = session.get(GroupChatRecord, reservation.group_chat_id)
+                    if group is None or group.deleted_at is not None:
+                        reservation.state = "cancelled"
+                        reservation.cancelled_at = now
+                        reservation.cancellation_reason = "承办群已停用"
+                        continue
+                    reservation.state = "performing"
+                    reservation.started_at = now
+                    reservation.maximum_duration_minutes_snapshot = maximum_duration
+                    view = self._performance_view(session, reservation)
+                    opening_index = 1 if reservation.id in previewed_now else 0
+                    self._enqueue_performance_group_outbound(
+                        session,
+                        reservation,
+                        group,
+                        text_value=render_performance_opening(view),
+                        reply_index=opening_index,
+                        now=now,
+                    )
+                    if reservation.cover_url:
+                        self._enqueue_performance_group_outbound(
+                            session,
+                            reservation,
+                            group,
+                            content_type="image",
+                            image_url=reservation.cover_url,
+                            image_alt=reservation.cover_alt or f"{reservation.title}封面",
+                            reply_index=opening_index + 1,
+                            now=now,
+                        )
 
     def update_performance_settings(
         self, maximum_duration_minutes: int
@@ -15782,6 +15957,9 @@ class CoreRepository:
                         ):
                             schedule.status = "skipped"
                             continue
+                        if self.performance_blocks_new_game(group_chat_id):
+                            schedule.status = "skipped"
+                            continue
                         if self._has_active_game(session, group_chat_id):
                             schedule.status = "skipped"
                             continue
@@ -16934,6 +17112,7 @@ class CoreRepository:
     def run_daily_jobs(self, now: datetime) -> None:
         now = now.astimezone(BEIJING)
         should_backfill = self._current_day_history_backfilled != now.date()
+        self.run_performance_jobs(now)
         self.run_dark_market_jobs(now)
         self.run_shop_card_jobs(now)
         with self.transaction():
