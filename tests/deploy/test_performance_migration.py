@@ -58,3 +58,23 @@ def test_migration_57_adds_performance_defaults(tmp_path, monkeypatch) -> None:
     assert "performances_enabled" not in {
         column["name"] for column in inspector.get_columns("group_chats")
     }
+
+
+def test_migration_57_skips_incomplete_legacy_test_schema(
+    tmp_path, monkeypatch
+) -> None:
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'legacy-partial.db'}"
+    monkeypatch.setenv("DZMM_DATABASE_URL", database_url)
+    engine = create_engine(database_url)
+    metadata = MetaData()
+    Table("unrelated_legacy_table", metadata, Column("id", Uuid, primary_key=True))
+    metadata.create_all(engine)
+    config = Config(str(ROOT / "alembic.ini"))
+    command.stamp(config, "20260826_56")
+
+    command.upgrade(config, "20260826_57")
+
+    inspector = inspect(engine)
+    assert "performance_settings" not in inspector.get_table_names()
+
+    command.downgrade(config, "20260826_56")

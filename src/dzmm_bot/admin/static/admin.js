@@ -1619,7 +1619,7 @@ function renderPerformances(items) {
   const upcoming = items.filter((item) => upcomingStates.has(item.state));
   const history = items.filter((item) => !upcomingStates.has(item.state) && item.state !== "pending_review");
   document.querySelector("#performance-pending-list").innerHTML = pending.map((item) => performanceCard(item, `<button class="primary" data-performance-action="approve" data-performance-id="${escapeHtml(item.id)}" type="button">通过</button><button class="danger-button" data-performance-action="reject" data-performance-id="${escapeHtml(item.id)}" type="button">拒绝</button>`)).join("") || '<p class="muted">暂无待审核公演。</p>';
-  document.querySelector("#performance-list").innerHTML = upcoming.map((item) => performanceCard(item, `<button class="danger-button" data-performance-action="cancel" data-performance-id="${escapeHtml(item.id)}" type="button">强制取消</button>`)).join("") || '<p class="muted">暂无未来或进行中的公演。</p>';
+  document.querySelector("#performance-list").innerHTML = upcoming.map((item) => performanceCard(item, (!item.pre_notice_sent_at || identity?.role === "super_admin") ? `<button class="danger-button" data-performance-action="cancel" data-performance-id="${escapeHtml(item.id)}" type="button">强制取消</button>` : "")).join("") || '<p class="muted">暂无未来或进行中的公演。</p>';
   document.querySelector("#performance-history-list").innerHTML = history.map((item) => performanceCard(item)).join("") || '<p class="muted">暂无历史公演。</p>';
 }
 

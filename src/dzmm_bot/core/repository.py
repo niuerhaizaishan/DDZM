@@ -2042,7 +2042,9 @@ class CoreRepository:
                 raise LookupError("group_chat_not_found")
             if record.listening_enabled:
                 self._guard_group_chat_can_stop(session, group_id)
-            elif self._group_has_active_gameplay(session, group_id):
+            elif self._group_has_active_gameplay(
+                session, group_id
+            ) or self._group_has_active_performance(session, group_id):
                 raise GroupChatConflict("active_gameplay")
             before = _group_chat_config(record)
             record.listening_enabled = False
@@ -2183,7 +2185,9 @@ class CoreRepository:
     def _guard_group_chat_can_stop(
         self, session: Session, group_id: UUID
     ) -> None:
-        if self._group_has_active_gameplay(session, group_id):
+        if self._group_has_active_gameplay(
+            session, group_id
+        ) or self._group_has_active_performance(session, group_id):
             raise GroupChatConflict("active_gameplay")
         enabled_count = session.scalar(
             select(func.count(GroupChatRecord.id)).where(
@@ -2205,6 +2209,23 @@ class CoreRepository:
             RandomEventRecord.state.in_(("signup", "in_progress", "tipping")),
         )
         return bool(session.scalar(select(exists(random_event))))
+
+    @staticmethod
+    def _group_has_active_performance(
+        session: Session, group_id: UUID
+    ) -> bool:
+        return bool(
+            session.scalar(
+                select(
+                    exists().where(
+                        PerformanceReservationRecord.group_chat_id == group_id,
+                        PerformanceReservationRecord.state.in_(
+                            PERFORMANCE_ACTIVE_STATES
+                        ),
+                    )
+                )
+            )
+        )
 
     @classmethod
     def _group_has_active_group_game(
@@ -7136,6 +7157,7 @@ class CoreRepository:
     ) -> PerformanceView:
         now = now.astimezone(BEIJING)
         with self._session() as session:
+            self._lock_gameplay_gate(session)
             record = session.get(
                 PerformanceReservationRecord,
                 UUID(str(reservation_id)),
@@ -7186,6 +7208,7 @@ class CoreRepository:
             raise ValueError("取消公演必须填写原因")
         now = now.astimezone(BEIJING)
         with self._session() as session:
+            self._lock_gameplay_gate(session)
             record = session.get(
                 PerformanceReservationRecord,
                 UUID(str(reservation_id)),
@@ -7203,6 +7226,17 @@ class CoreRepository:
             self._enqueue_performance_direct_notice(
                 session, record, f"你的公演《{record.title}》已取消：{reason.strip()}"
             )
+            if record.pre_notice_sent_at is not None or record.started_at is not None:
+                group = session.get(GroupChatRecord, record.group_chat_id)
+                if group is not None:
+                    self._enqueue_performance_group_outbound(
+                        session,
+                        record,
+                        group,
+                        text_value=f"公演《{record.title}》已由董事会取消：{reason.strip()}",
+                        now=now,
+                    )
+            self._flush_performance_deferred_notices(session, record, now)
             session.add(
                 AuditEventRecord(
                     event_type="performance_cancelled",

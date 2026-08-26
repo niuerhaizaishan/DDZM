@@ -19,7 +19,29 @@ _LIVE = (
 
 
 def upgrade() -> None:
-    if sa.inspect(op.get_bind()).has_table("ai_activity_events"):
+    inspector = sa.inspect(op.get_bind())
+    required_tables = {
+        "group_chats",
+        "users",
+        "inbound_messages",
+        "outbound_messages",
+    }
+    if not required_tables.issubset(inspector.get_table_names()):
+        return
+    required_columns = {
+        "group_chats": {"id"},
+        "users": {"id"},
+        "inbound_messages": {"id"},
+        "outbound_messages": {"id", "status"},
+    }
+    if any(
+        columns
+        - {column["name"] for column in inspector.get_columns(table_name)}
+        for table_name, columns in required_columns.items()
+    ):
+        return
+
+    if inspector.has_table("ai_activity_events"):
         with op.batch_alter_table("ai_activity_events") as batch:
             batch.alter_column(
                 "detail",
@@ -216,6 +238,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    if not sa.inspect(op.get_bind()).has_table("performance_settings"):
+        return
+
     op.drop_index(
         "ux_outbound_messages_held_performance_key", table_name="outbound_messages"
     )

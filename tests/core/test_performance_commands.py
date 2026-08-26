@@ -376,3 +376,21 @@ def test_performance_tip_can_resolve_reply_target(command_context) -> None:
         assert session.scalar(
             select(UserRecord.balance).where(UserRecord.platform_id == "actor")
         ) == 106
+
+
+def test_performance_help_lists_all_player_commands(command_context) -> None:
+    service, repository, group, now = command_context
+
+    _receive(service, "owner", "/帮助 公演", now, room=group.chatroom_id)
+
+    text = _claim(repository, group.chatroom_id, now).text
+    for expected in (
+        "/预约公演",
+        "/公演日程",
+        "/我的公演预约",
+        "/取消公演预约",
+        "/延期 30m",
+        "/end",
+        "回复参演人员本场消息发送 /打赏 金额",
+    ):
+        assert expected in text
