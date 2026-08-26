@@ -963,7 +963,8 @@ class DarkMarketListingRecord(Base):
             "ix_dark_market_listings_receipt_due", "state", "receipt_deadline"
         ),
         CheckConstraint(
-            "state IN ('active', 'awaiting_receipt', 'sold', 'complained', "
+            "state IN ('active', 'awaiting_receipt', 'complaint_pending', "
+            "'sold', 'complained', "
             "'unsold', 'force_delisted')",
             name="ck_dark_market_listing_state",
         ),
@@ -974,6 +975,10 @@ class DarkMarketListingRecord(Base):
         CheckConstraint(
             "starting_price BETWEEN 1 AND 99999",
             name="ck_dark_market_listing_starting_price",
+        ),
+        CheckConstraint(
+            "complaint_decision IS NULL OR complaint_decision IN ('approved', 'rejected')",
+            name="ck_dark_market_listing_complaint_decision",
         ),
     )
 
@@ -1000,6 +1005,10 @@ class DarkMarketListingRecord(Base):
     receipt_started_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
     receipt_deadline: Mapped[datetime | None] = mapped_column(BeijingDateTime)
     receipt_resolved_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    complaint_requested_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    complaint_reviewed_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    complaint_reviewed_by: Mapped[str | None] = mapped_column(String(100))
+    complaint_decision: Mapped[str | None] = mapped_column(String(16))
     created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
     finished_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
 

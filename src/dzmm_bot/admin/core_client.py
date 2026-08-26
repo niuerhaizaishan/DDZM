@@ -147,6 +147,10 @@ class AdminCorePort(Protocol):
 
     def force_delist_dark_market_listing(self, listing_id: str) -> dict: ...
 
+    def review_dark_market_complaint(
+        self, listing_id: str, approve: bool, actor: str, now: str
+    ) -> dict: ...
+
     def get_performance_settings(self) -> dict: ...
 
     def set_performance_settings(self, settings: dict) -> dict: ...
@@ -578,6 +582,17 @@ class CoreClient:
     def force_delist_dark_market_listing(self, listing_id: str) -> dict:
         response = self._client.post(
             f"/internal/game/dark-market/listings/{listing_id}/force-delist"
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def review_dark_market_complaint(
+        self, listing_id: str, approve: bool, actor: str, now: str
+    ) -> dict:
+        decision = "approve" if approve else "reject"
+        response = self._client.post(
+            f"/internal/game/dark-market/listings/{listing_id}/complaint/{decision}",
+            json={"actor": actor, "now": now},
         )
         response.raise_for_status()
         return response.json()

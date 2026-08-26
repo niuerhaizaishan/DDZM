@@ -184,7 +184,7 @@
                 <div id="dark-market-settings-card" class="settings-card" aria-live="polite"></div>
                 <hr>
                 <div class="panel-heading"><div><h2>交易记录</h2><p class="muted">管理员可查看真实买卖身份、精确时间和完整报价链。</p></div><button id="refresh-dark-market" class="secondary" type="button">刷新记录</button></div>
-                <div class="list-toolbar"><div class="list-toolbar-controls"><label>状态<select id="dark-market-status-filter"><option value="">全部</option><option value="active">竞价中</option><option value="sold">已成交</option><option value="unsold">已流拍</option><option value="force_delisted">强制下架</option></select></label></div><label>每页<select id="dark-market-page-size"><option value="10">10</option><option value="20" selected>20</option><option value="50">50</option></select></label></div>
+                <div class="list-toolbar"><div class="list-toolbar-controls"><label>状态<select id="dark-market-status-filter"><option value="">全部</option><option value="active">竞价中</option><option value="awaiting_receipt">待确认收货</option><option value="complaint_pending">投诉审核中</option><option value="sold">已成交</option><option value="complained">投诉成立</option><option value="unsold">已流拍</option><option value="force_delisted">强制下架</option></select></label></div><label>每页<select id="dark-market-page-size"><option value="10">10</option><option value="20" selected>20</option><option value="50">50</option></select></label></div>
                 <div id="dark-market-listings" class="data-list" aria-live="polite"></div>
                 <nav id="dark-market-pagination" class="pagination" aria-label="暗网交易记录分页"></nav>
               </section>

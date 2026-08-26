@@ -467,6 +467,61 @@ def test_dark_market_receipt_commands_are_private_and_confirm_the_order():
     assert repository.get_user_profile("seller").user.balance == 119
 
 
+def test_dark_market_complaint_command_reports_pending_board_review():
+    service, repository, factory = _service()
+    now = datetime(2026, 8, 24, 10, 0, tzinfo=BEIJING)
+    market = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=dark-complaint-command", now
+    )
+    for platform_id, name in (("seller", "卖家"), ("buyer", "买家")):
+        repository.create_user(platform_id, name, now, 100)
+    repository.upsert_direct_chats(
+        [("seller", "direct-seller"), ("buyer", "direct-buyer")], now
+    )
+    _configure_dark_market(repository, market.id)
+    for suffix, content in (
+        ("start", "/上架暗网"),
+        ("name", "旧钥匙"),
+        ("purpose", "开门"),
+        ("details", "来历不明"),
+        ("gender", "保密"),
+        ("price", "10"),
+        ("confirm", "/确认"),
+    ):
+        _direct_receive(
+            service,
+            f"dark-complaint-{suffix}",
+            "seller",
+            content,
+            now,
+            "direct-seller",
+        )
+    _direct_receive(
+        service,
+        "dark-complaint-bid",
+        "buyer",
+        "/报价 1 20",
+        now,
+        "direct-buyer",
+    )
+    repository.run_dark_market_jobs(now + timedelta(hours=3))
+
+    complained = _direct_receive(
+        service,
+        "dark-complaint-submit",
+        "buyer",
+        "/投诉 1",
+        now + timedelta(hours=4),
+        "direct-buyer",
+    )
+
+    assert "等待董事会审核" in "".join(
+        _replies_for(factory, complained.message_id)
+    )
+    assert repository.get_user_profile("buyer").user.balance == 80
+    assert repository.get_user_profile("seller").user.balance == 100
+
+
 def test_help_dark_market_lists_exact_commands_and_anonymity_rules():
     service, repository, factory = _service()
     now = datetime(2026, 8, 24, 10, 0, tzinfo=BEIJING)

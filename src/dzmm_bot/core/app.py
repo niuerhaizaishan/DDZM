@@ -85,6 +85,7 @@ from .api_models import (
     DarkMarketSettingsResponse,
     DarkMarketRankLimitResponse,
     SetDarkMarketSettingsRequest,
+    ReviewDarkMarketComplaintRequest,
     ShopAdminActivityResponse,
     ShopSceneClaimResponse,
     DarkMarketListingResponse,
@@ -1905,7 +1906,16 @@ def create_app(
     def dark_market_listings(
         _: Annotated[None, Depends(authorize)],
         status_filter: Annotated[
-            Literal["active", "sold", "unsold", "force_delisted"] | None,
+            Literal[
+                "active",
+                "awaiting_receipt",
+                "complaint_pending",
+                "sold",
+                "complained",
+                "unsold",
+                "force_delisted",
+            ]
+            | None,
             Query(alias="status"),
         ] = None,
         page: Annotated[int, Query(ge=1)] = 1,
@@ -1952,6 +1962,25 @@ def create_app(
         )
         if result.status == "not_found":
             raise HTTPException(status.HTTP_404_NOT_FOUND, "暗网商品不存在")
+        return DarkMarketForceDelistResponse(status=result.status)
+
+    @app.post(
+        "/internal/game/dark-market/listings/{listing_id}/complaint/{decision}",
+        response_model=DarkMarketForceDelistResponse,
+    )
+    def review_dark_market_complaint(
+        listing_id: UUID,
+        decision: Literal["approve", "reject"],
+        request: ReviewDarkMarketComplaintRequest,
+        _: Annotated[None, Depends(authorize)],
+    ) -> DarkMarketForceDelistResponse:
+        result = repository.review_dark_market_complaint(
+            listing_id, decision == "approve", request.actor, request.now
+        )
+        if result.status == "not_found":
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "暗网商品不存在")
+        if result.status == "already_reviewed":
+            raise HTTPException(status.HTTP_409_CONFLICT, "暗网投诉已经处理")
         return DarkMarketForceDelistResponse(status=result.status)
 
     @app.patch(

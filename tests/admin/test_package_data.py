@@ -45,7 +45,8 @@ def test_admin_bundle_contains_dark_market_controls():
     assert "/api/game/dark-market/listings" in script
     assert "force-delist-dark-market" in script
     assert 'awaiting_receipt: "待确认收货"' in script
-    assert 'complained: "已投诉"' in script
+    assert 'complaint_pending: "投诉审核中"' in script
+    assert 'complained: "投诉成立"' in script
     assert "seller_employee_number" in script
     assert "receipt_deadline" in script
     assert "receipt_resolved_at" in script

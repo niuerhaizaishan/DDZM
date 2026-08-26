@@ -1037,6 +1037,11 @@ class SetDarkMarketSettingsRequest(ApiModel):
         return self
 
 
+class ReviewDarkMarketComplaintRequest(ApiModel):
+    actor: str = Field(min_length=1, max_length=100)
+    now: AwareDatetime
+
+
 class DarkMarketBidResponse(ApiModel):
     id: UUID
     bidder_platform_id: str
@@ -1073,6 +1078,10 @@ class DarkMarketListingResponse(ApiModel):
     receipt_started_at: AwareDatetime | None
     receipt_deadline: AwareDatetime | None
     receipt_resolved_at: AwareDatetime | None
+    complaint_requested_at: AwareDatetime | None
+    complaint_reviewed_at: AwareDatetime | None
+    complaint_reviewed_by: str | None
+    complaint_decision: str | None
     created_at: AwareDatetime
     finished_at: AwareDatetime | None
     disclosure_state: str | None

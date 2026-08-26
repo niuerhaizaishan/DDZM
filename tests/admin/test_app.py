@@ -168,6 +168,10 @@ class FakeCore:
                 "receipt_started_at": None,
                 "receipt_deadline": None,
                 "receipt_resolved_at": None,
+                "complaint_requested_at": None,
+                "complaint_reviewed_at": None,
+                "complaint_reviewed_by": None,
+                "complaint_decision": None,
                 "created_at": "2026-08-24T15:00:00+08:00",
                 "finished_at": None,
                 "disclosure_state": None,
@@ -798,6 +802,18 @@ class FakeCore:
         item["state"] = "force_delisted"
         return {"status": "force_delisted"}
 
+    def review_dark_market_complaint(self, listing_id, approve, actor, now):
+        item = self.get_dark_market_listing(listing_id)
+        if item["state"] != "complaint_pending":
+            return {"status": "already_reviewed"}
+        item.update(
+            state="complained" if approve else "sold",
+            complaint_reviewed_at=now,
+            complaint_reviewed_by=actor,
+            complaint_decision="approved" if approve else "rejected",
+        )
+        return {"status": "approved" if approve else "rejected"}
+
     def get_red_packet_settings(self):
         return self.red_packet_settings
 
@@ -1232,6 +1248,34 @@ def test_admin_page_contains_performance_management(client):
     assert 'id="performance-list"' in page
     assert 'id="group-chat-performances-enabled"' in page
     assert 'requestGame("/api/game/performances"' in script
+
+
+def test_admin_page_contains_dark_market_complaint_review_actions(client):
+    page = client.get("/").text
+    script = client.get("/static/admin.js").text
+
+    assert '<option value="complaint_pending">投诉审核中</option>' in page
+    assert "data-dark-market-complaint-action" in script
+    assert "/complaint/approve" in script
+    assert "/complaint/reject" in script
+
+
+def test_admin_can_review_dark_market_complaint(client, headers, core):
+    item = core.dark_market_listings[0]
+    item.update(
+        state="complaint_pending",
+        complaint_requested_at="2026-08-24T19:00:00+08:00",
+    )
+
+    response = client.post(
+        f"/api/game/dark-market/listings/{item['id']}/complaint/approve",
+        headers={**headers, "Idempotency-Key": "approve-dark-complaint"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "approved"
+    assert item["state"] == "complained"
+    assert item["complaint_reviewed_by"] == "超级管理员"
 
 
 def test_admin_can_approve_pending_performance(client, headers, core):
@@ -2346,6 +2390,8 @@ def test_concrete_core_client_uses_dark_market_contract_paths():
         calls.append((request.method, request.url.path, dict(request.url.params)))
         if request.url.path.endswith("/force-delist"):
             return httpx.Response(200, json={"status": "force_delisted"})
+        if "/complaint/" in request.url.path:
+            return httpx.Response(200, json={"status": "approved"})
         if request.url.path.endswith("/settings"):
             return httpx.Response(200, json={"enabled": True, "version": 0})
         if request.url.path.endswith("/listings"):
@@ -2363,6 +2409,9 @@ def test_concrete_core_client_uses_dark_market_contract_paths():
     core.list_dark_market_listings("active", 2, 10)
     core.get_dark_market_listing("listing-1")
     core.force_delist_dark_market_listing("listing-1")
+    core.review_dark_market_complaint(
+        "listing-1", True, "董事甲", "2026-08-26T12:00:00+08:00"
+    )
 
     assert calls == [
         ("GET", "/internal/game/dark-market/settings", {}),
@@ -2376,6 +2425,11 @@ def test_concrete_core_client_uses_dark_market_contract_paths():
         (
             "POST",
             "/internal/game/dark-market/listings/listing-1/force-delist",
+            {},
+        ),
+        (
+            "POST",
+            "/internal/game/dark-market/listings/listing-1/complaint/approve",
             {},
         ),
     ]

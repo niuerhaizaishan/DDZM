@@ -523,7 +523,7 @@ TEMPLATE_DEFINITIONS = (
         definition
         for command, success_scenario, success_title, success_text in (
             ("/确认收货", "confirmed", "确认成功", "暗网商品 #{商品编号} 确认收货成功。"),
-            ("/投诉", "complained", "投诉成功", "暗网商品 #{商品编号} 投诉已处理，成交款已退还，卖家已被处罚。"),
+            ("/投诉", "complaint_pending", "投诉已提交", "暗网商品 #{商品编号} 已进入投诉审核，资金继续冻结，等待董事会审核。"),
         )
         for definition in (
             TemplateDefinition(command, "private_only", "仅限私聊", f"请在私聊中发送 {command} [商品编号]。", ("{日期}",)),

@@ -479,7 +479,7 @@ def test_buyer_confirmation_pays_seller_fee_and_starts_disclosure(
     assert disclosure.deadline == confirmed_at + timedelta(minutes=10)
 
 
-def test_buyer_complaint_refunds_escrow_and_fines_seller_below_zero(
+def test_buyer_complaint_waits_for_board_review_without_moving_money(
     repository, now
 ) -> None:
     listing = _active_listing(repository, now)
@@ -505,9 +505,9 @@ def test_buyer_complaint_refunds_escrow_and_fines_seller_below_zero(
         complained_at,
     )
 
-    assert result.status == "complained"
-    assert _balance(repository, "buyer-a") == 100
-    assert _balance(repository, "seller") == -16
+    assert result.status == "complaint_pending"
+    assert _balance(repository, "buyer-a") == 79
+    assert _balance(repository, "seller") == 5
     with repository._session() as session:
         stored = session.get(DarkMarketListingRecord, listing.id)
         disclosure = session.scalar(
@@ -521,9 +521,7 @@ def test_buyer_complaint_refunds_escrow_and_fines_seller_below_zero(
                     BalanceTransactionRecord.amount,
                     BalanceTransactionRecord.source,
                 ).where(
-                    BalanceTransactionRecord.source.like(
-                        "dark_market_complaint_%"
-                    )
+                    BalanceTransactionRecord.source.like("dark_market_complaint_%")
                 )
             ).all()
         )
@@ -531,22 +529,170 @@ def test_buyer_complaint_refunds_escrow_and_fines_seller_below_zero(
             session.scalars(
                 select(OutboundRecord.text).where(
                     OutboundRecord.delivery_kind == "group",
-                    OutboundRecord.text.like("%公开通报批评%"),
+                    OutboundRecord.text.like("%投诉审核%"),
                 )
             )
         )
     assert stored is not None
-    assert stored.state == "complained"
-    assert stored.receipt_resolved_at == complained_at
+    assert stored.state == "complaint_pending"
+    assert stored.complaint_requested_at == complained_at
+    assert stored.complaint_reviewed_at is None
+    assert stored.complaint_reviewed_by is None
+    assert stored.complaint_decision is None
+    assert stored.receipt_resolved_at is None
+    assert stored.finished_at is None
     assert stored.fee_amount is None
     assert disclosure is None
+    assert ledger == set()
+    assert len(notices) == 1
+    assert "商品 #1 进入投诉审核" in notices[0]
+    assert "真实卖家" not in notices[0]
+    assert "买家甲" not in notices[0]
+
+
+def test_board_approves_complaint_refunds_buyer_and_fines_seller(repository, now) -> None:
+    listing = _active_listing(repository, now)
+    repository.place_dark_market_bid(
+        "buyer-a", listing.public_number, 21,
+        _inbound_id(repository, "buyer-a", "/报价 1 21", now), now,
+    )
+    repository.run_dark_market_jobs(listing.ends_at)
+    with repository.transaction():
+        with repository._session() as session:
+            seller = session.scalar(
+                select(UserRecord).where(UserRecord.platform_id == "seller")
+            )
+            assert seller is not None
+            seller.balance = 5
+    complained_at = listing.ends_at + timedelta(hours=1)
+    repository.resolve_dark_market_receipt(
+        "buyer-a", listing.public_number, "complain",
+        _inbound_id(repository, "buyer-a", "/投诉 1", complained_at),
+        complained_at,
+    )
+    reviewed_at = complained_at + timedelta(minutes=10)
+
+    result = repository.review_dark_market_complaint(
+        listing.id, True, "董事甲", reviewed_at
+    )
+
+    assert result.status == "approved"
+    assert _balance(repository, "buyer-a") == 100
+    assert _balance(repository, "seller") == -16
+    with repository._session() as session:
+        stored = session.get(DarkMarketListingRecord, listing.id)
+        ledger = set(
+            session.execute(
+                select(
+                    BalanceTransactionRecord.amount,
+                    BalanceTransactionRecord.source,
+                ).where(
+                    BalanceTransactionRecord.source.like("dark_market_complaint_%")
+                )
+            ).all()
+        )
+        notice = session.scalar(
+            select(OutboundRecord.text)
+            .where(OutboundRecord.text.like("%公开通报批评%"))
+            .order_by(OutboundRecord.created_at.desc())
+        )
+    assert stored is not None
+    assert stored.state == "complained"
+    assert stored.complaint_reviewed_at == reviewed_at
+    assert stored.complaint_reviewed_by == "董事甲"
+    assert stored.complaint_decision == "approved"
+    assert stored.receipt_resolved_at == reviewed_at
     assert ledger == {
         (21, "dark_market_complaint_refund"),
         (-21, "dark_market_complaint_penalty"),
     }
-    assert len(notices) == 1
-    assert "真实卖家（#0001）" in notices[0]
-    assert "买家甲" not in notices[0]
+    assert notice is not None
+    assert "真实卖家（#0001）" in notice
+    assert "买家甲" not in notice
+
+
+def test_board_rejects_complaint_and_settles_sale(repository, now) -> None:
+    listing = _active_listing(repository, now)
+    repository.place_dark_market_bid(
+        "buyer-a", listing.public_number, 21,
+        _inbound_id(repository, "buyer-a", "/报价 1 21", now), now,
+    )
+    repository.run_dark_market_jobs(listing.ends_at)
+    complained_at = listing.ends_at + timedelta(hours=1)
+    repository.resolve_dark_market_receipt(
+        "buyer-a", listing.public_number, "complain",
+        _inbound_id(repository, "buyer-a", "/投诉 1", complained_at),
+        complained_at,
+    )
+    reviewed_at = complained_at + timedelta(minutes=10)
+
+    result = repository.review_dark_market_complaint(
+        listing.id, False, "超级管理员", reviewed_at
+    )
+
+    assert result.status == "rejected"
+    assert _balance(repository, "buyer-a") == 79
+    assert _balance(repository, "seller") == 119
+    with repository._session() as session:
+        stored = session.get(DarkMarketListingRecord, listing.id)
+        disclosure = session.scalar(
+            select(DarkMarketDisclosureRecord).where(
+                DarkMarketDisclosureRecord.listing_id == listing.id
+            )
+        )
+        ledger = set(
+            session.execute(
+                select(
+                    BalanceTransactionRecord.amount,
+                    BalanceTransactionRecord.source,
+                ).where(BalanceTransactionRecord.source.like("dark_market_sale_%"))
+            ).all()
+        )
+    assert stored is not None
+    assert stored.state == "sold"
+    assert stored.fee_amount == 2
+    assert stored.complaint_reviewed_at == reviewed_at
+    assert stored.complaint_reviewed_by == "超级管理员"
+    assert stored.complaint_decision == "rejected"
+    assert stored.receipt_resolved_at == reviewed_at
+    assert ledger == {
+        (21, "dark_market_sale_income"),
+        (-2, "dark_market_sale_fee"),
+    }
+    assert disclosure is not None
+
+
+def test_pending_complaint_never_auto_confirms_and_review_is_one_way(
+    repository, now
+) -> None:
+    listing = _active_listing(repository, now)
+    repository.place_dark_market_bid(
+        "buyer-a", listing.public_number, 21,
+        _inbound_id(repository, "buyer-a", "/报价 1 21", now), now,
+    )
+    repository.run_dark_market_jobs(listing.ends_at)
+    complained_at = listing.ends_at + timedelta(hours=1)
+    repository.resolve_dark_market_receipt(
+        "buyer-a", listing.public_number, "complain",
+        _inbound_id(repository, "buyer-a", "/投诉 1", complained_at),
+        complained_at,
+    )
+
+    repository.run_dark_market_jobs(listing.ends_at + timedelta(days=10))
+    assert _balance(repository, "buyer-a") == 79
+    assert _balance(repository, "seller") == 100
+
+    first = repository.review_dark_market_complaint(
+        listing.id, True, "董事甲", complained_at + timedelta(days=10)
+    )
+    second = repository.review_dark_market_complaint(
+        listing.id, False, "董事乙", complained_at + timedelta(days=10, minutes=1)
+    )
+
+    assert first.status == "approved"
+    assert second.status == "already_reviewed"
+    assert _balance(repository, "buyer-a") == 100
+    assert _balance(repository, "seller") == 79
 
 
 def test_receipt_auto_confirms_at_exact_72_hour_deadline(repository, now) -> None:

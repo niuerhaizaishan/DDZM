@@ -1083,6 +1083,10 @@ class DarkMarketAdminListing:
     receipt_started_at: datetime | None
     receipt_deadline: datetime | None
     receipt_resolved_at: datetime | None
+    complaint_requested_at: datetime | None
+    complaint_reviewed_at: datetime | None
+    complaint_reviewed_by: str | None
+    complaint_decision: str | None
     created_at: datetime
     finished_at: datetime | None
     disclosure_state: str | None
@@ -8159,9 +8163,14 @@ class CoreRepository:
         )
 
     def _confirm_dark_market_receipt_locked(
-        self, session: Session, listing: DarkMarketListingRecord, now: datetime
+        self,
+        session: Session,
+        listing: DarkMarketListingRecord,
+        now: datetime,
+        *,
+        public_notice: str | None = None,
     ) -> None:
-        if listing.state != "awaiting_receipt":
+        if listing.state not in {"awaiting_receipt", "complaint_pending"}:
             return
         current = session.scalar(
             select(DarkMarketBidRecord)
@@ -8215,8 +8224,11 @@ class CoreRepository:
             session,
             listing,
             group,
-            f"暗网商品 #{listing.public_number} 已确认收货，交易成功，成交价 "
-            f"{current.amount} 摸鱼币。",
+            public_notice
+            or (
+                f"暗网商品 #{listing.public_number} 已确认收货，交易成功，成交价 "
+                f"{current.amount} 摸鱼币。"
+            ),
             now,
         )
         for user in {seller.id: seller, buyer.id: buyer}.values():
@@ -8231,10 +8243,29 @@ class CoreRepository:
                     delivery_kind="direct",
                 )
 
-    def _complain_dark_market_receipt_locked(
+    def _submit_dark_market_complaint_locked(
         self, session: Session, listing: DarkMarketListingRecord, now: datetime
     ) -> None:
         if listing.state != "awaiting_receipt":
+            return
+        group = session.get(GroupChatRecord, listing.announcement_group_id)
+        if group is None or group.chatroom_id is None:
+            raise RuntimeError("暗网播报群不存在")
+        listing.state = "complaint_pending"
+        listing.complaint_requested_at = now
+        self._enqueue_dark_market_public_notice(
+            session,
+            listing,
+            group,
+            f"暗网商品 #{listing.public_number} 进入投诉审核，交易资金继续冻结，"
+            "等待董事会处理。",
+            now,
+        )
+
+    def _approve_dark_market_complaint_locked(
+        self, session: Session, listing: DarkMarketListingRecord, now: datetime
+    ) -> None:
+        if listing.state != "complaint_pending":
             return
         current = session.scalar(
             select(DarkMarketBidRecord)
@@ -8245,7 +8276,7 @@ class CoreRepository:
             .with_for_update()
         )
         if current is None or listing.buyer_user_id is None:
-            raise RuntimeError("暗网待收货报价不存在")
+            raise RuntimeError("暗网待审核投诉报价不存在")
         user_ids = {listing.seller_user_id, listing.buyer_user_id}
         users = {
             user.id: user
@@ -8352,8 +8383,58 @@ class CoreRepository:
                 if action == "confirm":
                     self._confirm_dark_market_receipt_locked(session, listing, now)
                     return DarkMarketReceiptResult("confirmed", listing.public_number)
-                self._complain_dark_market_receipt_locked(session, listing, now)
-                return DarkMarketReceiptResult("complained", listing.public_number)
+                self._submit_dark_market_complaint_locked(session, listing, now)
+                return DarkMarketReceiptResult(
+                    "complaint_pending", listing.public_number
+                )
+
+    def review_dark_market_complaint(
+        self,
+        listing_id: UUID,
+        approve: bool,
+        reviewed_by: str,
+        now: datetime,
+    ) -> DarkMarketReceiptResult:
+        with self.transaction():
+            with self._session() as session:
+                self._lock_gameplay_gate(session)
+                listing = session.get(
+                    DarkMarketListingRecord, listing_id, with_for_update=True
+                )
+                if listing is None:
+                    return DarkMarketReceiptResult("not_found")
+                if listing.state != "complaint_pending":
+                    return DarkMarketReceiptResult(
+                        "already_reviewed", listing.public_number
+                    )
+                listing.complaint_reviewed_at = now
+                listing.complaint_reviewed_by = reviewed_by
+                listing.complaint_decision = "approved" if approve else "rejected"
+                if approve:
+                    self._approve_dark_market_complaint_locked(session, listing, now)
+                    return DarkMarketReceiptResult(
+                        "approved", listing.public_number
+                    )
+                current = session.scalar(
+                    select(DarkMarketBidRecord)
+                    .where(
+                        DarkMarketBidRecord.listing_id == listing.id,
+                        DarkMarketBidRecord.state == "current",
+                    )
+                    .with_for_update()
+                )
+                if current is None:
+                    raise RuntimeError("暗网待审核投诉报价不存在")
+                self._confirm_dark_market_receipt_locked(
+                    session,
+                    listing,
+                    now,
+                    public_notice=(
+                        f"暗网商品 #{listing.public_number} 的投诉已被驳回，交易成功，"
+                        f"成交价 {current.amount} 摸鱼币。"
+                    ),
+                )
+                return DarkMarketReceiptResult("rejected", listing.public_number)
 
     def run_dark_market_jobs(self, now: datetime) -> None:
         with self.transaction():
@@ -8598,6 +8679,10 @@ class CoreRepository:
             receipt_started_at=listing.receipt_started_at,
             receipt_deadline=listing.receipt_deadline,
             receipt_resolved_at=listing.receipt_resolved_at,
+            complaint_requested_at=listing.complaint_requested_at,
+            complaint_reviewed_at=listing.complaint_reviewed_at,
+            complaint_reviewed_by=listing.complaint_reviewed_by,
+            complaint_decision=listing.complaint_decision,
             created_at=listing.created_at,
             finished_at=listing.finished_at,
             disclosure_state=None if disclosure is None else disclosure.state,

@@ -1231,7 +1231,10 @@ def create_app(
         if status_filter not in {
             None,
             "active",
+            "awaiting_receipt",
+            "complaint_pending",
             "sold",
+            "complained",
             "unsold",
             "force_delisted",
         }:
@@ -1268,6 +1271,36 @@ def create_app(
                 lambda: core.force_delist_dark_market_listing(listing_id)
             ),
             scope="dark-market-force-delist",
+        )
+
+    @app.post(
+        "/api/game/dark-market/listings/{listing_id}/complaint/{decision}"
+    )
+    def review_dark_market_complaint(
+        listing_id: str,
+        decision: str,
+        identity: Annotated[AdminIdentity, Depends(authorize)],
+        idempotency_key: Annotated[
+            str | None, Header(alias="Idempotency-Key")
+        ] = None,
+    ) -> JSONResponse:
+        if decision not in {"approve", "reject"}:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown decision")
+        return idempotent_response(
+            identity,
+            idempotency_key,
+            lambda: (
+                200,
+                _relay_core(
+                    lambda: core.review_dark_market_complaint(
+                        listing_id,
+                        decision == "approve",
+                        identity.username,
+                        beijing_now().isoformat(),
+                    )
+                ),
+            ),
+            scope=f"dark-market-complaint:{listing_id}:{decision}",
         )
 
     @app.patch("/api/game/red-packet/settings")
