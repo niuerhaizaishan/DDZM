@@ -3837,7 +3837,7 @@ document.querySelector("#performances-view").addEventListener("click", async (ev
       await runMutation(extensionButton, "处理中…", async () => {
         await requestGame(`/api/game/performance-extensions/${id}/${action}`, {
           method: "POST",
-          headers: {"Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID()},
+          headers: {"Content-Type": "application/json", "Idempotency-Key": idempotencyKey()},
           body: JSON.stringify(reason === null ? {} : {reason: reason.trim()}),
         });
         await loadPerformances();
@@ -3867,7 +3867,7 @@ document.querySelector("#performances-view").addEventListener("click", async (ev
     await runMutation(button, "处理中…", async () => {
       await requestGame(`/api/game/performances/${id}/${action}`, {
         method: "POST",
-        headers: {"Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID()},
+        headers: {"Content-Type": "application/json", "Idempotency-Key": idempotencyKey()},
         ...(body ? {body: JSON.stringify(body)} : {}),
       });
       await loadPerformances();

@@ -1,3 +1,4 @@
+import re
 import tomllib
 from pathlib import Path
 
@@ -64,3 +65,10 @@ def test_admin_bundle_contains_shop_card_controls():
     assert "/api/game/shop/activity" in script
     assert "data-retry-shop-scene" in script
     assert "data-end-shop-state" in script
+
+
+def test_admin_mutations_do_not_call_unqualified_crypto_random_uuid():
+    root = Path(__file__).resolve().parents[2]
+    script = (root / "src/dzmm_bot/admin/static/admin.js").read_text()
+
+    assert re.search(r"(?<![\w.])crypto\.randomUUID\(", script) is None
