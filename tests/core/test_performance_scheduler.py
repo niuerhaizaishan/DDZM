@@ -8,6 +8,7 @@ from sqlalchemy.orm import sessionmaker
 
 from dzmm_bot.core import schema
 from dzmm_bot.core.repository import CoreRepository
+from dzmm_bot.runtime.contracts import InboundMessage
 
 
 BEIJING = ZoneInfo("Asia/Shanghai")
@@ -296,3 +297,50 @@ def test_latest_keyed_performance_notice_replaces_held_text(scheduled_context) -
     assert first.id == second.id
     with factory() as session:
         assert session.get(schema.OutboundRecord, first.id).text == "报价 8"
+
+
+def test_ai_job_completed_during_performance_waits_for_settlement(
+    scheduled_context,
+) -> None:
+    repository, factory, group, _, now = scheduled_context
+    stage_time = now + timedelta(hours=1)
+    repository.get_ai_assistant_settings()
+    with factory.begin() as session:
+        session.get(schema.AIAssistantSettingsRecord, 1).enabled = True
+    inbound, _ = repository.accept_inbound(
+        InboundMessage(
+            "performance-ai-inbound",
+            "owner",
+            "@总监事 介绍一下今晚公演",
+            stage_time - timedelta(seconds=1),
+            source_type="group",
+            chatroom_id=group.chatroom_id,
+        ),
+        group.id,
+    )
+    assert repository.try_enqueue_ai_request(
+        inbound.id,
+        "owner",
+        "介绍一下今晚公演",
+        stage_time - timedelta(seconds=1),
+    ).state == "queued"
+    claim = repository.claim_ai_request(
+        "ai-worker", stage_time - timedelta(seconds=1), 90
+    )
+    repository.run_performance_jobs(stage_time)
+
+    assert repository.complete_ai_request(
+        claim.id, "ai-worker", claim.lease_token, "AI 延迟回复", stage_time
+    )
+    with factory() as session:
+        reply = session.scalar(
+            select(schema.OutboundRecord).where(
+                schema.OutboundRecord.text == "AI 延迟回复"
+            )
+        )
+        assert reply.status == "held_performance"
+
+    repository.end_performance("actor", group.id, stage_time)
+    repository.run_performance_jobs(stage_time + timedelta(seconds=180))
+    with factory() as session:
+        assert session.get(schema.OutboundRecord, reply.id).status == "pending"

@@ -5214,6 +5214,7 @@ class CoreRepository:
         now: datetime,
     ) -> bool:
         with self._session() as session:
+            self._lock_gameplay_gate(session)
             record = session.scalar(
                 select(AIRequestRecord)
                 .where(
@@ -5231,13 +5232,18 @@ class CoreRepository:
             if text:
                 record.status = "completed"
                 record.result_text = text
-                self.enqueue_outbound(record.inbound_message_id, text)
+                self.enqueue_outbound(
+                    record.inbound_message_id,
+                    text,
+                    defer_for_performance=True,
+                )
             else:
                 record.status = "failed"
                 record.failure_summary = failure_summary
                 self.enqueue_outbound(
                     record.inbound_message_id,
                     settings.failure_reply if settings is not None else _DEFAULT_AI_FAILURE_REPLY,
+                    defer_for_performance=True,
                 )
             record.lease_worker_id = None
             record.lease_token = None
@@ -20612,6 +20618,7 @@ class CoreRepository:
         now = now.astimezone(BEIJING)
         with self.transaction():
             with self._session() as session:
+                self._lock_gameplay_gate(session)
                 owner = session.scalar(
                     select(UserRecord).where(UserRecord.platform_id == owner_platform_id)
                 )
@@ -21133,6 +21140,7 @@ class CoreRepository:
         now = now.astimezone(BEIJING)
         with self.transaction():
             with self._session() as session:
+                self._lock_gameplay_gate(session)
                 job = session.get(ShopSceneJobRecord, job_id, with_for_update=True)
                 if (
                     job is None
@@ -21162,6 +21170,7 @@ class CoreRepository:
                     card_session.source_inbound_message_id,
                     result_text,
                     group_chat_id=card_session.group_chat_id,
+                    defer_for_performance=True,
                 )
                 return True
 
@@ -21520,6 +21529,7 @@ class CoreRepository:
         group_chat_id: UUID | None = None,
         destination_chatroom_id: str | None = None,
         delivery_kind: str = "group",
+        defer_for_performance: bool = False,
     ) -> OutboundRecord:
         if recall_after_seconds is not None and recall_after_seconds < 1:
             raise ValueError("撤回秒数必须为正整数")
@@ -21537,6 +21547,16 @@ class CoreRepository:
                         if inbound.source_type == "group"
                         else None
                     )
+                )
+            performance = None
+            if (
+                defer_for_performance
+                and delivery_kind == "group"
+                and group_chat_id is not None
+            ):
+                self._lock_gameplay_gate(session)
+                performance = self._stage_active_performance(
+                    session, group_chat_id
                 )
             latest_reply_index = session.scalar(
                 select(func.max(OutboundRecord.reply_index)).where(
@@ -21576,6 +21596,14 @@ class CoreRepository:
                     destination_chatroom_id=destination_chatroom_id,
                     delivery_key=destination_chatroom_id or "__group__",
                     delivery_kind=delivery_kind,
+                    status=(
+                        "held_performance"
+                        if performance is not None
+                        else "pending"
+                    ),
+                    deferred_by_performance_id=(
+                        None if performance is None else performance.id
+                    ),
                     **reference,
                 )
                 for index, text in enumerate(replies)
