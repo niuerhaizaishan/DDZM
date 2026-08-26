@@ -179,6 +179,71 @@ class CoreService:
                     default_destination_chatroom_id=message.chatroom_id,
                 )
                 return ReceiveResult(stored.id, True)
+            if group_context is not None:
+                performance_state = self._repository.active_performance_state(
+                    group_context.group_chat_id
+                )
+                if performance_state is not None:
+                    allowed_command = (
+                        performance_state == "performing" and command == "/end"
+                    ) or (
+                        performance_state == "tipping" and command == "/打赏"
+                    )
+                    if allowed_command:
+                        performance_reply = self._command_handler.handle(message)
+                        self._enqueue_replies(
+                            stored.id,
+                            performance_reply,
+                            group_context=group_context,
+                        )
+                        self._repository.record_ai_memory_message(
+                            stored.id,
+                            message.sender_platform_id,
+                            False,
+                            message.received_at,
+                        )
+                        return ReceiveResult(stored.id, True)
+                    if message.content.lstrip().startswith("/"):
+                        blocked = (
+                            "公演正在进行，仅参演人员可使用 /end。"
+                            if performance_state == "performing"
+                            else "公演打赏阶段仅开放 /打赏 指令。"
+                        )
+                        self._repository.enqueue_outbound(
+                            stored.id,
+                            blocked,
+                            group_chat_id=group_context.group_chat_id,
+                            destination_chatroom_id=group_context.chatroom_id,
+                        )
+                        self._repository.record_ai_memory_message(
+                            stored.id,
+                            message.sender_platform_id,
+                            False,
+                            message.received_at,
+                        )
+                        return ReceiveResult(stored.id, True)
+                    stage = self._repository.classify_performance_message(
+                        message.sender_platform_id,
+                        stored.id,
+                        message.content,
+                        group_context.group_chat_id,
+                    )
+                    self._repository.record_ai_memory_message(
+                        stored.id,
+                        message.sender_platform_id,
+                        False,
+                        message.received_at,
+                    )
+                    if stage in {"participant", "observer_valid"}:
+                        return ReceiveResult(stored.id, True)
+                    if stage == "observer_invalid":
+                        self._repository.enqueue_outbound(
+                            stored.id,
+                            "公演正在进行，请使用括号进行场外交流。",
+                            group_chat_id=group_context.group_chat_id,
+                            destination_chatroom_id=group_context.chatroom_id,
+                        )
+                        return ReceiveResult(stored.id, True)
             self._repository.record_activity(
                 message.sender_platform_id, message.received_at, message.content
             )

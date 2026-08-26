@@ -117,6 +117,13 @@ def render_performance_opening(view: PerformanceView) -> str:
     )
 
 
+def render_performance_tipping_open(view: PerformanceView) -> str:
+    return (
+        f"公演《{view.title}》演出部分已结束，进入 180 秒打赏环节。\n"
+        "仅开放 /打赏 参演人员名称 金额，或回复参演人员本场消息发送 /打赏 金额。"
+    )
+
+
 class CoverImageValidator(Protocol):
     def validate(self, url: str) -> ValidatedCover: ...
 

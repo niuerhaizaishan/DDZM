@@ -162,6 +162,17 @@ class GroupCommandHandler:
                 f"{index}. {view.title}｜{view.scheduled_at.strftime('%Y/%m/%d-%H:%M:%S')}"
                 for index, view in enumerate(views, 1)
             )
+        if command == "/end":
+            if message.source_type != "group" or group_chat_id is None:
+                return "请在公演所在群发送 /end。"
+            result = self._repository.end_performance(
+                message.sender_platform_id, group_chat_id, received_at
+            )
+            return {
+                "not_performing": "当前没有正在演出的公演。",
+                "not_participant": "只有本场参演人员可以结束公演。",
+                "already_tipping": "公演已进入打赏环节。",
+            }.get(result.status)
         if command == "/上架暗网":
             return self._dark_market_start(message, received_at)
         if command == "/取消上架":

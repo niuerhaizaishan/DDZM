@@ -71,6 +71,7 @@ from .performance import (
     parse_performance_participants,
     render_performance_opening,
     render_performance_preview,
+    render_performance_tipping_open,
 )
 from .number_bomb import (
     NUMBER_BOMB_MULTIPLIER_TENTHS,
@@ -6494,6 +6495,138 @@ class CoreRepository:
             )
 
     @staticmethod
+    def _stage_active_performance(
+        session: Session, group_chat_id: UUID
+    ) -> PerformanceReservationRecord | None:
+        return session.scalar(
+            select(PerformanceReservationRecord)
+            .where(
+                PerformanceReservationRecord.group_chat_id == group_chat_id,
+                PerformanceReservationRecord.state.in_(("performing", "tipping")),
+            )
+            .with_for_update()
+        )
+
+    def active_performance_state(self, group_chat_id: UUID) -> str | None:
+        with self._session() as session:
+            return session.scalar(
+                select(PerformanceReservationRecord.state).where(
+                    PerformanceReservationRecord.group_chat_id == group_chat_id,
+                    PerformanceReservationRecord.state.in_(("performing", "tipping")),
+                )
+            )
+
+    def classify_performance_message(
+        self,
+        platform_id: str,
+        inbound_id: UUID | str,
+        content: str,
+        group_chat_id: UUID,
+    ) -> str:
+        with self._session() as session:
+            reservation = self._stage_active_performance(session, group_chat_id)
+            if reservation is None:
+                return "none"
+            user = session.scalar(
+                select(UserRecord).where(UserRecord.platform_id == platform_id)
+            )
+            is_participant = bool(
+                user is not None
+                and session.scalar(
+                    select(
+                        exists().where(
+                            PerformanceParticipantRecord.reservation_id
+                            == reservation.id,
+                            PerformanceParticipantRecord.user_id == user.id,
+                        )
+                    )
+                )
+            )
+            stripped = content.strip()
+            is_parenthesized = (
+                len(stripped) >= 2
+                and (
+                    (stripped.startswith("(") and stripped.endswith(")"))
+                    or (stripped.startswith("（") and stripped.endswith("）"))
+                )
+            )
+            if reservation.state == "performing" and is_participant:
+                inbound_uuid = UUID(str(inbound_id))
+                inbound = session.get(InboundRecord, inbound_uuid)
+                if inbound is None:
+                    raise ValueError("入站消息不存在")
+                session.add(
+                    PerformanceMessageRecord(
+                        reservation_id=reservation.id,
+                        user_id=user.id,
+                        inbound_message_id=inbound_uuid,
+                        created_at=inbound.received_at,
+                    )
+                )
+                return "participant"
+            if is_parenthesized:
+                return "observer_valid"
+            return "observer_invalid"
+
+    def _start_performance_tipping(
+        self,
+        session: Session,
+        reservation: PerformanceReservationRecord,
+        now: datetime,
+    ) -> PerformanceActionResult:
+        reservation.state = "tipping"
+        reservation.tipping_started_at = now
+        reservation.tipping_deadline = now + timedelta(seconds=180)
+        group = session.get(GroupChatRecord, reservation.group_chat_id)
+        if group is not None:
+            self._enqueue_performance_group_outbound(
+                session,
+                reservation,
+                group,
+                text_value=render_performance_tipping_open(
+                    self._performance_view(session, reservation)
+                ),
+                now=now,
+            )
+        return PerformanceActionResult(
+            "tipping", self._performance_view(session, reservation)
+        )
+
+    def end_performance(
+        self,
+        platform_id: str,
+        group_chat_id: UUID,
+        now: datetime,
+        *,
+        forced: bool = False,
+    ) -> PerformanceActionResult:
+        now = now.astimezone(BEIJING)
+        with self._session() as session:
+            self._lock_gameplay_gate(session)
+            reservation = self._stage_active_performance(session, group_chat_id)
+            if reservation is None:
+                return PerformanceActionResult("not_performing")
+            if reservation.state != "performing":
+                return PerformanceActionResult(
+                    "already_tipping", self._performance_view(session, reservation)
+                )
+            if not forced:
+                user = session.scalar(
+                    select(UserRecord).where(UserRecord.platform_id == platform_id)
+                )
+                if user is None:
+                    return PerformanceActionResult("not_participant")
+                participant = session.scalar(
+                    select(PerformanceParticipantRecord.id).where(
+                        PerformanceParticipantRecord.reservation_id == reservation.id,
+                        PerformanceParticipantRecord.user_id == user.id,
+                    )
+                )
+                if participant is None:
+                    return PerformanceActionResult("not_participant")
+            return self._start_performance_tipping(session, reservation, now)
+
+    @staticmethod
     def _enqueue_performance_group_outbound(
         session: Session,
         reservation: PerformanceReservationRecord,
@@ -6649,6 +6782,19 @@ class CoreRepository:
                             reply_index=opening_index + 1,
                             now=now,
                         )
+                performing = list(
+                    session.scalars(
+                        select(PerformanceReservationRecord)
+                        .where(PerformanceReservationRecord.state == "performing")
+                        .with_for_update()
+                    )
+                )
+                for reservation in performing:
+                    if reservation.started_at is None:
+                        continue
+                    maximum = reservation.maximum_duration_minutes_snapshot or 360
+                    if reservation.started_at + timedelta(minutes=maximum) <= now:
+                        self._start_performance_tipping(session, reservation, now)
 
     def update_performance_settings(
         self, maximum_duration_minutes: int

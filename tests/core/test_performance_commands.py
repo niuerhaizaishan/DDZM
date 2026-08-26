@@ -3,13 +3,18 @@ import pytest
 from datetime import datetime, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, delete, func, select
 from sqlalchemy.orm import sessionmaker
 
 from dzmm_bot.core import performance
 from dzmm_bot.core.commands import GroupCommandHandler
 from dzmm_bot.core.repository import CoreRepository
-from dzmm_bot.core.schema import Base, GroupChatRecord
+from dzmm_bot.core.schema import (
+    Base,
+    GroupChatRecord,
+    OutboundRecord,
+    PerformanceMessageRecord,
+)
 from dzmm_bot.core.service import CoreService
 from dzmm_bot.runtime.contracts import InboundMessage
 
@@ -80,6 +85,7 @@ def command_context():
         session.get(GroupChatRecord, group.id).performances_enabled = True
     repository.create_user("owner", "发起人", now, 100)
     repository.create_user("actor", "演员甲", now, 100)
+    repository.create_user("observer", "观众甲", now, 100)
     repository.upsert_direct_chats([("owner", "direct-owner")], now)
     service = CoreService(repository, GroupCommandHandler(repository))
     return service, repository, group, now
@@ -232,3 +238,62 @@ def test_owner_can_request_postponement_in_direct_chat(command_context) -> None:
     reply = _claim(repository, "direct-owner", now)
     assert "延期 30 分钟" in reply.text
     assert "等待管理员审核" in reply.text
+
+
+def _open_performance(command_context):
+    service, repository, group, now = command_context
+    repository.begin_performance_draft("owner", group.id, now)
+    for value in (
+        "夜航",
+        "夜间公演",
+        (now + timedelta(days=1)).strftime("%Y/%m/%d-%H:%M:%S"),
+        "演员甲",
+        "/跳过",
+        "/确认",
+    ):
+        result = repository.consume_performance_draft_input(
+            "owner", uuid4(), now, text=value
+        )
+    repository.review_performance(result.reservation.id, True, "admin:a", now)
+    stage_time = now + timedelta(days=1)
+    repository.run_performance_jobs(stage_time)
+    with repository._session_factory.begin() as session:
+        session.execute(delete(OutboundRecord))
+    return service, repository, group, stage_time
+
+
+def test_performance_participant_line_is_recorded_without_reply(command_context) -> None:
+    service, repository, group, stage_time = _open_performance(command_context)
+
+    _receive(service, "actor", "第一幕开始。", stage_time, room=group.chatroom_id)
+
+    assert _claim(repository, group.chatroom_id, stage_time) is None
+    with repository._session_factory() as session:
+        assert session.scalar(select(func.count(PerformanceMessageRecord.id))) == 1
+
+
+def test_performance_observer_must_use_parentheses(command_context) -> None:
+    service, repository, group, stage_time = _open_performance(command_context)
+
+    _receive(service, "observer", "我也想说话", stage_time, room=group.chatroom_id)
+    warning = _claim(repository, group.chatroom_id, stage_time)
+    assert warning.text == "公演正在进行，请使用括号进行场外交流。"
+    _confirm(repository, warning, stage_time)
+    _receive(
+        service,
+        "observer",
+        "（场外：好耶）",
+        stage_time + timedelta(seconds=1),
+        room=group.chatroom_id,
+    )
+    assert _claim(repository, group.chatroom_id, stage_time) is None
+
+
+def test_participant_end_opens_tipping(command_context) -> None:
+    service, repository, group, stage_time = _open_performance(command_context)
+
+    _receive(service, "actor", "/end", stage_time, room=group.chatroom_id)
+
+    reply = _claim(repository, group.chatroom_id, stage_time)
+    assert "180 秒打赏" in reply.text
+    assert repository.performance_blocks_new_game(group.id) is True
