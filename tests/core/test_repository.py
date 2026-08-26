@@ -197,6 +197,7 @@ def test_lucky_red_packet_reply_templates_are_managed(repository):
         "insufficient_balance",
         "daily_limit",
         "active_packet",
+        "performance_active",
         "created",
         "expired",
     }
