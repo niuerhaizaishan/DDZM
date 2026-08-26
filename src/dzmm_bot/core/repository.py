@@ -63,6 +63,7 @@ from .performance import (
     PERFORMANCE_ACTIVE_STATES,
     PerformanceActionResult,
     PerformanceDraftResult,
+    PerformanceSettings,
     PerformanceView,
     parse_performance_datetime,
     parse_performance_participants,
@@ -244,6 +245,7 @@ class GroupChatConfig:
     random_events_enabled: bool
     announcements_enabled: bool
     adult_shop_enabled: bool
+    performances_enabled: bool
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None
@@ -361,6 +363,7 @@ def _group_chat_config(record: GroupChatRecord) -> GroupChatConfig:
         random_events_enabled=record.random_events_enabled,
         announcements_enabled=record.announcements_enabled,
         adult_shop_enabled=record.adult_shop_enabled,
+        performances_enabled=record.performances_enabled,
         created_at=record.created_at,
         updated_at=record.updated_at,
         deleted_at=record.deleted_at,
@@ -1879,6 +1882,7 @@ class CoreRepository:
         *,
         enabled_game_types: Sequence[str] | None = None,
         adult_shop_enabled: bool = False,
+        performances_enabled: bool = False,
     ) -> GroupChatConfig:
         normalized_name = self._validate_group_chat_name(name)
         with self._session() as session:
@@ -1905,6 +1909,7 @@ class CoreRepository:
                 random_events_enabled=random_events_enabled,
                 announcements_enabled=announcements_enabled,
                 adult_shop_enabled=adult_shop_enabled,
+                performances_enabled=performances_enabled,
                 created_at=now,
                 updated_at=now,
             )
@@ -1933,6 +1938,7 @@ class CoreRepository:
         random_events_enabled: bool | None = None,
         announcements_enabled: bool | None = None,
         adult_shop_enabled: bool | None = None,
+        performances_enabled: bool | None = None,
         now: datetime,
     ) -> GroupChatConfig:
         with self._session() as session:
@@ -2000,6 +2006,8 @@ class CoreRepository:
                 record.announcements_enabled = announcements_enabled
             if adult_shop_enabled is not None:
                 record.adult_shop_enabled = adult_shop_enabled
+            if performances_enabled is not None:
+                record.performances_enabled = performances_enabled
             record.updated_at = now
             runtime = session.get(GroupChatRuntimeStateRecord, group_id)
             if runtime is not None:
@@ -2031,6 +2039,7 @@ class CoreRepository:
             record.games_enabled = False
             record.random_events_enabled = False
             record.announcements_enabled = False
+            record.performances_enabled = False
             record.deleted_at = now
             record.updated_at = now
             runtime = session.get(GroupChatRuntimeStateRecord, group_id)
@@ -2255,6 +2264,7 @@ class CoreRepository:
                 "random_events_enabled": config.random_events_enabled,
                 "announcements_enabled": config.announcements_enabled,
                 "adult_shop_enabled": config.adult_shop_enabled,
+                "performances_enabled": config.performances_enabled,
                 "deleted": config.deleted_at is not None,
             }
 
@@ -6196,6 +6206,180 @@ class CoreRepository:
             return PerformanceActionResult(
                 "cancelled", self._performance_view(session, reservation)
             )
+
+    def get_performance_settings(self) -> PerformanceSettings:
+        with self._session() as session:
+            record = session.get(PerformanceSettingsRecord, 1)
+            if record is None:
+                record = PerformanceSettingsRecord(
+                    id=1, maximum_duration_minutes=360, version=0
+                )
+                session.add(record)
+                session.flush()
+            return PerformanceSettings(
+                record.maximum_duration_minutes, record.version
+            )
+
+    def update_performance_settings(
+        self, maximum_duration_minutes: int
+    ) -> PerformanceSettings:
+        if not 1 <= maximum_duration_minutes <= 7 * 24 * 60:
+            raise ValueError("公演最长时长必须为 1–10080 分钟")
+        with self._session() as session:
+            record = session.get(PerformanceSettingsRecord, 1, with_for_update=True)
+            if record is None:
+                record = PerformanceSettingsRecord(
+                    id=1, maximum_duration_minutes=360, version=0
+                )
+                session.add(record)
+                session.flush()
+            record.maximum_duration_minutes = maximum_duration_minutes
+            record.version += 1
+            return PerformanceSettings(
+                record.maximum_duration_minutes, record.version
+            )
+
+    def list_performances(
+        self, state: str | None = None
+    ) -> tuple[PerformanceView, ...]:
+        with self._session() as session:
+            query = select(PerformanceReservationRecord)
+            if state is not None:
+                query = query.where(PerformanceReservationRecord.state == state)
+            rows = session.scalars(
+                query.order_by(
+                    PerformanceReservationRecord.scheduled_at.desc(),
+                    PerformanceReservationRecord.id,
+                )
+            )
+            return tuple(self._performance_view(session, row) for row in rows)
+
+    def performance_details(
+        self, reservation_id: UUID | str
+    ) -> PerformanceView | None:
+        with self._session() as session:
+            record = session.get(
+                PerformanceReservationRecord, UUID(str(reservation_id))
+            )
+            return None if record is None else self._performance_view(session, record)
+
+    @staticmethod
+    def _enqueue_performance_direct_notice(
+        session: Session,
+        reservation: PerformanceReservationRecord,
+        text_value: str,
+    ) -> None:
+        destination = session.scalar(
+            select(DirectChatRecord.chatroom_id)
+            .join(UserRecord, UserRecord.platform_id == DirectChatRecord.platform_user_id)
+            .where(UserRecord.id == reservation.owner_user_id)
+        )
+        if destination is None:
+            return
+        session.add(
+            OutboundRecord(
+                inbound_message_id=None,
+                group_chat_id=None,
+                destination_chatroom_id=destination,
+                delivery_key=destination,
+                delivery_kind="direct",
+                text=text_value,
+                reply_index=0,
+                status="pending",
+            )
+        )
+
+    def review_performance(
+        self,
+        reservation_id: UUID | str,
+        approve: bool,
+        actor: str,
+        now: datetime,
+        reason: str | None = None,
+    ) -> PerformanceView:
+        now = now.astimezone(BEIJING)
+        with self._session() as session:
+            record = session.get(
+                PerformanceReservationRecord,
+                UUID(str(reservation_id)),
+                with_for_update=True,
+            )
+            if record is None:
+                raise LookupError("performance_not_found")
+            if record.state != "pending_review":
+                raise ValueError("仅待审核公演可以处理")
+            if approve and now >= record.scheduled_at - timedelta(minutes=5):
+                raise ValueError("公演已到审核截止时间")
+            if not approve and not (reason or "").strip():
+                raise ValueError("拒绝公演预约必须填写原因")
+            record.state = "approved" if approve else "rejected"
+            record.reviewed_by = actor
+            record.reviewed_at = now
+            record.rejection_reason = None if approve else reason.strip()
+            notice = (
+                f"你的公演《{record.title}》已审核通过。"
+                if approve
+                else f"你的公演《{record.title}》未通过审核：{record.rejection_reason}"
+            )
+            self._enqueue_performance_direct_notice(session, record, notice)
+            session.add(
+                AuditEventRecord(
+                    event_type="performance_approved" if approve else "performance_rejected",
+                    actor=actor,
+                    payload={
+                        "performance_id": str(record.id),
+                        "reason": record.rejection_reason,
+                    },
+                    created_at=now,
+                )
+            )
+            session.flush()
+            return self._performance_view(session, record)
+
+    def cancel_performance_by_admin(
+        self,
+        reservation_id: UUID | str,
+        actor: str,
+        reason: str,
+        now: datetime,
+        *,
+        force: bool = False,
+    ) -> PerformanceView:
+        if not reason.strip():
+            raise ValueError("取消公演必须填写原因")
+        now = now.astimezone(BEIJING)
+        with self._session() as session:
+            record = session.get(
+                PerformanceReservationRecord,
+                UUID(str(reservation_id)),
+                with_for_update=True,
+            )
+            if record is None:
+                raise LookupError("performance_not_found")
+            if record.state not in PERFORMANCE_ACTIVE_STATES:
+                raise ValueError("该公演已经结束")
+            if record.pre_notice_sent_at is not None and not force:
+                raise PermissionError("董事会权限不足")
+            record.state = "cancelled"
+            record.cancellation_reason = reason.strip()
+            record.cancelled_at = now
+            self._enqueue_performance_direct_notice(
+                session, record, f"你的公演《{record.title}》已取消：{reason.strip()}"
+            )
+            session.add(
+                AuditEventRecord(
+                    event_type="performance_cancelled",
+                    actor=actor,
+                    payload={
+                        "performance_id": str(record.id),
+                        "reason": reason.strip(),
+                        "forced": force,
+                    },
+                    created_at=now,
+                )
+            )
+            session.flush()
+            return self._performance_view(session, record)
 
     @staticmethod
     def _default_dark_market_limit(rank: RankRecord) -> int:

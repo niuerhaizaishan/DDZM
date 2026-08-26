@@ -147,6 +147,29 @@ class AdminCorePort(Protocol):
 
     def force_delist_dark_market_listing(self, listing_id: str) -> dict: ...
 
+    def get_performance_settings(self) -> dict: ...
+
+    def set_performance_settings(self, settings: dict) -> dict: ...
+
+    def list_performances(self, state_filter: str | None = None) -> list[dict]: ...
+
+    def approve_performance(
+        self, performance_id: str, actor: str, now: str
+    ) -> dict: ...
+
+    def reject_performance(
+        self, performance_id: str, actor: str, reason: str, now: str
+    ) -> dict: ...
+
+    def cancel_performance(
+        self,
+        performance_id: str,
+        actor: str,
+        reason: str,
+        now: str,
+        force: bool = False,
+    ) -> dict: ...
+
     def get_red_packet_settings(self) -> dict: ...
 
     def set_red_packet_settings(self, settings: dict) -> dict: ...
@@ -545,6 +568,56 @@ class CoreClient:
     def force_delist_dark_market_listing(self, listing_id: str) -> dict:
         response = self._client.post(
             f"/internal/game/dark-market/listings/{listing_id}/force-delist"
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def get_performance_settings(self) -> dict:
+        return self._get("/internal/game/performances/settings")
+
+    def set_performance_settings(self, settings: dict) -> dict:
+        response = self._client.patch(
+            "/internal/game/performances/settings", json=settings
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def list_performances(self, state_filter: str | None = None) -> list[dict]:
+        params = {} if state_filter is None else {"state": state_filter}
+        return self._get("/internal/game/performances", params=params)
+
+    def approve_performance(
+        self, performance_id: str, actor: str, now: str
+    ) -> dict:
+        response = self._client.post(
+            f"/internal/game/performances/{performance_id}/approve",
+            json={"actor": actor, "now": now},
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def reject_performance(
+        self, performance_id: str, actor: str, reason: str, now: str
+    ) -> dict:
+        response = self._client.post(
+            f"/internal/game/performances/{performance_id}/reject",
+            json={"actor": actor, "reason": reason, "now": now},
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def cancel_performance(
+        self,
+        performance_id: str,
+        actor: str,
+        reason: str,
+        now: str,
+        force: bool = False,
+    ) -> dict:
+        response = self._client.post(
+            f"/internal/game/performances/{performance_id}/cancel",
+            params={"force": str(force).lower()},
+            json={"actor": actor, "reason": reason, "now": now},
         )
         response.raise_for_status()
         return response.json()

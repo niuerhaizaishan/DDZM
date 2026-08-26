@@ -88,6 +88,7 @@ class GroupChatResponse(ApiModel):
     random_events_enabled: bool
     announcements_enabled: bool
     adult_shop_enabled: bool
+    performances_enabled: bool
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None
@@ -105,6 +106,7 @@ class CreateGroupChatRequest(ApiModel):
     random_events_enabled: bool = True
     announcements_enabled: bool = True
     adult_shop_enabled: bool = False
+    performances_enabled: bool = False
     now: AwareDatetime
 
 
@@ -117,11 +119,44 @@ class UpdateGroupChatRequest(ApiModel):
     random_events_enabled: bool | None = None
     announcements_enabled: bool | None = None
     adult_shop_enabled: bool | None = None
+    performances_enabled: bool | None = None
     now: AwareDatetime
 
 
 class DeleteGroupChatRequest(ApiModel):
     now: AwareDatetime
+
+
+class PerformanceSettingsResponse(ApiModel):
+    maximum_duration_minutes: int
+    version: int
+
+
+class UpdatePerformanceSettingsRequest(ApiModel):
+    maximum_duration_minutes: int = Field(ge=1, le=10080)
+
+
+class ReviewPerformanceRequest(ApiModel):
+    actor: str = Field(min_length=1, max_length=255)
+    now: AwareDatetime
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class PerformanceResponse(ApiModel):
+    id: UUID
+    owner_platform_id: str
+    owner_display_name: str
+    group_chat_id: UUID
+    title: str
+    introduction: str
+    scheduled_at: datetime
+    event_date: date
+    participant_names: list[str]
+    cover_url: str | None
+    cover_alt: str | None
+    state: str
+    pre_notice_sent_at: datetime | None
+    tipping_deadline: datetime | None
 
 
 class GroupChatTargetResponse(ApiModel):

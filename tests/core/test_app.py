@@ -14,6 +14,7 @@ from dzmm_bot.runtime.contracts import InboundMessage
 from dzmm_bot.core.schema import (
     AIActivityEventRecord,
     DirectChatRecord,
+    GroupChatRecord,
     MemoryAssessmentGameRecord,
     MemoryAssessmentParticipantRecord,
     NumberBombGameRecord,
@@ -98,6 +99,85 @@ def test_internal_inbound_is_idempotent(client, headers, payload):
     assert second.status_code == 200
     assert second.json()["accepted"] is False
     assert second.json()["message_id"] == first.json()["message_id"]
+
+
+def test_group_performance_switch_round_trip(app_context, headers) -> None:
+    app_context.repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=primary-room", NOW
+    )
+    created = app_context.client.post(
+        "/internal/group-chats",
+        headers=headers,
+        json={
+            "name": "公演群",
+            "chat_url": "https://www.aikda.com/chat?c=performance-room",
+            "listening_enabled": True,
+            "games_enabled": True,
+            "random_events_enabled": True,
+            "announcements_enabled": True,
+            "performances_enabled": True,
+            "now": NOW.isoformat(),
+        },
+    )
+    assert created.status_code == 201
+    assert created.json()["performances_enabled"] is True
+
+    updated = app_context.client.patch(
+        f"/internal/group-chats/{created.json()['id']}",
+        headers=headers,
+        json={"performances_enabled": False, "now": NOW.isoformat()},
+    )
+
+    assert updated.status_code == 200
+    assert updated.json()["performances_enabled"] is False
+
+
+def test_performance_core_api_lists_approves_and_configures(app_context, headers) -> None:
+    repository = app_context.repository
+    group = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=performance-api", NOW
+    )
+    with app_context.session_factory.begin() as session:
+        session.get(GroupChatRecord, group.id).performances_enabled = True
+    repository.create_user("performance-owner", "公演发起人", NOW, 100)
+    repository.create_user("performance-actor", "公演演员", NOW, 100)
+    repository.upsert_direct_chats(
+        [("performance-owner", "direct-performance-owner")], NOW
+    )
+    repository.begin_performance_draft("performance-owner", group.id, NOW)
+    for value in (
+        "夜航",
+        "公演介绍",
+        (NOW + timedelta(days=1)).strftime("%Y/%m/%d-%H:%M:%S"),
+        "公演演员",
+        "/跳过",
+        "/确认",
+    ):
+        submitted = repository.consume_performance_draft_input(
+            "performance-owner", UUID(int=len(value)), NOW, text=value
+        )
+    reservation_id = submitted.reservation.id
+
+    listed = app_context.client.get(
+        "/internal/game/performances?state=pending_review", headers=headers
+    )
+    approved = app_context.client.post(
+        f"/internal/game/performances/{reservation_id}/approve",
+        headers=headers,
+        json={"actor": "admin:test", "now": NOW.isoformat()},
+    )
+    settings = app_context.client.patch(
+        "/internal/game/performances/settings",
+        headers=headers,
+        json={"maximum_duration_minutes": 480},
+    )
+
+    assert listed.status_code == 200
+    assert listed.json()[0]["title"] == "夜航"
+    assert approved.status_code == 200
+    assert approved.json()["state"] == "approved"
+    assert settings.status_code == 200
+    assert settings.json()["maximum_duration_minutes"] == 480
 
 
 def test_direct_chat_sync_persists_discovered_room(app_context, headers):

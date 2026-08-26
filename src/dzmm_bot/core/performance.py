@@ -57,6 +57,12 @@ class PerformanceTipResult:
 
 
 @dataclass(frozen=True)
+class PerformanceSettings:
+    maximum_duration_minutes: int
+    version: int
+
+
+@dataclass(frozen=True)
 class ValidatedCover:
     url: str
     mime_type: str

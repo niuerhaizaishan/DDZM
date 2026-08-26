@@ -15,6 +15,8 @@ let activitySettings = null;
 let numberBombSettings = null;
 let texasHoldemSettings = null;
 let darkMarketSettings = null;
+let performanceSettings = null;
+let performances = [];
 let darkMarketPage = 1;
 let redPacketSettings = null;
 let currentGameplay = null;
@@ -89,6 +91,7 @@ const pageContext = {
   "blame-bomb": {crumb: "游戏运营 / 甩锅游戏", title: "甩锅游戏运营", description: "管理事故卡、逐人数时长规则和当前公开对局。"},
   "texas-holdem": {crumb: "游戏运营 / 德州扑克", title: "德州扑克运营", description: "配置现金桌规则并查看不含底牌的公开牌局状态。"},
   "dark-market": {crumb: "游戏运营 / 暗网交易所", title: "暗网交易所", description: "配置匿名市场并查看真实交易记录、报价链与结算状态。"},
+  performances: {crumb: "游戏运营 / 公演预约", title: "公演预约", description: "审核公演预约，管理未来、进行中与历史场次。"},
   "ai-assistant": {crumb: "机器人运营 / AI 总监事", title: "AI 总监事", description: "配置群内 AI 人设、系统提示词与各职位每日调用上限。"},
   settings: {crumb: "玩法与资源 / 玩法配置", title: "玩法配置", description: "集中维护经济、打卡、全勤和日活跃度规则。"},
   commands: {crumb: "玩法与资源 / 指令库", title: "指令库", description: "配置群内指令的启用状态与标准回复模板。"},
@@ -1557,6 +1560,7 @@ function renderGroupChats(items) {
       ["随机事件", group.random_events_enabled],
       ["公告", group.announcements_enabled],
       ["成人商店", group.adult_shop_enabled],
+      ["公演预约", group.performances_enabled],
     ].map(([label, enabled]) => `${label}：${enabled ? "开" : "关"}`).join(" · ");
     return `<article class="data-row"><div><b>${escapeHtml(group.name)}</b><small>${statusBadge(groupConnectionLabel(runtime.connection_state), runtime.connection_state === "connected" ? "success" : runtime.connection_state === "failed" ? "warning" : "")}</small><small>群聊 ID：${escapeHtml(group.chatroom_id || "未识别")} · ${escapeHtml(switches)}</small><small>已开启玩法：${escapeHtml(gameSummary)}</small><small>${escapeHtml(group.chat_url || "未配置链接")}</small><small>最近接收：${formatHeartbeat(runtime.last_inbound_at)} · 最近发送：${formatHeartbeat(runtime.last_outbound_at)}</small>${runtime.last_error_summary ? `<small class="form-error">${escapeHtml(runtime.last_error_summary)}</small>` : ""}</div><div class="command-actions"><button class="secondary" data-edit-group-chat="${group.id}" type="button">编辑</button><button class="danger-button" data-delete-group-chat="${group.id}" type="button" ${group.listening_enabled ? "disabled" : ""}>删除</button></div></article>`;
   }).join("") || '<p class="muted">还没有可管理的群聊。</p>';
@@ -1585,6 +1589,7 @@ function openGroupChatModal(group = null) {
   document.querySelector("#group-chat-random-events-enabled").checked = group?.random_events_enabled ?? true;
   document.querySelector("#group-chat-announcements-enabled").checked = group?.announcements_enabled ?? true;
   document.querySelector("#group-chat-adult-shop-enabled").checked = group?.adult_shop_enabled ?? false;
+  document.querySelector("#group-chat-performances-enabled").checked = group?.performances_enabled ?? false;
   groupChatModal.hidden = false;
   document.querySelector("#group-chat-name").focus();
 }
@@ -1592,6 +1597,36 @@ function openGroupChatModal(group = null) {
 function closeGroupChatModal() {
   groupChatModal.hidden = true;
   groupChatModal.dataset.groupId = "";
+}
+
+function performanceStateLabel(state) {
+  return ({pending_review: "待审核", approved: "已批准", waiting: "等待开场", previewed: "即将开始", performing: "演出中", tipping: "打赏中", completed: "已完成", rejected: "已拒绝", cancelled: "已取消", expired: "已过期"})[state] || state;
+}
+
+function performanceCard(item, actions = "") {
+  const participants = (item.participant_names || []).join("、") || "暂无";
+  return `<article class="data-row"><div><b>${escapeHtml(item.title)}</b><small>${statusBadge(performanceStateLabel(item.state), ["performing", "tipping"].includes(item.state) ? "success" : item.state === "pending_review" ? "warning" : "")}</small><small>发起人：${escapeHtml(item.owner_display_name)} · 时间：${escapeHtml(formatHeartbeat(item.scheduled_at))}</small><small>参演：${escapeHtml(participants)}</small><p>${escapeHtml(item.introduction)}</p>${item.cover_url ? `<small><a href="${escapeHtml(item.cover_url)}" target="_blank" rel="noopener">查看封面</a></small>` : ""}</div>${actions ? `<div class="command-actions">${actions}</div>` : ""}</article>`;
+}
+
+function renderPerformances(items) {
+  const pending = items.filter((item) => item.state === "pending_review");
+  const upcomingStates = new Set(["approved", "waiting", "previewed", "performing", "tipping"]);
+  const upcoming = items.filter((item) => upcomingStates.has(item.state));
+  const history = items.filter((item) => !upcomingStates.has(item.state) && item.state !== "pending_review");
+  document.querySelector("#performance-pending-list").innerHTML = pending.map((item) => performanceCard(item, `<button class="primary" data-performance-action="approve" data-performance-id="${escapeHtml(item.id)}" type="button">通过</button><button class="danger-button" data-performance-action="reject" data-performance-id="${escapeHtml(item.id)}" type="button">拒绝</button>`)).join("") || '<p class="muted">暂无待审核公演。</p>';
+  document.querySelector("#performance-list").innerHTML = upcoming.map((item) => performanceCard(item, `<button class="danger-button" data-performance-action="cancel" data-performance-id="${escapeHtml(item.id)}" type="button">强制取消</button>`)).join("") || '<p class="muted">暂无未来或进行中的公演。</p>';
+  document.querySelector("#performance-history-list").innerHTML = history.map((item) => performanceCard(item)).join("") || '<p class="muted">暂无历史公演。</p>';
+}
+
+async function loadPerformances() {
+  const [listResponse, settings] = await Promise.all([
+    requestGame("/api/game/performances", {cache: "no-store"}),
+    requestGame("/api/game/performances/settings", {cache: "no-store"}),
+  ]);
+  performances = listResponse.items;
+  performanceSettings = settings;
+  configurationVersion = Math.max(listResponse.version ?? 0, settings.version ?? 0);
+  renderPerformances(performances);
 }
 
 async function loadEmployeeGroupMessages(page = employeeGroupMessagePage) {
@@ -1809,6 +1844,7 @@ async function loadGameView(view) {
       return;
     }
     if (view === "dark-market") return loadDarkMarket();
+    if (view === "performances") return loadPerformances();
     if (view === "ai-assistant") return loadAiAssistant();
     if (view === "commands") {
       const commands = await requestGame("/api/game/commands");
@@ -2137,6 +2173,7 @@ document.querySelector("#save-group-chat").addEventListener("click", async (even
     random_events_enabled: document.querySelector("#group-chat-random-events-enabled").checked,
     announcements_enabled: document.querySelector("#group-chat-announcements-enabled").checked,
     adult_shop_enabled: document.querySelector("#group-chat-adult-shop-enabled").checked,
+    performances_enabled: document.querySelector("#group-chat-performances-enabled").checked,
   };
   try {
     await runMutation(event.currentTarget, "保存中…", async () => {
@@ -3692,6 +3729,61 @@ document.querySelector("#admin-account-list").addEventListener("click", async (e
     setResult("管理员账号已更新", "success");
   } catch (error) {
     setResult(`更新失败（${error.message}）`, "error");
+  }
+});
+
+document.querySelector("#edit-performance-settings").addEventListener("click", async (event) => {
+  const current = performanceSettings?.maximum_duration_minutes ?? 360;
+  const raw = window.prompt("输入公演最长持续分钟数（1–10080）", String(current));
+  if (raw === null) return;
+  const maximumDurationMinutes = Number(raw);
+  if (!Number.isInteger(maximumDurationMinutes) || maximumDurationMinutes < 1 || maximumDurationMinutes > 10080) {
+    setResult("请输入 1–10080 的整数分钟数", "error");
+    return;
+  }
+  try {
+    await runMutation(event.currentTarget, "保存中…", async () => {
+      performanceSettings = await requestGame("/api/game/performances/settings", {
+        method: "PATCH",
+        headers: {"Content-Type": "application/json", ...configurationHeaders()},
+        body: JSON.stringify({maximum_duration_minutes: maximumDurationMinutes}),
+      });
+      configurationVersion = performanceSettings.version ?? configurationVersion;
+    });
+    setResult("公演最长时长已保存", "success");
+  } catch (error) {
+    setResult(`保存失败（${error.message}）`, "error");
+  }
+});
+
+document.querySelector("#performances-view").addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-performance-action]");
+  if (!button) return;
+  const {performanceAction: action, performanceId: id} = button.dataset;
+  let body = null;
+  if (action === "reject" || action === "cancel") {
+    const reason = window.prompt(action === "reject" ? "请输入拒绝原因" : "请输入取消原因");
+    if (reason === null) return;
+    if (!reason.trim()) {
+      setResult("原因不能为空", "error");
+      return;
+    }
+    body = {reason: reason.trim()};
+  } else if (!window.confirm("确认通过该公演预约？")) {
+    return;
+  }
+  try {
+    await runMutation(button, "处理中…", async () => {
+      await requestGame(`/api/game/performances/${id}/${action}`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID()},
+        ...(body ? {body: JSON.stringify(body)} : {}),
+      });
+      await loadPerformances();
+    });
+    setResult("公演预约已处理", "success");
+  } catch (error) {
+    setResult(`处理失败（${error.message}）`, "error");
   }
 });
 

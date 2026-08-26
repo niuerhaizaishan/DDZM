@@ -63,6 +63,10 @@ from .api_models import (
     ProfileImageUploadClaimResponse,
     ProfileImageUploadStatusResponse,
     ProfileSettingsResponse,
+    PerformanceResponse,
+    PerformanceSettingsResponse,
+    ReviewPerformanceRequest,
+    UpdatePerformanceSettingsRequest,
     HealthResponse,
     HeartbeatRequest,
     HeartbeatResponse,
@@ -300,6 +304,7 @@ def create_app(
                 request.now,
                 enabled_game_types=request.enabled_game_types,
                 adult_shop_enabled=request.adult_shop_enabled,
+                performances_enabled=request.performances_enabled,
             )
         except (ValueError, GroupChatConflict) as error:
             raise HTTPException(status.HTTP_409_CONFLICT, str(error))
@@ -369,6 +374,7 @@ def create_app(
                 random_events_enabled=request.random_events_enabled,
                 announcements_enabled=request.announcements_enabled,
                 adult_shop_enabled=request.adult_shop_enabled,
+                performances_enabled=request.performances_enabled,
                 now=request.now,
             )
         except LookupError as error:
@@ -380,6 +386,122 @@ def create_app(
             for item in repository.group_chat_runtime_states()
         }.get(group.id)
         return _group_chat_response(group, runtime)
+
+    @app.get(
+        "/internal/game/performances/settings",
+        response_model=PerformanceSettingsResponse,
+    )
+    def performance_settings(
+        _: Annotated[None, Depends(authorize)],
+    ) -> PerformanceSettingsResponse:
+        current = repository.get_performance_settings()
+        return PerformanceSettingsResponse(
+            maximum_duration_minutes=current.maximum_duration_minutes,
+            version=current.version,
+        )
+
+    @app.patch(
+        "/internal/game/performances/settings",
+        response_model=PerformanceSettingsResponse,
+    )
+    def update_performance_settings(
+        request: UpdatePerformanceSettingsRequest,
+        _: Annotated[None, Depends(authorize)],
+    ) -> PerformanceSettingsResponse:
+        current = repository.update_performance_settings(
+            request.maximum_duration_minutes
+        )
+        return PerformanceSettingsResponse(
+            maximum_duration_minutes=current.maximum_duration_minutes,
+            version=current.version,
+        )
+
+    @app.get(
+        "/internal/game/performances", response_model=list[PerformanceResponse]
+    )
+    def list_performances(
+        _: Annotated[None, Depends(authorize)], state: str | None = None
+    ) -> list[PerformanceResponse]:
+        return [
+            _performance_response(view)
+            for view in repository.list_performances(state)
+        ]
+
+    @app.get(
+        "/internal/game/performances/{performance_id}",
+        response_model=PerformanceResponse,
+    )
+    def performance_detail(
+        performance_id: UUID, _: Annotated[None, Depends(authorize)]
+    ) -> PerformanceResponse:
+        view = repository.performance_details(performance_id)
+        if view is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "performance_not_found")
+        return _performance_response(view)
+
+    @app.post(
+        "/internal/game/performances/{performance_id}/approve",
+        response_model=PerformanceResponse,
+    )
+    def approve_performance(
+        performance_id: UUID,
+        request: ReviewPerformanceRequest,
+        _: Annotated[None, Depends(authorize)],
+    ) -> PerformanceResponse:
+        try:
+            view = repository.review_performance(
+                performance_id, True, request.actor, request.now
+            )
+        except LookupError as error:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(error))
+        except ValueError as error:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(error))
+        return _performance_response(view)
+
+    @app.post(
+        "/internal/game/performances/{performance_id}/reject",
+        response_model=PerformanceResponse,
+    )
+    def reject_performance(
+        performance_id: UUID,
+        request: ReviewPerformanceRequest,
+        _: Annotated[None, Depends(authorize)],
+    ) -> PerformanceResponse:
+        try:
+            view = repository.review_performance(
+                performance_id, False, request.actor, request.now, request.reason
+            )
+        except LookupError as error:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(error))
+        except ValueError as error:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(error))
+        return _performance_response(view)
+
+    @app.post(
+        "/internal/game/performances/{performance_id}/cancel",
+        response_model=PerformanceResponse,
+    )
+    def cancel_performance(
+        performance_id: UUID,
+        request: ReviewPerformanceRequest,
+        _: Annotated[None, Depends(authorize)],
+        force: bool = False,
+    ) -> PerformanceResponse:
+        try:
+            view = repository.cancel_performance_by_admin(
+                performance_id,
+                request.actor,
+                request.reason or "",
+                request.now,
+                force=force,
+            )
+        except LookupError as error:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(error))
+        except PermissionError as error:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, str(error))
+        except ValueError as error:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(error))
+        return _performance_response(view)
 
     @app.delete(
         "/internal/group-chats/{group_id}", response_model=GroupChatResponse
@@ -2692,6 +2814,7 @@ def _group_chat_response(group, runtime) -> GroupChatResponse:
         random_events_enabled=group.random_events_enabled,
         announcements_enabled=group.announcements_enabled,
         adult_shop_enabled=group.adult_shop_enabled,
+        performances_enabled=group.performances_enabled,
         created_at=group.created_at,
         updated_at=group.updated_at,
         deleted_at=group.deleted_at,
@@ -2706,6 +2829,25 @@ def _group_chat_response(group, runtime) -> GroupChatResponse:
             worker_id=runtime.worker_id,
             updated_at=runtime.updated_at,
         ),
+    )
+
+
+def _performance_response(view) -> PerformanceResponse:
+    return PerformanceResponse(
+        id=view.id,
+        owner_platform_id=view.owner_platform_id,
+        owner_display_name=view.owner_display_name,
+        group_chat_id=view.group_chat_id,
+        title=view.title,
+        introduction=view.introduction,
+        scheduled_at=view.scheduled_at,
+        event_date=view.event_date,
+        participant_names=list(view.participant_names),
+        cover_url=view.cover_url,
+        cover_alt=view.cover_alt,
+        state=view.state,
+        pre_notice_sent_at=view.pre_notice_sent_at,
+        tipping_deadline=view.tipping_deadline,
     )
 
 

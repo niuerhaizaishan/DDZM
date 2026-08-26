@@ -402,6 +402,10 @@ def create_app(
                 and not isinstance(request["adult_shop_enabled"], bool)
             )
             or (
+                "performances_enabled" in request
+                and not isinstance(request["performances_enabled"], bool)
+            )
+            or (
                 "enabled_game_types" in request
                 and (
                     not isinstance(request["enabled_game_types"], list)
@@ -418,6 +422,7 @@ def create_app(
         payload = {
             **{key: request[key] for key in required},
             "adult_shop_enabled": request.get("adult_shop_enabled", False),
+            "performances_enabled": request.get("performances_enabled", False),
             "enabled_game_types": request.get(
                 "enabled_game_types", list(GROUP_GAME_TYPES)
             ),
@@ -451,6 +456,7 @@ def create_app(
             "random_events_enabled",
             "announcements_enabled",
             "adult_shop_enabled",
+            "performances_enabled",
         }
         if not request or set(request) - allowed:
             raise HTTPException(
@@ -1909,6 +1915,136 @@ def create_app(
             if_match,
             lambda: _relay_core(lambda: core.delete_hide_and_seek_scene(scene_id)),
             scope=f"hide-and-seek-scene:{scene_id}",
+        )
+
+    @app.get("/api/game/performances")
+    def performances(
+        _: Annotated[AdminIdentity, Depends(authorize)],
+        state_filter: str | None = Query(default=None, alias="state"),
+    ) -> dict:
+        return {
+            "items": _relay_core(
+                lambda: core.list_performances(state_filter)
+            ),
+            "version": repository.config_version(),
+        }
+
+    @app.get("/api/game/performances/settings")
+    def performance_settings(
+        _: Annotated[AdminIdentity, Depends(authorize)],
+    ) -> dict:
+        return {
+            **_relay_core(core.get_performance_settings),
+            "version": repository.config_version(),
+        }
+
+    @app.patch("/api/game/performances/settings")
+    def update_performance_settings(
+        request: dict,
+        identity: Annotated[AdminIdentity, Depends(authorize)],
+        idempotency_key: Annotated[
+            str | None, Header(alias="Idempotency-Key")
+        ] = None,
+        if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+    ) -> JSONResponse:
+        value = request.get("maximum_duration_minutes")
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid performance settings"
+            )
+        return versioned_configuration_response(
+            identity,
+            idempotency_key,
+            if_match,
+            lambda: _relay_core(
+                lambda: core.set_performance_settings(
+                    {"maximum_duration_minutes": value}
+                )
+            ),
+            scope="performance-settings",
+        )
+
+    @app.post("/api/game/performances/{performance_id}/approve")
+    def approve_performance(
+        performance_id: str,
+        identity: Annotated[AdminIdentity, Depends(authorize)],
+        idempotency_key: Annotated[
+            str | None, Header(alias="Idempotency-Key")
+        ] = None,
+    ) -> JSONResponse:
+        return idempotent_response(
+            identity,
+            idempotency_key,
+            lambda: (
+                200,
+                _relay_core(
+                    lambda: core.approve_performance(
+                        performance_id,
+                        identity.username,
+                        beijing_now().isoformat(),
+                    )
+                ),
+            ),
+            scope=f"performance:{performance_id}:approve",
+        )
+
+    @app.post("/api/game/performances/{performance_id}/reject")
+    def reject_performance(
+        performance_id: str,
+        request: dict,
+        identity: Annotated[AdminIdentity, Depends(authorize)],
+        idempotency_key: Annotated[
+            str | None, Header(alias="Idempotency-Key")
+        ] = None,
+    ) -> JSONResponse:
+        reason = request.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "拒绝原因不能为空")
+        return idempotent_response(
+            identity,
+            idempotency_key,
+            lambda: (
+                200,
+                _relay_core(
+                    lambda: core.reject_performance(
+                        performance_id,
+                        identity.username,
+                        reason.strip(),
+                        beijing_now().isoformat(),
+                    )
+                ),
+            ),
+            scope=f"performance:{performance_id}:reject",
+        )
+
+    @app.post("/api/game/performances/{performance_id}/cancel")
+    def cancel_performance(
+        performance_id: str,
+        request: dict,
+        identity: Annotated[AdminIdentity, Depends(authorize)],
+        idempotency_key: Annotated[
+            str | None, Header(alias="Idempotency-Key")
+        ] = None,
+    ) -> JSONResponse:
+        reason = request.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "取消原因不能为空")
+        return idempotent_response(
+            identity,
+            idempotency_key,
+            lambda: (
+                200,
+                _relay_core(
+                    lambda: core.cancel_performance(
+                        performance_id,
+                        identity.username,
+                        reason.strip(),
+                        beijing_now().isoformat(),
+                        force=identity.role == "super_admin",
+                    )
+                ),
+            ),
+            scope=f"performance:{performance_id}:cancel",
         )
 
     @app.get("/api/game/random-events/submissions")

@@ -1480,6 +1480,7 @@ class PerformanceSettingsRecord(Base):
     maximum_duration_minutes: Mapped[int] = mapped_column(
         Integer, default=360, nullable=False
     )
+    version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 
 class PerformanceReservationRecord(Base):

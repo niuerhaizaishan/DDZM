@@ -342,6 +342,10 @@ class FakeCore:
     manual_login_lease: dict | None = None
     ai_assistant_settings_request: dict | None = None
     group_chats: list[dict] = field(default_factory=list)
+    performance_settings: dict = field(
+        default_factory=lambda: {"maximum_duration_minutes": 360}
+    )
+    performances: list[dict] = field(default_factory=list)
 
     def status(self):
         return {
@@ -393,6 +397,33 @@ class FakeCore:
             }
         )
         return record
+
+    def get_performance_settings(self):
+        return self.performance_settings
+
+    def set_performance_settings(self, settings):
+        self.performance_settings = settings
+        return settings
+
+    def list_performances(self, state_filter=None):
+        if state_filter is None:
+            return self.performances
+        return [item for item in self.performances if item["state"] == state_filter]
+
+    def approve_performance(self, performance_id, actor, now):
+        item = next(item for item in self.performances if item["id"] == performance_id)
+        item["state"] = "approved"
+        return item
+
+    def reject_performance(self, performance_id, actor, reason, now):
+        item = next(item for item in self.performances if item["id"] == performance_id)
+        item.update(state="rejected", rejection_reason=reason)
+        return item
+
+    def cancel_performance(self, performance_id, actor, reason, now, force=False):
+        item = next(item for item in self.performances if item["id"] == performance_id)
+        item.update(state="cancelled", cancellation_reason=reason)
+        return item
 
     def login_state(self):
         return self.login_state_value
@@ -1178,6 +1209,40 @@ def test_admin_page_contains_multi_group_controls(client):
         assert f'id="group-chat-game-{game_type}"' in page
     assert 'requestGame("/api/group-chats"' in script
     assert 'data-employee-group-messages' in script
+
+
+def test_admin_page_contains_performance_management(client):
+    page = client.get("/").text
+    script = client.get("/static/admin.js").text
+
+    assert 'data-view="performances"' in page
+    assert 'id="performance-list"' in page
+    assert 'id="group-chat-performances-enabled"' in page
+    assert 'requestGame("/api/game/performances"' in script
+
+
+def test_admin_can_approve_pending_performance(client, headers, core):
+    core.performances.append(
+        {
+            "id": "00000000-0000-0000-0000-000000000777",
+            "owner_display_name": "发起人",
+            "group_chat_id": "00000000-0000-0000-0000-000000000001",
+            "title": "夜航",
+            "introduction": "简介",
+            "scheduled_at": "2026-08-27T12:00:00+08:00",
+            "participant_names": ["演员甲"],
+            "cover_url": None,
+            "state": "pending_review",
+        }
+    )
+
+    response = client.post(
+        "/api/game/performances/00000000-0000-0000-0000-000000000777/approve",
+        headers={**headers, "Idempotency-Key": "approve-performance"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "approved"
 
 
 def test_admin_proxies_categorized_ai_impression_crud(client, headers):

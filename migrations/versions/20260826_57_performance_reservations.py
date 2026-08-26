@@ -33,14 +33,16 @@ def upgrade() -> None:
         "performance_settings",
         sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("maximum_duration_minutes", sa.Integer(), nullable=False),
+        sa.Column("version", sa.Integer(), nullable=False),
     )
     op.bulk_insert(
         sa.table(
             "performance_settings",
             sa.column("id", sa.Integer()),
             sa.column("maximum_duration_minutes", sa.Integer()),
+            sa.column("version", sa.Integer()),
         ),
-        [{"id": 1, "maximum_duration_minutes": 360}],
+        [{"id": 1, "maximum_duration_minutes": 360, "version": 0}],
     )
     op.create_table(
         "performance_reservations",

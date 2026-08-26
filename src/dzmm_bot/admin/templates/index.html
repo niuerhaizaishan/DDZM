@@ -69,6 +69,7 @@
                   <button id="nav-blame-bomb" class="nav-item" data-view="blame-bomb" type="button">甩锅游戏</button>
                   <button id="nav-texas-holdem" class="nav-item" data-view="texas-holdem" type="button">德州扑克</button>
                   <button id="nav-dark-market" class="nav-item" data-view="dark-market" type="button">暗网交易所</button>
+                  <button id="nav-performances" class="nav-item" data-view="performances" type="button">公演预约</button>
                   <button id="nav-ai-assistant" class="nav-item" data-view="ai-assistant" type="button">AI 总监事</button>
                 </div>
                 <div class="nav-group">
@@ -264,6 +265,15 @@
                 <div id="group-chat-list" class="data-list" aria-live="polite"></div>
               </section>
 
+              <section id="performances-view" class="dashboard-view panel" hidden>
+                <p class="eyebrow">公演场次预约</p>
+                <div class="panel-heading"><div><h2>公演管理</h2><p class="muted">审核预约、查看未来及历史场次，并在必要时强制取消。</p></div><button id="edit-performance-settings" class="primary" type="button">编辑最长时长</button></div>
+                <nav class="management-tabs" data-management-tabs="performances" aria-label="公演分类"><button class="management-tab active" data-management-tab="pending" type="button">待审核</button><button class="management-tab" data-management-tab="upcoming" type="button">未来与进行中</button><button class="management-tab" data-management-tab="history" type="button">历史</button></nav>
+                <section class="management-pane" data-management-pane="pending"><div id="performance-pending-list" class="data-list" aria-live="polite"></div></section>
+                <section class="management-pane" data-management-pane="upcoming" hidden><div id="performance-list" class="data-list" aria-live="polite"></div></section>
+                <section class="management-pane" data-management-pane="history" hidden><div id="performance-history-list" class="data-list" aria-live="polite"></div></section>
+              </section>
+
               <section id="organization-view" class="dashboard-view panel" hidden>
                 <p class="eyebrow">群内组织</p>
                 <nav class="management-tabs" data-management-tabs="organization" aria-label="组织分类"><button class="management-tab active" data-management-tab="ranks" type="button">职位</button><button class="management-tab" data-management-tab="departments" type="button">部门</button><button class="management-tab" data-management-tab="promotions" type="button">晋升审批</button><button class="management-tab" data-management-tab="department-requests" type="button">部门审批</button></nav>
@@ -308,6 +318,7 @@
           <label><input id="group-chat-random-events-enabled" type="checkbox"> 开启随机事件</label>
           <label><input id="group-chat-announcements-enabled" type="checkbox"> 接收定时活动与公告</label>
           <label><input id="group-chat-adult-shop-enabled" type="checkbox"> 允许成人向商店玩法</label>
+          <label><input id="group-chat-performances-enabled" type="checkbox"> 开启公演预约</label>
         </div>
         <fieldset>
           <legend>本群允许的玩法</legend>
