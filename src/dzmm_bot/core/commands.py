@@ -735,14 +735,34 @@ class GroupCommandHandler:
             None if len(parts) == 1 else int(parts[1]),
             direct=message.source_type == "direct",
         )
-        if result.status == "shown":
-            return self._reply(
-                "/查看暗网",
-                "shown",
-                received_at,
-                {"{商品列表}": result.text or ""},
+        if result.status == "wrong_group":
+            return self._reply("/查看暗网", result.status, received_at)
+        values = (
+            {"{商品列表}": result.text or ""}
+            if result.status == "shown"
+            else None
+        )
+        response = self._reply(
+            "/查看暗网",
+            result.status,
+            received_at,
+            values,
+        )
+        if message.source_type == "group":
+            direct_chatroom_id = self._repository.direct_chat_destination(
+                message.sender_platform_id
             )
-        return self._reply("/查看暗网", result.status, received_at)
+            if direct_chatroom_id is None:
+                return "请先私聊总监事发送任意消息，再重新发送 /暗网。"
+            return [
+                "暗网查询结果已私聊发送。",
+                CommandReply(
+                    response,
+                    destination_chatroom_id=direct_chatroom_id,
+                    delivery_kind="direct",
+                ),
+            ]
+        return response
 
     def _dark_market_receipt(
         self,
@@ -3274,7 +3294,7 @@ class GroupCommandHandler:
                     ("/取消上架", "私聊 /取消上架：取消尚未确认的上架草稿"),
                     ("/确认", "私聊 /确认：正式上架当前完整草稿；上架后不能撤回"),
                     ("/报价", "私聊 /报价 商品编号 金额：匿名报价并冻结相应摸鱼币"),
-                    ("/查看暗网", "/查看暗网 [商品编号]：在配置的暗网群或私聊中查询商品；不显示精确结算时间"),
+                    ("/查看暗网", "/查看暗网 [商品编号]：可在配置的暗网群或私聊查询，结果只私聊发送；不显示精确结算时间"),
                     ("/确认收货", "私聊 /确认收货 [商品编号]：确认收到拍下的商品"),
                     ("/投诉", "私聊 /投诉 [商品编号]：未收到商品时提交董事会审核"),
                     ("/公开", "私聊 /公开 [商品编号]：只有双方都同意才公开买卖双方身份"),

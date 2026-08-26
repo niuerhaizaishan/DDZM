@@ -246,6 +246,19 @@ def _replies_for(factory, inbound_id):
         )
 
 
+def _outbounds_for(factory, inbound_id):
+    from dzmm_bot.core.schema import OutboundRecord
+
+    with factory() as session:
+        return list(
+            session.scalars(
+                select(OutboundRecord)
+                .where(OutboundRecord.inbound_message_id == inbound_id)
+                .order_by(OutboundRecord.reply_index)
+            )
+        )
+
+
 def _group_receive(service, message_id, sender, content, now, chatroom_id):
     return service.receive_inbound(
         InboundMessage(
@@ -373,7 +386,14 @@ def test_dark_market_commands_complete_listing_bid_and_query_in_group_and_direct
     )
     assert "报价成功" in "".join(_replies_for(factory, bid.message_id))
     for index, command in enumerate(
-        ("/查看暗网 1", "/登陆暗网 1", "/登录暗网 1", "/暗网 1")
+        (
+            "/查看暗网 1",
+            "/登陆暗网 1",
+            "/登录暗网 1",
+            "/暗网 1",
+            "/登陆暗网",
+            "/暗网",
+        )
     ):
         login = _group_receive(
             service,
@@ -383,11 +403,17 @@ def test_dark_market_commands_complete_listing_bid_and_query_in_group_and_direct
             now,
             market.chatroom_id,
         )
-        login_text = "".join(_replies_for(factory, login.message_id))
-        assert "旧钥匙" in login_text
-        assert "当前 20" in login_text
-        assert "卖家" not in login_text
-        assert "截止" not in login_text
+        outbounds = _outbounds_for(factory, login.message_id)
+        assert len(outbounds) == 2
+        assert outbounds[0].text == "暗网查询结果已私聊发送。"
+        assert outbounds[0].destination_chatroom_id == market.chatroom_id
+        assert outbounds[0].delivery_kind == "group"
+        assert outbounds[1].destination_chatroom_id == "direct-buyer"
+        assert outbounds[1].delivery_kind == "direct"
+        assert "旧钥匙" in outbounds[1].text
+        assert "当前 20" in outbounds[1].text
+        assert "卖家" not in outbounds[1].text
+        assert "截止" not in outbounds[1].text
     for index, command in enumerate(
         ("/查看暗网", "/登陆暗网", "/登录暗网", "/暗网")
     ):
@@ -404,6 +430,88 @@ def test_dark_market_commands_complete_listing_bid_and_query_in_group_and_direct
         assert "当前 20" in private_text
         assert "卖家" not in private_text
         assert "截止" not in private_text
+
+
+def test_dark_market_group_query_requires_an_established_direct_chat():
+    service, repository, factory = _service()
+    now = datetime(2026, 8, 24, 10, 0, tzinfo=BEIJING)
+    market = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=dark-command-private-required", now
+    )
+    repository.create_user("seller-with-direct", "卖家", now, 100)
+    repository.create_user("buyer-without-direct", "未私聊买家", now, 100)
+    repository.upsert_direct_chats(
+        [("seller-with-direct", "direct-seller-with-direct")], now
+    )
+    _configure_dark_market(repository, market.id)
+    for index, content in enumerate(
+        ("/上架暗网", "旧钥匙", "开门", "来历不明", "保密", "10", "/确认")
+    ):
+        _direct_receive(
+            service,
+            f"dark-private-required-listing-{index}",
+            "seller-with-direct",
+            content,
+            now,
+            "direct-seller-with-direct",
+        )
+
+    result = _group_receive(
+        service,
+        "dark-login-without-direct",
+        "buyer-without-direct",
+        "/暗网",
+        now,
+        market.chatroom_id,
+    )
+
+    outbounds = _outbounds_for(factory, result.message_id)
+    assert len(outbounds) == 1
+    assert outbounds[0].text == "请先私聊总监事发送任意消息，再重新发送 /暗网。"
+    assert outbounds[0].destination_chatroom_id == market.chatroom_id
+    assert outbounds[0].delivery_kind == "group"
+    assert "旧钥匙" not in outbounds[0].text
+
+
+@pytest.mark.parametrize(
+    ("command", "private_text"),
+    (
+        ("/暗网", "暗网交易所当前没有竞价中的商品。"),
+        ("/暗网 999", "未找到该竞价中的暗网商品。"),
+    ),
+)
+def test_dark_market_group_empty_and_missing_results_are_sent_privately(
+    command, private_text
+):
+    service, repository, factory = _service()
+    now = datetime(2026, 8, 24, 10, 0, tzinfo=BEIJING)
+    market = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=dark-command-empty-private", now
+    )
+    repository.create_user("dark-empty-buyer", "空市场买家", now, 100)
+    repository.upsert_direct_chats(
+        [("dark-empty-buyer", "direct-dark-empty-buyer")], now
+    )
+    _configure_dark_market(repository, market.id)
+
+    result = _group_receive(
+        service,
+        f"dark-empty-{command}",
+        "dark-empty-buyer",
+        command,
+        now,
+        market.chatroom_id,
+    )
+
+    outbounds = _outbounds_for(factory, result.message_id)
+    assert [outbound.text for outbound in outbounds] == [
+        "暗网查询结果已私聊发送。",
+        private_text,
+    ]
+    assert outbounds[0].destination_chatroom_id == market.chatroom_id
+    assert outbounds[0].delivery_kind == "group"
+    assert outbounds[1].destination_chatroom_id == "direct-dark-empty-buyer"
+    assert outbounds[1].delivery_kind == "direct"
 
 
 def test_dark_market_receipt_commands_are_private_and_confirm_the_order():

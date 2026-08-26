@@ -5397,6 +5397,10 @@ class CoreRepository:
                         record.chatroom_id = chatroom_id
                         record.discovered_at = now
 
+    def direct_chat_destination(self, platform_id: str) -> str | None:
+        with self._session() as session:
+            return self._dark_market_direct_destination(session, platform_id)
+
     def number_bomb_direct_chatroom_ids(self) -> tuple[str, ...]:
         with self._session() as session:
             return tuple(
