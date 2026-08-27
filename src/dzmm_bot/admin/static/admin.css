@@ -131,6 +131,8 @@ select:hover { border-color: #bdb5ff; }
 .ai-quota-scroll input { min-width: 92px; min-height: 36px; padding: 7px 9px; }
 .event-details-modal-card { width: min(100%, 960px); height: min(780px, calc(100vh - 40px)); grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
 .event-details-modal-card #random-event-details-list { min-height: 0; margin-top: 0; padding-right: 4px; overflow-y: auto; }
+.performance-messages-modal-card { width: min(100%, 780px); max-height: calc(100vh - 40px); overflow-y: auto; }
+.performance-message-image { display: block; width: auto; max-width: 220px; max-height: 160px; margin-top: 8px; border: 1px solid var(--line); border-radius: 10px; object-fit: contain; }
 .activity-rule-inputs, .income-report-time-inputs { display: grid; gap: 10px; }
 .event-input-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
 .undercover-role-inputs { display: grid; gap: 10px; }

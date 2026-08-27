@@ -66,6 +66,8 @@ from .api_models import (
     PerformanceExtensionResponse,
     PerformanceAuditResponse,
     PerformanceResponse,
+    PerformanceMessageResponse,
+    PaginatedPerformanceMessagesResponse,
     PerformanceSettingsResponse,
     PerformanceTipResponse,
     ReviewPerformanceExtensionRequest,
@@ -444,6 +446,47 @@ def create_app(
         if view is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "performance_not_found")
         return _performance_response(view)
+
+    @app.get(
+        "/internal/game/performances/{performance_id}/messages",
+        response_model=PaginatedPerformanceMessagesResponse,
+    )
+    def performance_messages(
+        performance_id: UUID,
+        _: Annotated[None, Depends(authorize)],
+        page: int = Query(default=1, ge=1),
+        page_size: int = Query(default=20, ge=1, le=100),
+    ) -> PaginatedPerformanceMessagesResponse:
+        history = repository.list_performance_messages_page(
+            performance_id, page=page, page_size=page_size
+        )
+        if history is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "performance_not_found")
+        return PaginatedPerformanceMessagesResponse(
+            reservation_id=history.reservation_id,
+            title=history.title,
+            started_at=history.started_at,
+            ended_at=history.ended_at,
+            items=[
+                PerformanceMessageResponse(
+                    id=item.id,
+                    display_name=item.display_name,
+                    employee_number=item.employee_number,
+                    content=item.content,
+                    content_type=item.content_type,
+                    image_url=item.image_url,
+                    image_alt=item.image_alt,
+                    image_width=item.image_width,
+                    image_height=item.image_height,
+                    created_at=item.created_at,
+                )
+                for item in history.items
+            ],
+            page=history.page,
+            page_size=history.page_size,
+            total=history.total,
+            pages=history.pages,
+        )
 
     @app.post(
         "/internal/game/performances/{performance_id}/approve",

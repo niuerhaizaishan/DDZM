@@ -171,6 +171,28 @@ def test_performance_core_api_lists_approves_and_configures(app_context, headers
         headers=headers,
         json={"maximum_duration_minutes": 480},
     )
+    stage_time = NOW + timedelta(days=1)
+    repository.run_performance_jobs(stage_time)
+    received = app_context.client.post(
+        "/internal/inbound",
+        headers=headers,
+        json={
+            "platform_message_id": "performance-history-image",
+            "sender_platform_id": "performance-actor",
+            "content": "谢幕舞台",
+            "received_at": stage_time.isoformat(),
+            "chatroom_id": group.chatroom_id,
+            "content_type": "image",
+            "image_url": "https://cdn.example/curtain.png",
+            "image_alt": "谢幕",
+            "image_width": 800,
+            "image_height": 600,
+        },
+    )
+    history = app_context.client.get(
+        f"/internal/game/performances/{reservation_id}/messages?page=1&page_size=20",
+        headers=headers,
+    )
 
     assert listed.status_code == 200
     assert listed.json()[0]["title"] == "夜航"
@@ -178,6 +200,13 @@ def test_performance_core_api_lists_approves_and_configures(app_context, headers
     assert approved.json()["state"] == "approved"
     assert settings.status_code == 200
     assert settings.json()["maximum_duration_minutes"] == 480
+    assert received.status_code == 200
+    assert history.status_code == 200
+    assert history.json()["title"] == "夜航"
+    assert history.json()["total"] == 1
+    assert history.json()["items"][0]["display_name"] == "公演演员"
+    assert history.json()["items"][0]["content_type"] == "image"
+    assert history.json()["items"][0]["image_url"].endswith("/curtain.png")
 
 
 def test_direct_chat_sync_persists_discovered_room(app_context, headers):

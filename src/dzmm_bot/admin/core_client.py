@@ -157,6 +157,10 @@ class AdminCorePort(Protocol):
 
     def list_performances(self, state_filter: str | None = None) -> list[dict]: ...
 
+    def list_performance_messages(
+        self, performance_id: str, page: int, page_size: int
+    ) -> dict: ...
+
     def approve_performance(
         self, performance_id: str, actor: str, now: str
     ) -> dict: ...
@@ -610,6 +614,14 @@ class CoreClient:
     def list_performances(self, state_filter: str | None = None) -> list[dict]:
         params = {} if state_filter is None else {"state": state_filter}
         return self._get("/internal/game/performances", params=params)
+
+    def list_performance_messages(
+        self, performance_id: str, page: int, page_size: int
+    ) -> dict:
+        return self._get(
+            f"/internal/game/performances/{performance_id}/messages",
+            params={"page": page, "page_size": page_size},
+        )
 
     def approve_performance(
         self, performance_id: str, actor: str, now: str

@@ -362,6 +362,57 @@ def test_performance_participant_line_is_recorded_without_reply(command_context)
         assert session.scalar(select(func.count(PerformanceMessageRecord.id))) == 1
 
 
+def test_performance_history_keeps_text_and_image_in_chronological_pages(
+    command_context,
+) -> None:
+    service, repository, group, stage_time = _open_performance(command_context)
+    performance_id = repository.list_performances("performing")[0].id
+
+    _receive(
+        service,
+        "actor",
+        "第一幕开始。",
+        stage_time,
+        room=group.chatroom_id,
+        platform_message_id="performance-text",
+    )
+    _receive(
+        service,
+        "actor",
+        "舞台照片",
+        stage_time + timedelta(seconds=1),
+        room=group.chatroom_id,
+        platform_message_id="performance-image",
+        content_type="image",
+        image_url="https://cdn.example/performance.png",
+        image_alt="第一幕舞台",
+        image_width=1280,
+        image_height=720,
+    )
+
+    first_page = repository.list_performance_messages_page(
+        performance_id, page=1, page_size=1
+    )
+    second_page = repository.list_performance_messages_page(
+        performance_id, page=2, page_size=1
+    )
+
+    assert first_page is not None
+    assert first_page.title == "夜航"
+    assert first_page.total == 2
+    assert first_page.pages == 2
+    assert first_page.items[0].content == "第一幕开始。"
+    assert first_page.items[0].content_type == "text"
+    assert first_page.items[0].display_name == "演员甲"
+    assert first_page.items[0].employee_number == 2
+    assert second_page is not None
+    assert second_page.items[0].content_type == "image"
+    assert second_page.items[0].image_url == "https://cdn.example/performance.png"
+    assert second_page.items[0].image_alt == "第一幕舞台"
+    assert second_page.items[0].image_width == 1280
+    assert second_page.items[0].image_height == 720
+
+
 def test_performance_observer_must_use_parentheses(command_context) -> None:
     service, repository, group, stage_time = _open_performance(command_context)
 

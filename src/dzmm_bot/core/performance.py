@@ -75,6 +75,33 @@ class PerformanceView:
 
 
 @dataclass(frozen=True)
+class PerformanceMessageView:
+    id: UUID
+    display_name: str
+    employee_number: int
+    content: str
+    content_type: str
+    image_url: str | None
+    image_alt: str | None
+    image_width: int | None
+    image_height: int | None
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class PerformanceMessageHistory:
+    reservation_id: UUID
+    title: str
+    started_at: datetime | None
+    ended_at: datetime | None
+    items: tuple[PerformanceMessageView, ...]
+    page: int
+    page_size: int
+    total: int
+    pages: int
+
+
+@dataclass(frozen=True)
 class PerformanceDraftResult:
     status: str
     reservation: PerformanceView | None = None

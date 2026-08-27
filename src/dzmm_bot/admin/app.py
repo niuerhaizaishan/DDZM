@@ -1971,6 +1971,19 @@ def create_app(
             "version": repository.config_version(),
         }
 
+    @app.get("/api/game/performances/{performance_id}/messages")
+    def performance_messages(
+        performance_id: str,
+        _: Annotated[AdminIdentity, Depends(authorize)],
+        page: int = Query(default=1, ge=1),
+        page_size: int = Query(default=20, ge=1, le=100),
+    ) -> dict:
+        return _relay_core(
+            lambda: core.list_performance_messages(
+                performance_id, page, page_size
+            )
+        )
+
     @app.patch("/api/game/performances/settings")
     def update_performance_settings(
         request: dict,

@@ -350,6 +350,7 @@ class FakeCore:
         default_factory=lambda: {"maximum_duration_minutes": 360}
     )
     performances: list[dict] = field(default_factory=list)
+    performance_messages: dict[str, dict] = field(default_factory=dict)
 
     def status(self):
         return {
@@ -413,6 +414,9 @@ class FakeCore:
         if state_filter is None:
             return self.performances
         return [item for item in self.performances if item["state"] == state_filter]
+
+    def list_performance_messages(self, performance_id, page, page_size):
+        return self.performance_messages[performance_id]
 
     def approve_performance(self, performance_id, actor, now):
         item = next(item for item in self.performances if item["id"] == performance_id)
@@ -1248,6 +1252,47 @@ def test_admin_page_contains_performance_management(client):
     assert 'id="performance-list"' in page
     assert 'id="group-chat-performances-enabled"' in page
     assert 'requestGame("/api/game/performances"' in script
+    assert 'id="performance-messages-modal"' in page
+    assert "data-performance-messages" in script
+    assert "/messages?" in script
+    assert "requestId !== performanceMessagesRequestId" in script
+    assert "performanceMessagesModal.dataset.performanceId !== performanceId" in script
+
+
+def test_admin_relays_performance_message_history(client, headers, core):
+    performance_id = "00000000-0000-0000-0000-000000000777"
+    core.performance_messages[performance_id] = {
+        "reservation_id": performance_id,
+        "title": "夜航",
+        "started_at": "2026-08-27T12:00:00+08:00",
+        "ended_at": None,
+        "items": [
+            {
+                "id": "00000000-0000-0000-0000-000000000778",
+                "display_name": "演员甲",
+                "employee_number": 2,
+                "content": "第一幕",
+                "content_type": "text",
+                "image_url": None,
+                "image_alt": None,
+                "image_width": None,
+                "image_height": None,
+                "created_at": "2026-08-27T12:00:01+08:00",
+            }
+        ],
+        "page": 1,
+        "page_size": 20,
+        "total": 1,
+        "pages": 1,
+    }
+
+    response = client.get(
+        f"/api/game/performances/{performance_id}/messages?page=1&page_size=20",
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["display_name"] == "演员甲"
 
 
 def test_admin_page_contains_dark_market_complaint_review_actions(client):

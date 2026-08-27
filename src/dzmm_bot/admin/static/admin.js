@@ -17,6 +17,8 @@ let texasHoldemSettings = null;
 let darkMarketSettings = null;
 let performanceSettings = null;
 let performances = [];
+let performanceMessagePage = 1;
+let performanceMessagesRequestId = 0;
 let darkMarketPage = 1;
 let redPacketSettings = null;
 let currentGameplay = null;
@@ -314,6 +316,7 @@ const employeeBalanceLedgerModal = document.querySelector("#employee-balance-led
 let employeeBalanceLedgerRequestId = 0;
 const groupChatModal = document.querySelector("#group-chat-modal");
 const employeeGroupMessagesModal = document.querySelector("#employee-group-messages-modal");
+const performanceMessagesModal = document.querySelector("#performance-messages-modal");
 const employeeProfileModal = document.querySelector("#employee-profile-modal");
 let employeeProfileImagePoll = null;
 const aiKnowledgeCardModal = document.querySelector("#ai-knowledge-card-modal");
@@ -399,6 +402,15 @@ function escapeHtml(value) {
   return String(value).replace(/[&<>'"]/g, (character) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", "\"": "&quot;",
   })[character]);
+}
+
+function safeImageUrl(value) {
+  try {
+    const url = new URL(value);
+    return ["http:", "https:"].includes(url.protocol) ? url.href : null;
+  } catch {
+    return null;
+  }
 }
 
 function commandLabel(command) {
@@ -1624,7 +1636,8 @@ function performanceCard(item, actions = "") {
   const audits = item.audit_events || [];
   const auditText = audits.length ? `<details><summary>审计记录（${audits.length}）</summary>${audits.map((audit) => `<small>${escapeHtml(formatHeartbeat(audit.created_at))} · ${escapeHtml(audit.event_type)} · ${escapeHtml(audit.actor || "系统")}</small>`).join("")}</details>` : "";
   const extensionActions = canReviewExtension ? `<button class="primary" data-performance-extension-action="approve" data-extension-id="${escapeHtml(extension.id)}" type="button">批准延期</button><button class="danger-button" data-performance-extension-action="reject" data-extension-id="${escapeHtml(extension.id)}" type="button">拒绝延期</button>` : "";
-  const allActions = actions + extensionActions;
+  const messageAction = item.started_at ? `<button class="secondary" data-performance-messages="${escapeHtml(item.id)}" type="button">查看演出记录</button>` : "";
+  const allActions = messageAction + actions + extensionActions;
   return `<article class="data-row"><div><b>${escapeHtml(item.title)}</b><small>${statusBadge(performanceStateLabel(item.state), ["performing", "tipping"].includes(item.state) ? "success" : item.state === "pending_review" ? "warning" : "")}</small><small>发起人：${escapeHtml(item.owner_display_name)} · 时间：${escapeHtml(formatHeartbeat(item.scheduled_at))}</small><small>参演：${escapeHtml(participants)}</small>${reviewText}${reasonText}${extensionText}<p>${escapeHtml(item.introduction)}</p>${item.cover_url ? `<small><a href="${escapeHtml(item.cover_url)}" target="_blank" rel="noopener">查看封面</a></small>` : ""}${tipText}${auditText}</div>${allActions ? `<div class="command-actions">${allActions}</div>` : ""}</article>`;
 }
 
@@ -1651,6 +1664,42 @@ async function loadPerformances() {
   performanceSettings = settings;
   configurationVersion = Math.max(listResponse.version ?? 0, settings.version ?? 0);
   renderPerformances(performances);
+}
+
+async function loadPerformanceMessages(page = performanceMessagePage) {
+  const performanceId = performanceMessagesModal.dataset.performanceId;
+  const requestId = ++performanceMessagesRequestId;
+  const params = new URLSearchParams({page: String(page), page_size: "20"});
+  const history = await requestGame(`/api/game/performances/${performanceId}/messages?${params}`);
+  if (requestId !== performanceMessagesRequestId || performanceMessagesModal.dataset.performanceId !== performanceId) return;
+  performanceMessagePage = history.page;
+  document.querySelector("#performance-messages-modal-title").textContent = `演出记录：《${history.title}》`;
+  const started = history.started_at ? formatHeartbeat(history.started_at) : "未开始";
+  const ended = history.ended_at ? formatHeartbeat(history.ended_at) : "进行中";
+  document.querySelector("#performance-messages-modal-context").textContent = `开始：${started} · 结束：${ended} · 共 ${history.total} 条`;
+  const list = document.querySelector("#performance-message-list");
+  list.innerHTML = history.items.map((item) => {
+    const text = item.content ? `<p>${escapeHtml(item.content)}</p>` : "";
+    const imageUrl = item.content_type === "image" ? safeImageUrl(item.image_url) : null;
+    const image = imageUrl
+      ? `<a href="${escapeHtml(imageUrl)}" target="_blank" rel="noopener"><img class="performance-message-image" src="${escapeHtml(imageUrl)}" alt="${escapeHtml(item.image_alt || "公演图片")}"></a><small class="performance-image-fallback" hidden>图片暂不可查看</small>`
+      : item.content_type === "image" ? '<small class="performance-image-fallback">图片暂不可查看</small>' : "";
+    return `<article class="data-row"><div><b>${escapeHtml(item.display_name)} ${formatEmployeeNumber(item.employee_number)}</b><small>${escapeHtml(formatHeartbeat(item.created_at))}</small>${text}${image}</div></article>`;
+  }).join("") || '<p class="muted">该场公演暂无已记录的表演内容。</p>';
+  for (const image of list.querySelectorAll("img.performance-message-image")) {
+    image.addEventListener("error", () => {
+      image.closest("a").hidden = true;
+      image.closest("a").nextElementSibling.hidden = false;
+    });
+  }
+  renderPagination(document.querySelector("#performance-message-pagination"), history, "条记录", loadPerformanceMessages);
+}
+
+async function openPerformanceMessagesModal(performanceId) {
+  performanceMessagesModal.dataset.performanceId = performanceId;
+  performanceMessagePage = 1;
+  performanceMessagesModal.hidden = false;
+  await loadPerformanceMessages(1);
 }
 
 async function loadEmployeeGroupMessages(page = employeeGroupMessagePage) {
@@ -2239,6 +2288,13 @@ document.querySelector("#group-chat-list").addEventListener("click", async (even
 });
 employeeGroupMessagesModal.addEventListener("click", (event) => {
   if (event.target.closest("[data-close-employee-group-messages-modal]")) employeeGroupMessagesModal.hidden = true;
+});
+performanceMessagesModal.addEventListener("click", (event) => {
+  if (event.target.closest("[data-close-performance-messages-modal]")) {
+    performanceMessagesRequestId += 1;
+    performanceMessagesModal.hidden = true;
+    performanceMessagesModal.dataset.performanceId = "";
+  }
 });
 document.querySelector("#employee-group-message-filter").addEventListener("change", () => {
   employeeGroupMessagePage = 1;
@@ -3819,6 +3875,15 @@ document.querySelector("#edit-performance-settings").addEventListener("click", a
 });
 
 document.querySelector("#performances-view").addEventListener("click", async (event) => {
+  const messagesButton = event.target.closest("button[data-performance-messages]");
+  if (messagesButton) {
+    try {
+      await openPerformanceMessagesModal(messagesButton.dataset.performanceMessages);
+    } catch (error) {
+      setResult(`读取演出记录失败（${error.message}）`, "error");
+    }
+    return;
+  }
   const extensionButton = event.target.closest("button[data-performance-extension-action]");
   if (extensionButton) {
     const {performanceExtensionAction: action, extensionId: id} = extensionButton.dataset;

@@ -65,6 +65,8 @@ from .performance import (
     PerformanceAuditView,
     PerformanceDraftResult,
     PerformanceExtensionView,
+    PerformanceMessageHistory,
+    PerformanceMessageView,
     PerformancePostponementResult,
     PerformanceSettings,
     PerformanceTipResult,
@@ -2365,6 +2367,11 @@ class CoreRepository:
                 platform_message_id=message.platform_message_id,
                 sender_platform_id=message.sender_platform_id,
                 content=message.content,
+                content_type=message.content_type,
+                image_url=message.image_url,
+                image_alt=message.image_alt,
+                image_width=message.image_width,
+                image_height=message.image_height,
                 received_at=message.received_at,
                 source_type=message.source_type,
                 chatroom_id=message.chatroom_id,
@@ -7234,6 +7241,67 @@ class CoreRepository:
                 PerformanceReservationRecord, UUID(str(reservation_id))
             )
             return None if record is None else self._performance_view(session, record)
+
+    def list_performance_messages_page(
+        self,
+        reservation_id: UUID | str,
+        *,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> PerformanceMessageHistory | None:
+        if page < 1 or not 1 <= page_size <= 100:
+            raise ValueError("invalid pagination")
+        reservation_uuid = UUID(str(reservation_id))
+        with self._session() as session:
+            reservation = session.get(PerformanceReservationRecord, reservation_uuid)
+            if reservation is None:
+                return None
+            total = session.scalar(
+                select(func.count(PerformanceMessageRecord.id)).where(
+                    PerformanceMessageRecord.reservation_id == reservation_uuid
+                )
+            ) or 0
+            rows = session.execute(
+                select(PerformanceMessageRecord, InboundRecord, UserRecord)
+                .join(
+                    InboundRecord,
+                    InboundRecord.id == PerformanceMessageRecord.inbound_message_id,
+                )
+                .join(UserRecord, UserRecord.id == PerformanceMessageRecord.user_id)
+                .where(PerformanceMessageRecord.reservation_id == reservation_uuid)
+                .order_by(
+                    PerformanceMessageRecord.created_at,
+                    PerformanceMessageRecord.id,
+                )
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            )
+            items = tuple(
+                PerformanceMessageView(
+                    id=message.id,
+                    display_name=user.display_name,
+                    employee_number=user.employee_number,
+                    content=inbound.content,
+                    content_type=inbound.content_type,
+                    image_url=inbound.image_url,
+                    image_alt=inbound.image_alt,
+                    image_width=inbound.image_width,
+                    image_height=inbound.image_height,
+                    created_at=message.created_at,
+                )
+                for message, inbound, user in rows
+            )
+            return PerformanceMessageHistory(
+                reservation_id=reservation.id,
+                title=reservation.title,
+                started_at=reservation.started_at,
+                ended_at=reservation.ended_at,
+                items=items,
+                page=page,
+                page_size=page_size,
+                total=total,
+                pages=(total + page_size - 1) // page_size,
+            )
 
     @staticmethod
     def _enqueue_performance_direct_notice(

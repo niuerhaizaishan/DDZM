@@ -125,6 +125,13 @@ class InboundRecord(Base):
     platform_message_id: Mapped[str] = mapped_column(String(255), nullable=False)
     sender_platform_id: Mapped[str] = mapped_column(String(255), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    content_type: Mapped[str] = mapped_column(
+        String(16), default="text", server_default="text", nullable=False
+    )
+    image_url: Mapped[str | None] = mapped_column(Text)
+    image_alt: Mapped[str | None] = mapped_column(String(512))
+    image_width: Mapped[int | None] = mapped_column(Integer)
+    image_height: Mapped[int | None] = mapped_column(Integer)
     received_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="accepted", nullable=False)
     ai_memory_eligible: Mapped[bool] = mapped_column(
@@ -1627,6 +1634,14 @@ class PerformanceExtensionRequestRecord(Base):
 
 class PerformanceMessageRecord(Base):
     __tablename__ = "performance_messages"
+    __table_args__ = (
+        Index(
+            "ix_performance_messages_reservation_created",
+            "reservation_id",
+            "created_at",
+            "id",
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     reservation_id: Mapped[UUID] = mapped_column(

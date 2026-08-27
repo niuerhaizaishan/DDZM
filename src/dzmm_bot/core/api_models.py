@@ -202,6 +202,31 @@ class PerformanceResponse(ApiModel):
     extension: PerformanceExtensionResponse | None
 
 
+class PerformanceMessageResponse(ApiModel):
+    id: UUID
+    display_name: str
+    employee_number: int
+    content: str
+    content_type: Literal["text", "image"]
+    image_url: str | None
+    image_alt: str | None
+    image_width: int | None
+    image_height: int | None
+    created_at: datetime
+
+
+class PaginatedPerformanceMessagesResponse(ApiModel):
+    reservation_id: UUID
+    title: str
+    started_at: datetime | None
+    ended_at: datetime | None
+    items: list[PerformanceMessageResponse]
+    page: int
+    page_size: int
+    total: int
+    pages: int
+
+
 class GroupChatTargetResponse(ApiModel):
     group_chat_id: UUID
     chatroom_id: str
