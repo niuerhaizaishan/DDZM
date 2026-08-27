@@ -1141,6 +1141,27 @@ def test_daily_jobs_run_global_dark_market_settlement(repository, now) -> None:
     assert stored.state == "sold"
 
 
+def test_unsold_listing_notifies_seller_directly(repository, now) -> None:
+    listing = _active_listing(repository, now)
+
+    repository.run_dark_market_jobs(listing.ends_at)
+
+    with repository._session() as session:
+        stored = session.get(DarkMarketListingRecord, listing.id)
+        notices = tuple(
+            session.scalars(
+                select(OutboundRecord.text).where(
+                    OutboundRecord.delivery_kind == "direct",
+                    OutboundRecord.destination_chatroom_id == "direct-seller",
+                    OutboundRecord.text.contains("已流拍"),
+                )
+            )
+        )
+    assert stored is not None
+    assert stored.state == "unsold"
+    assert notices == ("你上架的暗网商品 #1《旧钥匙》已流拍。",)
+
+
 def test_one_failed_settlement_does_not_block_other_due_listings(
     repository, now, monkeypatch
 ) -> None:

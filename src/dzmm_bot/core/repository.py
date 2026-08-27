@@ -8236,6 +8236,19 @@ class CoreRepository:
         listing.finished_at = now
         if current is None:
             listing.state = "unsold"
+            seller = session.get(UserRecord, listing.seller_user_id)
+            if seller is None:
+                raise RuntimeError("暗网卖家不存在")
+            seller_destination = self._dark_market_direct_destination(
+                session, seller.platform_id
+            )
+            if seller_destination is not None:
+                self.enqueue_system_outbound(
+                    f"你上架的暗网商品 #{listing.public_number}"
+                    f"《{listing.name}》已流拍。",
+                    destination_chatroom_id=seller_destination,
+                    delivery_kind="direct",
+                )
             self._enqueue_dark_market_public_notice(
                 session,
                 listing,
