@@ -344,3 +344,52 @@ def test_ai_job_completed_during_performance_waits_for_settlement(
     repository.run_performance_jobs(stage_time + timedelta(seconds=180))
     with factory() as session:
         assert session.get(schema.OutboundRecord, reply.id).status == "pending"
+
+
+def test_ai_completion_reuses_its_transaction_for_outbound(tmp_path) -> None:
+    """Fails if AI completion opens a second DB session while holding the gate."""
+    engine = create_engine(
+        f"sqlite+pysqlite:///{tmp_path / 'ai-completion.db'}",
+        pool_size=1,
+        max_overflow=0,
+        pool_timeout=0.05,
+    )
+    schema.Base.metadata.create_all(engine)
+    factory = sessionmaker(engine, expire_on_commit=False)
+    repository = CoreRepository(factory)
+    now = datetime(2026, 8, 27, 7, 0, tzinfo=BEIJING)
+    group = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=ai-completion", now
+    )
+    repository.create_user("ai-user", "AI 员工", now, 0)
+    repository.get_ai_assistant_settings()
+    with factory.begin() as session:
+        session.get(schema.AIAssistantSettingsRecord, 1).enabled = True
+    inbound, _ = repository.accept_inbound(
+        InboundMessage(
+            "ai-completion-inbound",
+            "ai-user",
+            "@总监事 你好",
+            now,
+            source_type="group",
+            chatroom_id=group.chatroom_id,
+        ),
+        group.id,
+    )
+    assert repository.try_enqueue_ai_request(
+        inbound.id, "ai-user", "你好", now
+    ).state == "queued"
+    claim = repository.claim_ai_request("ai-worker", now, 90)
+
+    assert claim is not None
+    assert repository.complete_ai_request(
+        claim.id, "ai-worker", claim.lease_token, "收到", now
+    )
+
+    with factory() as session:
+        reply = session.scalar(
+            select(schema.OutboundRecord).where(
+                schema.OutboundRecord.text == "收到"
+            )
+        )
+        assert reply is not None

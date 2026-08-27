@@ -5231,44 +5231,45 @@ class CoreRepository:
         failure_summary: str | None,
         now: datetime,
     ) -> bool:
-        with self._session() as session:
-            self._lock_gameplay_gate(session)
-            record = session.scalar(
-                select(AIRequestRecord)
-                .where(
-                    AIRequestRecord.id == UUID(str(request_id)),
-                    AIRequestRecord.status == "leased",
-                    AIRequestRecord.lease_worker_id == worker_id,
-                    AIRequestRecord.lease_token == UUID(str(lease_token)),
-                    AIRequestRecord.lease_expires_at > now,
+        with self.transaction():
+            with self._session() as session:
+                self._lock_gameplay_gate(session)
+                record = session.scalar(
+                    select(AIRequestRecord)
+                    .where(
+                        AIRequestRecord.id == UUID(str(request_id)),
+                        AIRequestRecord.status == "leased",
+                        AIRequestRecord.lease_worker_id == worker_id,
+                        AIRequestRecord.lease_token == UUID(str(lease_token)),
+                        AIRequestRecord.lease_expires_at > now,
+                    )
+                    .with_for_update()
                 )
-                .with_for_update()
-            )
-            if record is None:
-                return False
-            settings = session.get(AIAssistantSettingsRecord, 1)
-            if text:
-                record.status = "completed"
-                record.result_text = text
-                self.enqueue_outbound(
-                    record.inbound_message_id,
-                    text,
-                    defer_for_performance=True,
-                )
-            else:
-                record.status = "failed"
-                record.failure_summary = failure_summary
-                self.enqueue_outbound(
-                    record.inbound_message_id,
-                    settings.failure_reply if settings is not None else _DEFAULT_AI_FAILURE_REPLY,
-                    defer_for_performance=True,
-                )
-            record.lease_worker_id = None
-            record.lease_token = None
-            record.lease_expires_at = None
-            record.completed_at = now
-            session.flush()
-            return True
+                if record is None:
+                    return False
+                settings = session.get(AIAssistantSettingsRecord, 1)
+                if text:
+                    record.status = "completed"
+                    record.result_text = text
+                    self.enqueue_outbound(
+                        record.inbound_message_id,
+                        text,
+                        defer_for_performance=True,
+                    )
+                else:
+                    record.status = "failed"
+                    record.failure_summary = failure_summary
+                    self.enqueue_outbound(
+                        record.inbound_message_id,
+                        settings.failure_reply if settings is not None else _DEFAULT_AI_FAILURE_REPLY,
+                        defer_for_performance=True,
+                    )
+                record.lease_worker_id = None
+                record.lease_token = None
+                record.lease_expires_at = None
+                record.completed_at = now
+                session.flush()
+                return True
 
     def get_undercover_settings(self) -> UndercoverSettings:
         with self._session() as session:
