@@ -1893,6 +1893,8 @@ def create_app(
             announcement_group_id=settings.announcement_group_id,
             duration_hours=settings.duration_hours,
             fee_percent=settings.fee_percent,
+            disclosure_duration_value=settings.disclosure_duration_value,
+            disclosure_duration_unit=settings.disclosure_duration_unit,
             version=settings.version,
             rank_limits=[
                 DarkMarketRankLimitResponse(**item.__dict__)
@@ -1922,10 +1924,13 @@ def create_app(
                 announcement_group_id=request.announcement_group_id,
                 duration_hours=request.duration_hours,
                 fee_percent=request.fee_percent,
+                disclosure_duration_value=request.disclosure_duration_value,
+                disclosure_duration_unit=request.disclosure_duration_unit,
                 rank_limits={
                     item.rank_id: item.daily_limit for item in request.rank_limits
                 },
                 expected_version=request.expected_version,
+                now=clock(),
             )
         except ValueError as exc:
             raise HTTPException(
@@ -1936,6 +1941,8 @@ def create_app(
             announcement_group_id=settings.announcement_group_id,
             duration_hours=settings.duration_hours,
             fee_percent=settings.fee_percent,
+            disclosure_duration_value=settings.disclosure_duration_value,
+            disclosure_duration_unit=settings.disclosure_duration_unit,
             version=settings.version,
             rank_limits=[
                 DarkMarketRankLimitResponse(**item.__dict__)

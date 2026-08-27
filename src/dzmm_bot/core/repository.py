@@ -448,6 +448,16 @@ _BALANCE_SOURCE_LABELS = {
 _DEFAULT_RED_PACKET_EXPIRY_MINUTES = 10
 _DEFAULT_RED_PACKET_EMPTY_PROBABILITY_PERCENT = 5
 _RED_PACKET_DAILY_LIMIT = 5
+_DARK_MARKET_DISCLOSURE_UNIT_MINUTES = {
+    "minute": 1,
+    "hour": 60,
+    "day": 24 * 60,
+}
+_DARK_MARKET_DISCLOSURE_UNIT_LABELS = {
+    "minute": "分钟",
+    "hour": "小时",
+    "day": "天",
+}
 _DEFAULT_ACTIVITY_RULES = (
     (1, 10, 1),
     (2, 25, 2),
@@ -991,6 +1001,8 @@ class DarkMarketSettings:
     announcement_group_id: UUID | None
     duration_hours: int
     fee_percent: int
+    disclosure_duration_value: int
+    disclosure_duration_unit: str
     version: int
     rank_limits: tuple[DarkMarketRankLimit, ...]
 
@@ -7484,6 +7496,8 @@ class CoreRepository:
                     announcement_group_id=None,
                     duration_hours=3,
                     fee_percent=5,
+                    disclosure_duration_value=10,
+                    disclosure_duration_unit="minute",
                     version=0,
                 )
             )
@@ -7515,6 +7529,8 @@ class CoreRepository:
             announcement_group_id=record.announcement_group_id,
             duration_hours=record.duration_hours,
             fee_percent=record.fee_percent,
+            disclosure_duration_value=record.disclosure_duration_value,
+            disclosure_duration_unit=record.disclosure_duration_unit,
             version=record.version,
             rank_limits=tuple(
                 DarkMarketRankLimit(
@@ -7542,51 +7558,92 @@ class CoreRepository:
         announcement_group_id: UUID | None,
         duration_hours: int,
         fee_percent: int,
+        disclosure_duration_value: int,
+        disclosure_duration_unit: str,
         rank_limits: dict[UUID, int],
         expected_version: int,
+        now: datetime,
     ) -> DarkMarketSettings:
         if not 1 <= duration_hours <= 24:
             raise ValueError("交易时长必须为 1–24 小时")
         if not 1 <= fee_percent <= 100:
             raise ValueError("手续费必须为 1–100%")
+        disclosure_delta = self._dark_market_disclosure_duration(
+            disclosure_duration_value, disclosure_duration_unit
+        )
         if any(limit < -1 for limit in rank_limits.values()):
             raise ValueError("每日上架次数不能小于 -1")
-        with self._session() as session:
-            self._ensure_dark_market_defaults(session)
-            record = session.get(DarkMarketSettingsRecord, 1, with_for_update=True)
-            if record is None:
-                raise RuntimeError("暗网设置初始化失败")
-            if record.version != expected_version:
-                raise ValueError("configuration was updated by another administrator")
-            actual_rank_ids = set(session.scalars(select(RankRecord.id)))
-            if set(rank_limits) != actual_rank_ids:
-                raise ValueError("需要为每个职位配置上架次数")
-            if announcement_group_id is not None:
-                group = session.scalar(
-                    select(GroupChatRecord).where(
-                        GroupChatRecord.id == announcement_group_id,
-                        GroupChatRecord.deleted_at.is_(None),
-                        GroupChatRecord.listening_enabled.is_(True),
+        with self.transaction():
+            with self._session() as session:
+                self._lock_gameplay_gate(session)
+                self._ensure_dark_market_defaults(session)
+                record = session.get(
+                    DarkMarketSettingsRecord, 1, with_for_update=True
+                )
+                if record is None:
+                    raise RuntimeError("暗网设置初始化失败")
+                if record.version != expected_version:
+                    raise ValueError(
+                        "configuration was updated by another administrator"
                     )
-                )
-                if group is None or group.chatroom_id is None:
+                actual_rank_ids = set(session.scalars(select(RankRecord.id)))
+                if set(rank_limits) != actual_rank_ids:
+                    raise ValueError("需要为每个职位配置上架次数")
+                if announcement_group_id is not None:
+                    group = session.scalar(
+                        select(GroupChatRecord).where(
+                            GroupChatRecord.id == announcement_group_id,
+                            GroupChatRecord.deleted_at.is_(None),
+                            GroupChatRecord.listening_enabled.is_(True),
+                        )
+                    )
+                    if group is None or group.chatroom_id is None:
+                        raise ValueError("暗网群聊不可用")
+                elif enabled:
                     raise ValueError("暗网群聊不可用")
-            elif enabled:
-                raise ValueError("暗网群聊不可用")
-            record.enabled = enabled
-            record.announcement_group_id = announcement_group_id
-            record.duration_hours = duration_hours
-            record.fee_percent = fee_percent
-            record.version += 1
-            for rank_id, daily_limit in rank_limits.items():
-                limit = session.get(
-                    DarkMarketRankLimitRecord, rank_id, with_for_update=True
+                record.enabled = enabled
+                record.announcement_group_id = announcement_group_id
+                record.duration_hours = duration_hours
+                record.fee_percent = fee_percent
+                record.disclosure_duration_value = disclosure_duration_value
+                record.disclosure_duration_unit = disclosure_duration_unit
+                record.version += 1
+                for rank_id, daily_limit in rank_limits.items():
+                    limit = session.get(
+                        DarkMarketRankLimitRecord, rank_id, with_for_update=True
+                    )
+                    if limit is None:
+                        raise RuntimeError("暗网职位额度消失")
+                    limit.daily_limit = daily_limit
+                disclosures = session.scalars(
+                    select(DarkMarketDisclosureRecord)
+                    .where(DarkMarketDisclosureRecord.state == "pending")
+                    .order_by(DarkMarketDisclosureRecord.id)
+                    .with_for_update()
                 )
-                if limit is None:
-                    raise RuntimeError("暗网职位额度消失")
-                limit.daily_limit = daily_limit
-            session.flush()
-            return self._dark_market_settings(session, record)
+                for disclosure in disclosures:
+                    disclosure.deadline = disclosure.created_at + disclosure_delta
+                    if disclosure.deadline <= now:
+                        disclosure.state = "anonymous"
+                        disclosure.finished_at = now
+                session.flush()
+                return self._dark_market_settings(session, record)
+
+    @staticmethod
+    def _dark_market_disclosure_duration(value: int, unit: str) -> timedelta:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError("身份公开确认时长必须为正整数")
+        unit_minutes = _DARK_MARKET_DISCLOSURE_UNIT_MINUTES.get(unit)
+        if unit_minutes is None:
+            raise ValueError("身份公开确认时长单位无效")
+        total_minutes = value * unit_minutes
+        if total_minutes > 30 * 24 * 60:
+            raise ValueError("身份公开确认时长必须为 1 分钟至 30 天")
+        return timedelta(minutes=total_minutes)
+
+    @staticmethod
+    def _dark_market_disclosure_duration_text(value: int, unit: str) -> str:
+        return f"{value} {_DARK_MARKET_DISCLOSURE_UNIT_LABELS[unit]}"
 
     @staticmethod
     def _active_dark_market_configuration(
@@ -8313,13 +8370,24 @@ class CoreRepository:
         listing.fee_amount = fee
         listing.receipt_resolved_at = now
         listing.finished_at = now
+        settings = session.get(DarkMarketSettingsRecord, 1)
+        if settings is None:
+            raise RuntimeError("暗网设置不存在")
+        disclosure_delta = self._dark_market_disclosure_duration(
+            settings.disclosure_duration_value,
+            settings.disclosure_duration_unit,
+        )
+        disclosure_duration_text = self._dark_market_disclosure_duration_text(
+            settings.disclosure_duration_value,
+            settings.disclosure_duration_unit,
+        )
         session.add(
             DarkMarketDisclosureRecord(
                 listing_id=listing.id,
                 seller_user_id=seller.id,
                 buyer_user_id=buyer.id,
                 state="pending",
-                deadline=now + timedelta(minutes=10),
+                deadline=now + disclosure_delta,
                 created_at=now,
             )
         )
@@ -8342,7 +8410,7 @@ class CoreRepository:
                 self.enqueue_system_outbound(
                     f"暗网商品 #{listing.public_number} {direct_notice}。"
                     "是否公开买卖双方身份？"
-                    "请在 10 分钟内发送 /公开 或 /不公开。",
+                    f"请在 {disclosure_duration_text}内发送 /公开 或 /不公开。",
                     destination_chatroom_id=direct_chatroom_id,
                     delivery_kind="direct",
                 )

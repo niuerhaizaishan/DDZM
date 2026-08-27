@@ -906,6 +906,19 @@ class DarkMarketSettingsRecord(Base):
         CheckConstraint(
             "fee_percent BETWEEN 1 AND 100", name="ck_dark_market_fee_percent"
         ),
+        CheckConstraint(
+            "disclosure_duration_unit IN ('minute', 'hour', 'day')",
+            name="ck_dark_market_disclosure_duration_unit",
+        ),
+        CheckConstraint(
+            "(disclosure_duration_unit = 'minute' AND "
+            "disclosure_duration_value BETWEEN 1 AND 43200) OR "
+            "(disclosure_duration_unit = 'hour' AND "
+            "disclosure_duration_value BETWEEN 1 AND 720) OR "
+            "(disclosure_duration_unit = 'day' AND "
+            "disclosure_duration_value BETWEEN 1 AND 30)",
+            name="ck_dark_market_disclosure_duration_range",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
@@ -915,6 +928,12 @@ class DarkMarketSettingsRecord(Base):
     )
     duration_hours: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
     fee_percent: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
+    disclosure_duration_value: Mapped[int] = mapped_column(
+        Integer, default=10, nullable=False
+    )
+    disclosure_duration_unit: Mapped[str] = mapped_column(
+        String(16), default="minute", nullable=False
+    )
     version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 

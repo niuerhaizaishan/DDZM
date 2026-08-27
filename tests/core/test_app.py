@@ -526,6 +526,8 @@ def test_dark_market_core_api_configures_lists_details_and_force_delists(
         "announcement_group_id": str(group.id),
         "duration_hours": 4,
         "fee_percent": 7,
+        "disclosure_duration_value": 6,
+        "disclosure_duration_unit": "hour",
         "rank_limits": [
             {"rank_id": item["rank_id"], "daily_limit": item["daily_limit"]}
             for item in limits
@@ -536,7 +538,12 @@ def test_dark_market_core_api_configures_lists_details_and_force_delists(
         "/internal/game/dark-market/settings", headers=headers, json=payload
     )
     assert updated.status_code == 200
-    assert (updated.json()["duration_hours"], updated.json()["fee_percent"]) == (4, 7)
+    assert (
+        updated.json()["duration_hours"],
+        updated.json()["fee_percent"],
+        updated.json()["disclosure_duration_value"],
+        updated.json()["disclosure_duration_unit"],
+    ) == (4, 7, 6, "hour")
 
     assert repository.start_dark_market_draft("dark-api-seller", NOW).status == "started"
     for value in ("旧怀表", "查看时间", "停在午夜", "保密", "10"):
@@ -595,6 +602,8 @@ def test_dark_market_core_api_validates_settings_bounds(app_context, headers):
         "announcement_group_id": None,
         "duration_hours": 3,
         "fee_percent": 5,
+        "disclosure_duration_value": 10,
+        "disclosure_duration_unit": "minute",
         "rank_limits": [
             {"rank_id": item["rank_id"], "daily_limit": item["daily_limit"]}
             for item in initial["rank_limits"]
@@ -606,6 +615,9 @@ def test_dark_market_core_api_validates_settings_bounds(app_context, headers):
         {**base, "duration_hours": 25},
         {**base, "fee_percent": 0},
         {**base, "fee_percent": 101},
+        {**base, "disclosure_duration_value": 0},
+        {**base, "disclosure_duration_value": 31, "disclosure_duration_unit": "day"},
+        {**base, "disclosure_duration_unit": "week"},
         {**base, "rank_limits": base["rank_limits"][:-1]},
     ):
         assert app_context.client.patch(

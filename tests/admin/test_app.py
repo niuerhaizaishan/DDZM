@@ -129,6 +129,8 @@ class FakeCore:
             "announcement_group_id": "00000000-0000-0000-0000-000000000001",
             "duration_hours": 3,
             "fee_percent": 5,
+            "disclosure_duration_value": 10,
+            "disclosure_duration_unit": "minute",
             "version": 0,
             "rank_limits": [
                 {
@@ -3246,6 +3248,8 @@ def test_admin_proxies_dark_market_settings_history_and_force_delist(
         "announcement_group_id": "00000000-0000-0000-0000-000000000001",
         "duration_hours": 4,
         "fee_percent": 8,
+        "disclosure_duration_value": 2,
+        "disclosure_duration_unit": "day",
         "rank_limits": [
             {"rank_id": item["rank_id"], "daily_limit": 2}
             for item in initial.json()["rank_limits"]
@@ -3263,6 +3267,8 @@ def test_admin_proxies_dark_market_settings_history_and_force_delist(
     assert updated.status_code == 200
     assert updated.json()["fee_percent"] == 8
     assert core.dark_market_settings["duration_hours"] == 4
+    assert core.dark_market_settings["disclosure_duration_value"] == 2
+    assert core.dark_market_settings["disclosure_duration_unit"] == "day"
 
     listed = client.get(
         "/api/game/dark-market/listings?status=active&page=1&page_size=20",
@@ -3314,6 +3320,8 @@ def test_admin_rejects_invalid_dark_market_settings_before_relay(
             "announcement_group_id": None,
             "duration_hours": 25,
             "fee_percent": 0,
+            "disclosure_duration_value": 31,
+            "disclosure_duration_unit": "day",
             "rank_limits": [],
         },
     )

@@ -1042,6 +1042,8 @@ class DarkMarketSettingsResponse(ApiModel):
     announcement_group_id: UUID | None
     duration_hours: int
     fee_percent: int
+    disclosure_duration_value: int
+    disclosure_duration_unit: Literal["minute", "hour", "day"]
     version: int
     rank_limits: list[DarkMarketRankLimitResponse]
 
@@ -1051,6 +1053,8 @@ class SetDarkMarketSettingsRequest(ApiModel):
     announcement_group_id: UUID | None
     duration_hours: int = Field(ge=1, le=24)
     fee_percent: int = Field(ge=1, le=100)
+    disclosure_duration_value: int = Field(ge=1)
+    disclosure_duration_unit: Literal["minute", "hour", "day"]
     rank_limits: list[DarkMarketRankLimitRequest] = Field(min_length=1)
     expected_version: int = Field(ge=0)
 
@@ -1059,6 +1063,13 @@ class SetDarkMarketSettingsRequest(ApiModel):
         rank_ids = [item.rank_id for item in self.rank_limits]
         if len(rank_ids) != len(set(rank_ids)):
             raise ValueError("rank limits must be unique")
+        unit_minutes = {"minute": 1, "hour": 60, "day": 24 * 60}
+        if (
+            self.disclosure_duration_value
+            * unit_minutes[self.disclosure_duration_unit]
+            > 30 * 24 * 60
+        ):
+            raise ValueError("disclosure duration must not exceed 30 days")
         return self
 
 

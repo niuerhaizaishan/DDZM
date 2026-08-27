@@ -5,7 +5,6 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import Column, Integer, MetaData, Table, Uuid, create_engine, inspect, text
 
-
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -99,3 +98,54 @@ def test_dark_market_migration_creates_defaults_and_rank_limits(
         "dark_market_daily_listings",
         "dark_market_number_counters",
     } & set(inspector.get_table_names())
+
+
+def test_disclosure_duration_migration_preserves_existing_settings(
+    tmp_path, monkeypatch
+) -> None:
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'dark-market-duration.db'}"
+    monkeypatch.setenv("DZMM_DATABASE_URL", database_url)
+    config = Config(str(ROOT / "alembic.ini"))
+    _revision_51_dependencies(database_url)
+    command.stamp(config, "20260820_51")
+    command.upgrade(config, "20260827_60")
+    engine = create_engine(database_url)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE dark_market_settings SET enabled = 0, duration_hours = 4, "
+                "fee_percent = 7, version = 9 WHERE id = 1"
+            )
+        )
+
+    command.upgrade(config, "head")
+
+    columns = {
+        column["name"] for column in inspect(engine).get_columns("dark_market_settings")
+    }
+    with engine.connect() as connection:
+        settings = connection.execute(
+            text(
+                "SELECT duration_hours, fee_percent, version, "
+                "disclosure_duration_value, disclosure_duration_unit "
+                "FROM dark_market_settings WHERE id = 1"
+            )
+        ).one()
+    assert {"disclosure_duration_value", "disclosure_duration_unit"} <= columns
+    assert tuple(settings) == (4, 7, 9, 10, "minute")
+
+    command.downgrade(config, "20260827_60")
+
+    columns = {
+        column["name"] for column in inspect(engine).get_columns("dark_market_settings")
+    }
+    with engine.connect() as connection:
+        preserved = connection.execute(
+            text(
+                "SELECT duration_hours, fee_percent, version "
+                "FROM dark_market_settings WHERE id = 1"
+            )
+        ).one()
+    assert "disclosure_duration_value" not in columns
+    assert "disclosure_duration_unit" not in columns
+    assert tuple(preserved) == (4, 7, 9)

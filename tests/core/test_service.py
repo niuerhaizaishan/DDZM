@@ -698,8 +698,11 @@ def test_direct_plain_text_advances_only_the_senders_dark_market_draft(
         announcement_group_id=PRIMARY_GROUP_CHAT_ID,
         duration_hours=3,
         fee_percent=5,
+        disclosure_duration_value=settings.disclosure_duration_value,
+        disclosure_duration_unit=settings.disclosure_duration_unit,
         rank_limits={item.rank_id: item.daily_limit for item in settings.rank_limits},
         expected_version=settings.version,
+        now=now,
     )
     service = CoreService(repository, GroupCommandHandler(repository))
     for platform_id in ("draft-a", "draft-b"):

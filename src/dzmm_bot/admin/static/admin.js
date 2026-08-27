@@ -534,11 +534,13 @@ function darkMarketComplaintActions(item) {
 
 function renderDarkMarketSettings(settings) {
   const group = groupChats.find((item) => item.id === settings.announcement_group_id);
+  const disclosureUnit = {minute: "分钟", hour: "小时", day: "天"}[settings.disclosure_duration_unit] || settings.disclosure_duration_unit;
   document.querySelector("#dark-market-settings-card").innerHTML = `
     <article><span>交易所状态</span><strong>${settings.enabled ? "已启用" : "已停用"}</strong><small>停用不影响既有商品</small></article>
     <article><span>暗网播报群</span><strong>${escapeHtml(group?.name || "未配置")}</strong><small>仅此群可查询并接收公告</small></article>
     <article><span>交易时长</span><strong>${settings.duration_hours} 小时</strong><small>玩家端不显示精确截止时间</small></article>
     <article><span>成交手续费</span><strong>${settings.fee_percent}%</strong><small>从卖家成交款中向上取整扣除</small></article>
+    <article><span>公开确认时长</span><strong>${settings.disclosure_duration_value} ${escapeHtml(disclosureUnit)}</strong><small>保存后同步重算等待确认的交易</small></article>
     <article><span>职位额度</span><strong>${settings.rank_limits.length} 档</strong><small>${escapeHtml(settings.rank_limits.map((item) => `${item.level_label} ${item.daily_limit < 0 ? "不限" : `${item.daily_limit}次`}`).join(" · "))}</small></article>`;
 }
 
@@ -1440,6 +1442,8 @@ async function openDarkMarketSettingsModal() {
   document.querySelector("#dark-market-group").value = settings.announcement_group_id || "";
   document.querySelector("#dark-market-duration").value = settings.duration_hours;
   document.querySelector("#dark-market-fee").value = settings.fee_percent;
+  document.querySelector("#dark-market-disclosure-duration-value").value = settings.disclosure_duration_value;
+  document.querySelector("#dark-market-disclosure-duration-unit").value = settings.disclosure_duration_unit;
   document.querySelector("#dark-market-rank-limits").innerHTML = settings.rank_limits.map((item) => `<label>${escapeHtml(item.rank_name)}（${escapeHtml(item.level_label)}）<input data-dark-market-rank-id="${escapeHtml(item.rank_id)}" type="number" min="-1" value="${item.daily_limit}" required></label>`).join("");
   darkMarketSettingsModal.hidden = false;
   document.querySelector("#dark-market-group").focus();
@@ -2755,14 +2759,20 @@ darkMarketSettingsModal.addEventListener("click", async (event) => {
     announcement_group_id: document.querySelector("#dark-market-group").value || null,
     duration_hours: Number(document.querySelector("#dark-market-duration").value),
     fee_percent: Number(document.querySelector("#dark-market-fee").value),
+    disclosure_duration_value: Number(document.querySelector("#dark-market-disclosure-duration-value").value),
+    disclosure_duration_unit: document.querySelector("#dark-market-disclosure-duration-unit").value,
     rank_limits: rankLimits,
   };
+  const disclosureUnitMinutes = {minute: 1, hour: 60, day: 24 * 60};
   const valid = (!payload.enabled || payload.announcement_group_id)
     && Number.isInteger(payload.duration_hours) && payload.duration_hours >= 1 && payload.duration_hours <= 24
     && Number.isInteger(payload.fee_percent) && payload.fee_percent >= 1 && payload.fee_percent <= 100
+    && Number.isInteger(payload.disclosure_duration_value) && payload.disclosure_duration_value >= 1
+    && Object.hasOwn(disclosureUnitMinutes, payload.disclosure_duration_unit)
+    && payload.disclosure_duration_value * (disclosureUnitMinutes[payload.disclosure_duration_unit] || 0) <= 30 * 24 * 60
     && rankLimits.length && rankLimits.every((item) => Number.isInteger(item.daily_limit) && item.daily_limit >= -1);
   if (!valid) {
-    setResult("暗网交易所设置无效，请检查群聊、时长、手续费和职位额度", "error");
+    setResult("暗网交易所设置无效，请检查群聊、交易时长、手续费、公开确认时长和职位额度", "error");
     return;
   }
   try {

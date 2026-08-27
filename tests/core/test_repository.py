@@ -9922,8 +9922,11 @@ def test_postgres_dark_market_notice_waits_for_random_event_start_gate(
         announcement_group_id=PRIMARY_GROUP_CHAT_ID,
         duration_hours=3,
         fee_percent=5,
+        disclosure_duration_value=market.disclosure_duration_value,
+        disclosure_duration_unit=market.disclosure_duration_unit,
         rank_limits={item.rank_id: item.daily_limit for item in market.rank_limits},
         expected_version=market.version,
+        now=now,
     )
     assert setup.start_dark_market_draft("race-seller", now).status == "started"
     for value in ("竞态商品", "测试用途", "测试详情", "保密", "10"):

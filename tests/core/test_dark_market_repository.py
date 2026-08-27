@@ -43,8 +43,11 @@ def _configure_market(repository: CoreRepository, now: datetime) -> None:
         announcement_group_id=PRIMARY_GROUP_CHAT_ID,
         duration_hours=3,
         fee_percent=5,
+        disclosure_duration_value=settings.disclosure_duration_value,
+        disclosure_duration_unit=settings.disclosure_duration_unit,
         rank_limits={limit.rank_id: limit.daily_limit for limit in settings.rank_limits},
         expected_version=settings.version,
+        now=now,
     )
 
 
@@ -101,6 +104,24 @@ def _active_listing(repository: CoreRepository, now: datetime):
     return result.listing
 
 
+def _confirm_listing(repository: CoreRepository, listing, now: datetime):
+    repository.place_dark_market_bid(
+        "buyer-a", listing.public_number, 21,
+        _inbound_id(repository, "buyer-a", "/报价 1 21", now), now,
+    )
+    repository.run_dark_market_jobs(listing.ends_at)
+    confirmed_at = listing.ends_at + timedelta(hours=1)
+    result = repository.resolve_dark_market_receipt(
+        "buyer-a",
+        listing.public_number,
+        "confirm",
+        _inbound_id(repository, "buyer-a", "/确认收货 1", confirmed_at),
+        confirmed_at,
+    )
+    assert result.status == "confirmed"
+    return confirmed_at
+
+
 def _balance(repository: CoreRepository, platform_id: str) -> int:
     profile = repository.get_user_profile(platform_id)
     assert profile is not None
@@ -116,6 +137,8 @@ def test_dark_market_settings_seed_all_rank_limits(repository, now) -> None:
     assert settings.announcement_group_id is None
     assert settings.duration_hours == 3
     assert settings.fee_percent == 5
+    assert settings.disclosure_duration_value == 10
+    assert settings.disclosure_duration_unit == "minute"
     assert [limit.daily_limit for limit in settings.rank_limits] == [
         1, 1, 2, 2, 3, 3, 4, 4, 5, 5, -1
     ]
@@ -131,8 +154,11 @@ def test_dark_market_settings_require_an_enabled_listening_group(repository, now
             announcement_group_id=uuid4(),
             duration_hours=3,
             fee_percent=5,
+            disclosure_duration_value=settings.disclosure_duration_value,
+            disclosure_duration_unit=settings.disclosure_duration_unit,
             rank_limits={limit.rank_id: limit.daily_limit for limit in settings.rank_limits},
             expected_version=settings.version,
+            now=now,
         )
 
 
@@ -442,22 +468,8 @@ def test_buyer_confirmation_pays_seller_fee_and_starts_disclosure(
     repository, now
 ) -> None:
     listing = _active_listing(repository, now)
-    repository.place_dark_market_bid(
-        "buyer-a", listing.public_number, 21,
-        _inbound_id(repository, "buyer-a", "/报价 1 21", now), now,
-    )
-    repository.run_dark_market_jobs(listing.ends_at)
-    confirmed_at = listing.ends_at + timedelta(hours=1)
+    confirmed_at = _confirm_listing(repository, listing, now)
 
-    result = repository.resolve_dark_market_receipt(
-        "buyer-a",
-        listing.public_number,
-        "confirm",
-        _inbound_id(repository, "buyer-a", "/确认收货 1", confirmed_at),
-        confirmed_at,
-    )
-
-    assert result.status == "confirmed"
     assert _balance(repository, "buyer-a") == 79
     assert _balance(repository, "seller") == 119
     with repository._session() as session:
@@ -477,6 +489,158 @@ def test_buyer_confirmation_pays_seller_fee_and_starts_disclosure(
     assert set(ledger) == {(21, "dark_market_sale_income"), (-2, "dark_market_sale_fee")}
     assert disclosure is not None
     assert disclosure.deadline == confirmed_at + timedelta(minutes=10)
+
+
+def test_setting_disclosure_duration_recalculates_pending_deadline_from_created_at(
+    repository, now
+) -> None:
+    listing = _active_listing(repository, now)
+    confirmed_at = _confirm_listing(repository, listing, now)
+    settings = repository.get_dark_market_settings()
+
+    repository.set_dark_market_settings(
+        enabled=settings.enabled,
+        announcement_group_id=settings.announcement_group_id,
+        duration_hours=settings.duration_hours,
+        fee_percent=settings.fee_percent,
+        disclosure_duration_value=2,
+        disclosure_duration_unit="hour",
+        rank_limits={
+            limit.rank_id: limit.daily_limit for limit in settings.rank_limits
+        },
+        expected_version=settings.version,
+        now=confirmed_at + timedelta(minutes=5),
+    )
+
+    with repository._session() as session:
+        disclosure = session.scalar(
+            select(DarkMarketDisclosureRecord).where(
+                DarkMarketDisclosureRecord.listing_id == listing.id
+            )
+        )
+    assert disclosure is not None
+    assert disclosure.state == "pending"
+    assert disclosure.deadline == confirmed_at + timedelta(hours=2)
+
+
+def test_new_disclosure_uses_configured_duration_and_dynamic_message(
+    repository, now
+) -> None:
+    listing = _active_listing(repository, now)
+    settings = repository.get_dark_market_settings()
+    repository.set_dark_market_settings(
+        enabled=settings.enabled,
+        announcement_group_id=settings.announcement_group_id,
+        duration_hours=settings.duration_hours,
+        fee_percent=settings.fee_percent,
+        disclosure_duration_value=6,
+        disclosure_duration_unit="hour",
+        rank_limits={
+            limit.rank_id: limit.daily_limit for limit in settings.rank_limits
+        },
+        expected_version=settings.version,
+        now=now,
+    )
+    confirmed_at = _confirm_listing(repository, listing, now)
+
+    with repository._session() as session:
+        disclosure = session.scalar(
+            select(DarkMarketDisclosureRecord).where(
+                DarkMarketDisclosureRecord.listing_id == listing.id
+            )
+        )
+        notices = tuple(
+            session.scalars(
+                select(OutboundRecord).where(
+                    OutboundRecord.delivery_kind == "direct",
+                    OutboundRecord.text.contains("/公开"),
+                )
+            )
+        )
+    assert disclosure is not None
+    assert disclosure.deadline == confirmed_at + timedelta(hours=6)
+    assert len(notices) == 2
+    assert all("请在 6 小时内" in notice.text for notice in notices)
+
+
+def test_shortening_disclosure_duration_immediately_anonymizes_expired_pending(
+    repository, now
+) -> None:
+    listing = _active_listing(repository, now)
+    confirmed_at = _confirm_listing(repository, listing, now)
+    settings = repository.get_dark_market_settings()
+    changed_at = confirmed_at + timedelta(minutes=5)
+
+    repository.set_dark_market_settings(
+        enabled=settings.enabled,
+        announcement_group_id=settings.announcement_group_id,
+        duration_hours=settings.duration_hours,
+        fee_percent=settings.fee_percent,
+        disclosure_duration_value=1,
+        disclosure_duration_unit="minute",
+        rank_limits={
+            limit.rank_id: limit.daily_limit for limit in settings.rank_limits
+        },
+        expected_version=settings.version,
+        now=changed_at,
+    )
+
+    with repository._session() as session:
+        disclosure = session.scalar(
+            select(DarkMarketDisclosureRecord).where(
+                DarkMarketDisclosureRecord.listing_id == listing.id
+            )
+        )
+    assert disclosure is not None
+    assert disclosure.deadline == confirmed_at + timedelta(minutes=1)
+    assert disclosure.state == "anonymous"
+    assert disclosure.finished_at == changed_at
+
+
+@pytest.mark.parametrize("final_state", ["revealed", "anonymous"])
+def test_setting_disclosure_duration_does_not_change_finished_disclosures(
+    repository, now, final_state
+) -> None:
+    listing = _active_listing(repository, now)
+    confirmed_at = _confirm_listing(repository, listing, now)
+    finished_at = confirmed_at + timedelta(minutes=2)
+    with repository.transaction():
+        with repository._session() as session:
+            disclosure = session.scalar(
+                select(DarkMarketDisclosureRecord).where(
+                    DarkMarketDisclosureRecord.listing_id == listing.id
+                )
+            )
+            assert disclosure is not None
+            original_deadline = disclosure.deadline
+            disclosure.state = final_state
+            disclosure.finished_at = finished_at
+    settings = repository.get_dark_market_settings()
+
+    repository.set_dark_market_settings(
+        enabled=settings.enabled,
+        announcement_group_id=settings.announcement_group_id,
+        duration_hours=settings.duration_hours,
+        fee_percent=settings.fee_percent,
+        disclosure_duration_value=30,
+        disclosure_duration_unit="day",
+        rank_limits={
+            limit.rank_id: limit.daily_limit for limit in settings.rank_limits
+        },
+        expected_version=settings.version,
+        now=finished_at + timedelta(minutes=1),
+    )
+
+    with repository._session() as session:
+        disclosure = session.scalar(
+            select(DarkMarketDisclosureRecord).where(
+                DarkMarketDisclosureRecord.listing_id == listing.id
+            )
+        )
+    assert disclosure is not None
+    assert disclosure.state == final_state
+    assert disclosure.deadline == original_deadline
+    assert disclosure.finished_at == finished_at
 
 
 def test_buyer_complaint_waits_for_board_review_without_moving_money(

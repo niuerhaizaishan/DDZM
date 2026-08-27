@@ -285,15 +285,18 @@ def _direct_receive(service, message_id, sender, content, now, chatroom_id):
     )
 
 
-def _configure_dark_market(repository, group_id):
+def _configure_dark_market(repository, group_id, now):
     settings = repository.get_dark_market_settings()
     repository.set_dark_market_settings(
         enabled=True,
         announcement_group_id=group_id,
         duration_hours=3,
         fee_percent=5,
+        disclosure_duration_value=settings.disclosure_duration_value,
+        disclosure_duration_unit=settings.disclosure_duration_unit,
         rank_limits={item.rank_id: item.daily_limit for item in settings.rank_limits},
         expected_version=settings.version,
+        now=now,
     )
 
 
@@ -316,7 +319,7 @@ def test_dark_market_listing_wizard_is_private_and_login_is_group_scoped():
     repository.upsert_direct_chats(
         [("dark-seller", "direct-dark-seller")], now
     )
-    _configure_dark_market(repository, market.id)
+    _configure_dark_market(repository, market.id, now)
 
     wrong_channel = _group_receive(
         service,
@@ -352,7 +355,7 @@ def test_dark_market_commands_complete_listing_bid_and_query_in_group_and_direct
     repository.upsert_direct_chats(
         [("seller", "direct-seller"), ("buyer", "direct-buyer")], now
     )
-    _configure_dark_market(repository, market.id)
+    _configure_dark_market(repository, market.id, now)
 
     messages = [
         ("start", "/上架暗网"),
@@ -443,7 +446,7 @@ def test_dark_market_group_query_requires_an_established_direct_chat():
     repository.upsert_direct_chats(
         [("seller-with-direct", "direct-seller-with-direct")], now
     )
-    _configure_dark_market(repository, market.id)
+    _configure_dark_market(repository, market.id, now)
     for index, content in enumerate(
         ("/上架暗网", "旧钥匙", "开门", "来历不明", "保密", "10", "/确认")
     ):
@@ -492,7 +495,7 @@ def test_dark_market_group_empty_and_missing_results_are_sent_privately(
     repository.upsert_direct_chats(
         [("dark-empty-buyer", "direct-dark-empty-buyer")], now
     )
-    _configure_dark_market(repository, market.id)
+    _configure_dark_market(repository, market.id, now)
 
     result = _group_receive(
         service,
@@ -525,7 +528,7 @@ def test_dark_market_receipt_commands_are_private_and_confirm_the_order():
     repository.upsert_direct_chats(
         [("seller", "direct-seller"), ("buyer", "direct-buyer")], now
     )
-    _configure_dark_market(repository, market.id)
+    _configure_dark_market(repository, market.id, now)
     for suffix, content in (
         ("start", "/上架暗网"),
         ("name", "旧钥匙"),
@@ -586,7 +589,7 @@ def test_dark_market_complaint_command_reports_pending_board_review():
     repository.upsert_direct_chats(
         [("seller", "direct-seller"), ("buyer", "direct-buyer")], now
     )
-    _configure_dark_market(repository, market.id)
+    _configure_dark_market(repository, market.id, now)
     for suffix, content in (
         ("start", "/上架暗网"),
         ("name", "旧钥匙"),

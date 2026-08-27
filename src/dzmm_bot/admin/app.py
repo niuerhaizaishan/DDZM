@@ -1159,6 +1159,8 @@ def create_app(
             "announcement_group_id",
             "duration_hours",
             "fee_percent",
+            "disclosure_duration_value",
+            "disclosure_duration_unit",
             "rank_limits",
         }
         if set(request) != required:
@@ -1183,6 +1185,13 @@ def create_app(
             == len(rank_limits)
         )
         group_id = request["announcement_group_id"]
+        disclosure_unit_minutes = {
+            "minute": 1,
+            "hour": 60,
+            "day": 24 * 60,
+        }
+        disclosure_value = request["disclosure_duration_value"]
+        disclosure_unit = request["disclosure_duration_unit"]
         if (
             not isinstance(request["enabled"], bool)
             or (
@@ -1196,6 +1205,12 @@ def create_app(
             or not isinstance(request["fee_percent"], int)
             or isinstance(request["fee_percent"], bool)
             or not 1 <= request["fee_percent"] <= 100
+            or not isinstance(disclosure_value, int)
+            or isinstance(disclosure_value, bool)
+            or disclosure_value < 1
+            or disclosure_unit not in disclosure_unit_minutes
+            or disclosure_value * disclosure_unit_minutes.get(disclosure_unit, 0)
+            > 30 * 24 * 60
             or not valid_rank_limits
         ):
             raise HTTPException(
