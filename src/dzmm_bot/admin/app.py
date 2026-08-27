@@ -2345,6 +2345,37 @@ def create_app(
             "version": repository.config_version(),
         }
 
+    @app.get("/api/game/random-events/history")
+    def random_event_history(
+        _: Annotated[None, Depends(authorize)],
+        status_filter: Annotated[str | None, Query(alias="status")] = None,
+        group_chat_id: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        page: int = Query(1, ge=1),
+        page_size: int = Query(20, ge=1, le=100),
+    ) -> dict:
+        if status_filter not in {
+            None,
+            "ended",
+            "dissolved",
+            "skipped",
+            "cancelled",
+        }:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid status"
+            )
+        return _relay_core(
+            lambda: core.list_random_event_history(
+                status_filter,
+                group_chat_id,
+                start_date,
+                end_date,
+                page,
+                page_size,
+            )
+        )
+
     @app.patch("/api/game/random-events/today/{schedule_id}")
     def reschedule_random_event(
         schedule_id: str,

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from secrets import compare_digest
 from typing import Annotated, Callable, Literal
 from uuid import UUID
@@ -119,6 +119,7 @@ from .api_models import (
     SetRandomEventSettingsRequest,
     RandomEventSceneResponse,
     PaginatedRandomEventScenesResponse,
+    PaginatedRandomEventSchedulesResponse,
     CreateRandomEventSceneRequest,
     CreateTodayRandomEventRequest,
     UpdateRandomEventSceneRequest,
@@ -2709,6 +2710,42 @@ def create_app(
         return AcceptedResponse(accepted=repository.delete_random_event_scene(scene_id))
 
     @app.get(
+        "/internal/game/random-events/history",
+        response_model=PaginatedRandomEventSchedulesResponse,
+    )
+    def random_event_history(
+        _: Annotated[None, Depends(authorize)],
+        status_filter: Annotated[
+            Literal["ended", "dissolved", "skipped", "cancelled"] | None,
+            Query(alias="status"),
+        ] = None,
+        group_chat_id: UUID | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        page: int = Query(1, ge=1),
+        page_size: int = Query(20, ge=1, le=100),
+    ) -> PaginatedRandomEventSchedulesResponse:
+        try:
+            items, total = repository.list_random_event_history_page(
+                clock(),
+                page,
+                page_size,
+                status_filter=status_filter,
+                group_chat_id=group_chat_id,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        except ValueError as error:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error))
+        return PaginatedRandomEventSchedulesResponse(
+            items=[_random_event_schedule_response(item) for item in items],
+            page=page,
+            page_size=page_size,
+            total=total,
+            pages=(total + page_size - 1) // page_size,
+        )
+
+    @app.get(
         "/internal/game/random-events/today",
         response_model=list[RandomEventScheduleResponse],
     )
@@ -3481,6 +3518,7 @@ def _random_event_schedule_response(schedule) -> RandomEventScheduleResponse:
         scene_name=schedule.scene_name,
         event_name=schedule.event_name,
         is_cross_day=schedule.is_cross_day,
+        has_details=schedule.has_details,
     )
 
 

@@ -268,6 +268,16 @@ class AdminCorePort(Protocol):
 
     def list_today_random_events(self) -> list[dict]: ...
 
+    def list_random_event_history(
+        self,
+        status_filter: str | None,
+        group_chat_id: str | None,
+        start_date: str | None,
+        end_date: str | None,
+        page: int,
+        page_size: int,
+    ) -> dict: ...
+
     def list_random_event_submissions(
         self, status: str | None, page: int, page_size: int
     ) -> dict: ...
@@ -912,6 +922,26 @@ class CoreClient:
 
     def list_today_random_events(self) -> list[dict]:
         return self._get("/internal/game/random-events/today")
+
+    def list_random_event_history(
+        self,
+        status_filter: str | None,
+        group_chat_id: str | None,
+        start_date: str | None,
+        end_date: str | None,
+        page: int,
+        page_size: int,
+    ) -> dict:
+        params = {"page": page, "page_size": page_size}
+        for key, value in (
+            ("status", status_filter),
+            ("group_chat_id", group_chat_id),
+            ("start_date", start_date),
+            ("end_date", end_date),
+        ):
+            if value is not None:
+                params[key] = value
+        return self._get("/internal/game/random-events/history", params=params)
 
     def list_random_event_submissions(
         self, status: str | None, page: int, page_size: int

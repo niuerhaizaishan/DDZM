@@ -1470,6 +1470,7 @@ class RandomEventSchedule:
     scene_name: str | None = None
     event_name: str | None = None
     is_cross_day: bool = False
+    has_details: bool = False
     group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID
 
 
@@ -16367,6 +16368,7 @@ class CoreRepository:
                     select(RandomEventScheduleRecord)
                     .where(
                         RandomEventScheduleRecord.event_date == now.date(),
+                        RandomEventScheduleRecord.status != "cancelled",
                         *(() if group_chat_id is None else (
                             RandomEventScheduleRecord.group_chat_id == group_chat_id,
                         )),
@@ -16410,9 +16412,76 @@ class CoreRepository:
                     record,
                     *(names.get(record.id, (None, None))),
                     is_cross_day=record in carryovers,
+                    has_details=record.id in names,
                 )
                 for record in records
             ]
+
+    def list_random_event_history_page(
+        self,
+        now: datetime,
+        page: int,
+        page_size: int,
+        *,
+        status_filter: str | None = None,
+        group_chat_id: UUID | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ) -> tuple[list[RandomEventSchedule], int]:
+        today = now.astimezone(BEIJING).date()
+        if start_date is not None and end_date is not None and start_date > end_date:
+            raise ValueError("开始日期不能晚于结束日期")
+        active_event = exists().where(
+            RandomEventRecord.schedule_id == RandomEventScheduleRecord.id,
+            RandomEventRecord.state.in_(("signup", "in_progress", "tipping")),
+        ).correlate(RandomEventScheduleRecord)
+        criteria = [
+            RandomEventScheduleRecord.event_date < today,
+            RandomEventScheduleRecord.status.in_(
+                ("ended", "dissolved", "skipped", "cancelled")
+            ),
+            ~active_event,
+        ]
+        if status_filter is not None:
+            criteria.append(RandomEventScheduleRecord.status == status_filter)
+        if group_chat_id is not None:
+            criteria.append(RandomEventScheduleRecord.group_chat_id == group_chat_id)
+        if start_date is not None:
+            criteria.append(RandomEventScheduleRecord.event_date >= start_date)
+        if end_date is not None:
+            criteria.append(RandomEventScheduleRecord.event_date <= end_date)
+        with self._session() as session:
+            total = int(
+                session.scalar(
+                    select(func.count())
+                    .select_from(RandomEventScheduleRecord)
+                    .where(*criteria)
+                )
+                or 0
+            )
+            rows = session.execute(
+                select(RandomEventScheduleRecord, RandomEventRecord)
+                .outerjoin(
+                    RandomEventRecord,
+                    RandomEventRecord.schedule_id == RandomEventScheduleRecord.id,
+                )
+                .where(*criteria)
+                .order_by(
+                    RandomEventScheduleRecord.scheduled_at.desc(),
+                    RandomEventScheduleRecord.id,
+                )
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            ).all()
+            return [
+                _random_event_schedule(
+                    schedule,
+                    None if event is None else event.scene_name,
+                    None if event is None else event.event_name,
+                    has_details=event is not None,
+                )
+                for schedule, event in rows
+            ], total
 
     def reschedule_random_event(
         self, schedule_id: UUID, scheduled_at: datetime, now: datetime
@@ -16432,15 +16501,18 @@ class CoreRepository:
                 if record.event_date != now.date() or record.status != "pending":
                     raise ValueError("仅待开始事件可以调整")
                 conflict = session.scalar(
-                    select(RandomEventScheduleRecord.id).where(
+                    select(RandomEventScheduleRecord).where(
                         RandomEventScheduleRecord.group_chat_id == record.group_chat_id,
                         RandomEventScheduleRecord.event_date == now.date(),
                         RandomEventScheduleRecord.id != record.id,
                         RandomEventScheduleRecord.scheduled_at == scheduled_at,
-                    )
+                    ).with_for_update()
                 )
-                if conflict is not None:
+                if conflict is not None and conflict.status != "cancelled":
                     raise ValueError("今日已有该时刻的随机事件")
+                if conflict is not None:
+                    session.delete(conflict)
+                    session.flush()
                 record.scheduled_at = scheduled_at
                 record.pre_notice_sent_at = None
                 session.flush()
@@ -16459,13 +16531,14 @@ class CoreRepository:
         if scheduled_at.date() != now.date() or scheduled_at <= now:
             raise ValueError("补充时间必须是今日未来时刻")
         with self._session() as session:
-            if session.scalar(
-                select(RandomEventScheduleRecord.id).where(
+            existing = session.scalar(
+                select(RandomEventScheduleRecord).where(
                     RandomEventScheduleRecord.group_chat_id == group_chat_id,
                     RandomEventScheduleRecord.event_date == now.date(),
                     RandomEventScheduleRecord.scheduled_at == scheduled_at,
-                )
-            ) is not None:
+                ).with_for_update()
+            )
+            if existing is not None and existing.status != "cancelled":
                 raise ValueError("今日已有该时刻的随机事件")
             scene = session.get(RandomEventSceneRecord, scene_id)
             if scene is None or not scene.enabled:
@@ -16485,13 +16558,15 @@ class CoreRepository:
                     .order_by(RandomEventSceneSeatRecord.role)
                 )
             )
-            record = RandomEventScheduleRecord(
+            record = existing or RandomEventScheduleRecord(
                 group_chat_id=group_chat_id,
                 event_date=now.date(),
                 scheduled_at=scheduled_at,
-                status="pending",
             )
-            session.add(record)
+            if existing is None:
+                session.add(record)
+            record.status = "pending"
+            record.pre_notice_sent_at = None
             self._set_random_event_schedule_snapshot(session, record, scene, template, seats)
             session.flush()
             return _random_event_schedule(record)
@@ -16506,7 +16581,7 @@ class CoreRepository:
                 or record.status != "pending"
             ):
                 return False
-            session.delete(record)
+            record.status = "cancelled"
             return True
 
     def trigger_random_event(
@@ -23226,6 +23301,7 @@ def _random_event_schedule(
     scene_name: str | None = None,
     event_name: str | None = None,
     is_cross_day: bool = False,
+    has_details: bool = False,
 ) -> RandomEventSchedule:
     return RandomEventSchedule(
         id=record.id,
@@ -23235,6 +23311,7 @@ def _random_event_schedule(
         scene_name=record.scene_name or scene_name,
         event_name=record.event_name or event_name,
         is_cross_day=is_cross_day,
+        has_details=has_details,
         group_chat_id=record.group_chat_id,
     )
 

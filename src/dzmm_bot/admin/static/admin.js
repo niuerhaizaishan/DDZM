@@ -49,6 +49,8 @@ let administratorAccounts = [];
 let administratorPage = 1;
 let todayRandomEvents = [];
 let todayRandomEventPage = 1;
+let randomEventHistoryPage = 1;
+let randomEventHistoryRequestId = 0;
 let rankDefinitions = [];
 let rankPage = 1;
 let groupChats = [];
@@ -645,7 +647,7 @@ async function loadCurrentGameplay() {
 }
 
 function eventStatusLabel(status) {
-  return ({pending: "待开始", signup: "报名中", in_progress: "进行中", tipping: "打赏中", ended: "已结束", dissolved: "已解散", skipped: "已跳过"})[status] || status;
+  return ({pending: "待开始", signup: "报名中", in_progress: "进行中", tipping: "打赏中", ended: "已结束", dissolved: "已解散", skipped: "已跳过", cancelled: "已取消"})[status] || status;
 }
 
 function formatBeijingInput(value) {
@@ -1056,13 +1058,59 @@ function renderTodayRandomEvents(events) {
     <article class="data-row"><div><b>${escapeHtml(groupNames.get(event.group_chat_id) || "未知群聊")} · ${escapeHtml(event.scene_name || "未安排场景")}－${escapeHtml(event.event_name || "未安排事件")}${event.is_cross_day ? "（跨日）" : ""}</b><small>${statusBadge(eventStatusLabel(event.status), event.status === "in_progress" ? "success" : event.status === "pending" ? "warning" : "")}</small><small>${formatHeartbeat(event.scheduled_at)}</small></div>${event.status === "pending" ? `<div class="command-actions"><button class="secondary" data-trigger-random-event="${event.id}" type="button">立即触发</button><button class="secondary" data-adjust-random-event="${event.id}" data-scheduled-at="${event.scheduled_at}" type="button">调整时间</button><button class="danger-button" data-delete-random-event="${event.id}" type="button">移除</button></div>` : event.status === "skipped" ? "" : `<button class="secondary" data-view-random-event-details="${event.id}" type="button">查看详情</button>`}</article>`).join("") || "<p class=\"muted\">暂无符合条件的今日场次。</p>";
 }
 
+function randomEventHistoryPath(page = randomEventHistoryPage) {
+  const params = new URLSearchParams({
+    page: String(page),
+    page_size: document.querySelector("#random-event-history-page-size").value,
+  });
+  for (const [name, selector] of [
+    ["status", "#random-event-history-status"],
+    ["group_chat_id", "#random-event-history-group"],
+    ["start_date", "#random-event-history-start-date"],
+    ["end_date", "#random-event-history-end-date"],
+  ]) {
+    const value = document.querySelector(selector).value;
+    if (value) params.set(name, value);
+  }
+  return `/api/game/random-events/history?${params}`;
+}
+
+function renderRandomEventHistory(pageData) {
+  const groupNames = new Map(groupChats.map((group) => [group.id, group.name]));
+  document.querySelector("#random-event-history-list").innerHTML = pageData.items.map((event) => `
+    <article class="data-row"><div><b>${escapeHtml(groupNames.get(event.group_chat_id) || "未知群聊")} · ${escapeHtml(event.scene_name || "未安排场景")}－${escapeHtml(event.event_name || "未安排事件")}</b><small>${statusBadge(eventStatusLabel(event.status))}</small><small>${formatHeartbeat(event.scheduled_at)}</small></div>${event.has_details ? `<button class="secondary" data-view-random-event-details="${event.id}" type="button">查看详情</button>` : ""}</article>`).join("") || "<p class=\"muted\">暂无符合条件的历史场次。</p>";
+  renderPagination(document.querySelector("#random-event-history-pagination"), pageData, "场次", loadRandomEventHistory);
+}
+
+function renderRandomEventHistoryGroups() {
+  const select = document.querySelector("#random-event-history-group");
+  const selected = select.value;
+  select.innerHTML = '<option value="">全部群聊</option>' + groupChats.map((group) => `<option value="${group.id}">${escapeHtml(group.name)}${group.deleted_at ? "（已删除）" : ""}</option>`).join("");
+  select.value = selected;
+}
+
+async function loadRandomEventHistory(page = randomEventHistoryPage) {
+  const requestId = ++randomEventHistoryRequestId;
+  try {
+    const history = await requestGame(randomEventHistoryPath(page));
+    if (requestId !== randomEventHistoryRequestId) return;
+    randomEventHistoryPage = history.page;
+    renderRandomEventHistory(history);
+  } catch (error) {
+    if (requestId !== randomEventHistoryRequestId) return;
+    document.querySelector("#random-event-history-list").innerHTML = `<p class="muted">历史场次加载失败：${escapeHtml(error.message)}</p>`;
+    document.querySelector("#random-event-history-pagination").hidden = true;
+    setResult(`加载历史失败（${error.message}）`, "error");
+  }
+}
+
 async function loadRandomEvents(page = randomEventScenePage) {
   const [settings, scenes, today, submissions, groups] = await Promise.all([
     requestGame("/api/game/random-events/settings"),
     requestGame(`/api/game/random-events/scenes?page=${page}&page_size=${pageSizeFor("random-event-scenes")}`),
     requestGame("/api/game/random-events/today"),
     requestGame(buildRandomEventSubmissionsPath(randomEventSubmissionPage, pageSizeFor("random-event-submissions"), randomEventSubmissionStatus)),
-    requestGame("/api/group-chats", {cache: "no-store"}),
+    requestGame("/api/group-chats?include_deleted=true", {cache: "no-store"}),
   ]);
   randomEventSettings = settings;
   randomEventScenePage = scenes.page;
@@ -1073,11 +1121,13 @@ async function loadRandomEvents(page = randomEventScenePage) {
   renderRandomEventScenes(scenes.items);
   renderPagination(document.querySelector("#random-event-scene-pagination"), scenes, "个场景", loadRandomEvents);
   renderTodayRandomEvents(today.items);
+  renderRandomEventHistoryGroups();
   randomEventSubmissionPage = submissions.page;
   renderRandomEventSubmissions(submissions);
   if (randomEventSubmissionStatus === "pending") {
     document.querySelector("#random-event-submission-pending-count").textContent = submissions.total ? `(${submissions.total})` : "";
   }
+  await loadRandomEventHistory();
 }
 
 function renderRandomEventSceneSeat(role = "", capacity = 1) {
@@ -1226,8 +1276,7 @@ async function openRandomEventAddModal() {
     requestGame("/api/game/random-events/scenes?page=1&page_size=100"),
     requestGame("/api/group-chats", {cache: "no-store"}),
   ]);
-  groupChats = groups.items;
-  document.querySelector("#random-event-add-group").innerHTML = groupChats
+  document.querySelector("#random-event-add-group").innerHTML = groups.items
     .filter((group) => group.listening_enabled && group.random_events_enabled)
     .map((group) => `<option value="${group.id}">${escapeHtml(group.name)}</option>`)
     .join("");
@@ -2217,6 +2266,25 @@ document.querySelector("#refresh-random-events").addEventListener("click", async
     setResult(`刷新失败（${error.message}）`, "error");
   }
 });
+document.querySelector("#refresh-random-event-history").addEventListener("click", async (event) => {
+  try {
+    await runMutation(event.currentTarget, "刷新中…", () => loadRandomEventHistory());
+  } catch (error) {
+    setResult(`刷新历史失败（${error.message}）`, "error");
+  }
+});
+for (const selector of [
+  "#random-event-history-status",
+  "#random-event-history-group",
+  "#random-event-history-start-date",
+  "#random-event-history-end-date",
+  "#random-event-history-page-size",
+]) {
+  document.querySelector(selector).addEventListener("change", () => {
+    randomEventHistoryPage = 1;
+    void loadRandomEventHistory();
+  });
+}
 document.querySelector("#refresh-random-event-submissions").addEventListener("click", async (event) => {
   try {
     await runMutation(event.currentTarget, "刷新中…", loadRandomEventSubmissions);
@@ -3166,6 +3234,15 @@ document.querySelector("#today-random-event-list").addEventListener("click", asy
     setResult("随机事件已开始报名", "success");
   } catch (error) {
     setResult(`立即触发失败（${error.message}）`, "error");
+  }
+});
+document.querySelector("#random-event-history-list").addEventListener("click", async (event) => {
+  const detailButton = event.target.closest("button[data-view-random-event-details]");
+  if (!detailButton) return;
+  try {
+    await openRandomEventDetailsModal(detailButton.dataset.viewRandomEventDetails);
+  } catch (error) {
+    setResult(`获取详情失败（${error.message}）`, "error");
   }
 });
 document.querySelector("#random-event-submission-list").addEventListener("click", async (event) => {

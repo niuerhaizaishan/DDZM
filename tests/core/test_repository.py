@@ -7511,6 +7511,164 @@ def test_random_event_schedules_are_created_only_for_enabled_groups(repository):
     }
 
 
+def test_random_event_history_is_paginated_newest_first_and_excludes_today(
+    repository, session_factory
+) -> None:
+    from dzmm_bot.core.schema import (
+        RandomEventRecord,
+        RandomEventScheduleRecord,
+    )
+
+    now = datetime(2026, 8, 27, 12, 0, tzinfo=BEIJING)
+    group = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=event-history", now
+    )
+    with session_factory.begin() as session:
+        oldest = RandomEventScheduleRecord(
+            group_chat_id=group.id,
+            event_date=(now - timedelta(days=3)).date(),
+            scheduled_at=now - timedelta(days=3),
+            status="ended",
+            scene_name="旧场景",
+            event_name="旧事件",
+            created_at=now - timedelta(days=3),
+        )
+        newer = RandomEventScheduleRecord(
+            group_chat_id=group.id,
+            event_date=(now - timedelta(days=1)).date(),
+            scheduled_at=now - timedelta(days=1),
+            status="skipped",
+            scene_name="新场景",
+            event_name="新事件",
+            created_at=now - timedelta(days=1),
+        )
+        today = RandomEventScheduleRecord(
+            group_chat_id=group.id,
+            event_date=now.date(),
+            scheduled_at=now,
+            status="ended",
+            scene_name="今日场景",
+            event_name="今日事件",
+            created_at=now,
+        )
+        stale_pending = RandomEventScheduleRecord(
+            group_chat_id=group.id,
+            event_date=(now - timedelta(days=2)).date(),
+            scheduled_at=now - timedelta(days=2),
+            status="pending",
+            scene_name="遗留场景",
+            event_name="不应进入历史",
+            created_at=now - timedelta(days=2),
+        )
+        active_cross_day = RandomEventScheduleRecord(
+            group_chat_id=group.id,
+            event_date=(now - timedelta(days=4)).date(),
+            scheduled_at=now - timedelta(days=4),
+            status="ended",
+            scene_name="跨日场景",
+            event_name="仍在进行",
+            created_at=now - timedelta(days=4),
+        )
+        session.add_all((oldest, newer, today, stale_pending, active_cross_day))
+        session.flush()
+        session.add(
+            RandomEventRecord(
+                group_chat_id=group.id,
+                schedule_id=oldest.id,
+                group_key=str(group.id),
+                state="ended",
+                scene_name="旧场景",
+                event_name="旧事件",
+                signup_text="报名",
+                formal_opening_text="开始",
+                reward=1,
+                target_rounds=1,
+                signup_deadline=oldest.scheduled_at,
+                started_at=oldest.scheduled_at,
+                ended_at=oldest.scheduled_at + timedelta(minutes=5),
+            )
+        )
+        session.add(
+            RandomEventRecord(
+                group_chat_id=group.id,
+                schedule_id=active_cross_day.id,
+                group_key=str(group.id),
+                state="in_progress",
+                scene_name="跨日场景",
+                event_name="仍在进行",
+                signup_text="报名",
+                formal_opening_text="开始",
+                reward=1,
+                target_rounds=1,
+                signup_deadline=active_cross_day.scheduled_at,
+                started_at=active_cross_day.scheduled_at,
+            )
+        )
+
+    first_page, total = repository.list_random_event_history_page(
+        now, 1, 1
+    )
+    second_page, _ = repository.list_random_event_history_page(now, 2, 1)
+
+    assert total == 2
+    assert [item.event_name for item in first_page] == ["新事件"]
+    assert first_page[0].has_details is False
+    assert [item.event_name for item in second_page] == ["旧事件"]
+    assert second_page[0].has_details is True
+
+
+def test_random_event_history_filters_status_group_and_date_range(
+    repository, session_factory
+) -> None:
+    from dzmm_bot.core.schema import RandomEventScheduleRecord
+
+    now = datetime(2026, 8, 27, 12, 0, tzinfo=BEIJING)
+    primary = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=event-history-primary", now
+    )
+    other = repository.create_group_chat(
+        "历史副群",
+        "https://www.aikda.com/chat?c=event-history-other",
+        True,
+        True,
+        True,
+        True,
+        now,
+    )
+    with session_factory.begin() as session:
+        for day_offset, group_id, status, event_name in (
+            (5, primary.id, "ended", "范围外"),
+            (3, primary.id, "ended", "主群结束"),
+            (2, other.id, "ended", "副群结束"),
+            (1, primary.id, "dissolved", "主群解散"),
+        ):
+            scheduled_at = now - timedelta(days=day_offset)
+            session.add(
+                RandomEventScheduleRecord(
+                    group_chat_id=group_id,
+                    event_date=scheduled_at.date(),
+                    scheduled_at=scheduled_at,
+                    status=status,
+                    scene_name="筛选场景",
+                    event_name=event_name,
+                    created_at=scheduled_at,
+                )
+            )
+
+    items, total = repository.list_random_event_history_page(
+        now,
+        1,
+        20,
+        status_filter="ended",
+        group_chat_id=primary.id,
+        start_date=(now - timedelta(days=4)).date(),
+        end_date=(now - timedelta(days=2)).date(),
+    )
+
+    assert total == 1
+    assert [item.event_name for item in items] == ["主群结束"]
+
+
 def test_random_event_sends_one_group_preview_five_minutes_before_start(
     repository, session_factory
 ):
@@ -7871,8 +8029,10 @@ def test_fixed_schedule_skips_times_missed_before_first_daily_run(repository):
     assert [schedule.status for schedule in schedules] == ["skipped", "pending"]
 
 
-def test_today_random_event_can_be_added_and_pending_event_removed(repository):
-    from dzmm_bot.core.schema import BEIJING
+def test_today_random_event_can_be_added_and_pending_event_removed(
+    repository, session_factory
+):
+    from dzmm_bot.core.schema import BEIJING, RandomEventScheduleRecord
 
     now = datetime(2026, 8, 6, 12, 0, tzinfo=BEIJING)
     scene = repository.create_random_event_scene(
@@ -7892,6 +8052,52 @@ def test_today_random_event_can_be_added_and_pending_event_removed(repository):
     assert schedule.event_name == "咖啡事故"
     assert repository.delete_today_random_event(schedule.id, now) is True
     assert repository.list_today_random_event_schedules(now) == []
+    with session_factory() as session:
+        assert session.get(RandomEventScheduleRecord, schedule.id).status == "cancelled"
+    history, total = repository.list_random_event_history_page(
+        now + timedelta(days=1), 1, 20, status_filter="cancelled"
+    )
+    assert total == 1
+    assert history[0].id == schedule.id
+    replacement = repository.create_today_random_event(
+        scene.id,
+        "咖啡事故",
+        datetime(2026, 8, 6, 14, 0, tzinfo=BEIJING),
+        now,
+    )
+    assert replacement.id == schedule.id
+    assert replacement.status == "pending"
+
+
+def test_pending_random_event_can_move_into_a_cancelled_time_slot(repository):
+    from dzmm_bot.core.schema import BEIJING
+
+    now = datetime(2026, 8, 6, 12, 0, tzinfo=BEIJING)
+    scene = repository.create_random_event_scene(
+        "会议室",
+        "报名公告。",
+        [{"name": "临时会议", "opening_text": "会议开始。"}],
+        3,
+        10,
+        [("员工", 1)],
+    )
+    cancelled = repository.create_today_random_event(
+        scene.id, "临时会议", now.replace(hour=14), now
+    )
+    pending = repository.create_today_random_event(
+        scene.id, "临时会议", now.replace(hour=15), now
+    )
+    assert repository.delete_today_random_event(cancelled.id, now) is True
+
+    moved = repository.reschedule_random_event(
+        pending.id, now.replace(hour=14), now
+    )
+
+    assert moved.id == pending.id
+    assert moved.scheduled_at == now.replace(hour=14)
+    assert [item.id for item in repository.list_today_random_event_schedules(now)] == [
+        pending.id
+    ]
 
 
 def test_random_event_scene_returns_named_event_templates(repository):
@@ -8394,6 +8600,7 @@ def test_random_event_records_participant_details_and_can_trigger(repository):
     schedule = repository.schedule_random_events(now)[0]
 
     assert repository.trigger_random_event(schedule.id, now).status == "signup"
+    assert repository.list_today_random_event_schedules(now)[0].has_details is True
     assert repository.join_random_event("u1", "员工", now) == "started"
     assert repository.record_random_event_round("u1", now, "开始收拾") == "participant"
     assert repository.record_random_event_round("observer", now, "（路过）") == "observer_valid"

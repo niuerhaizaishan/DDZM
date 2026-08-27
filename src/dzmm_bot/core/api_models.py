@@ -1442,6 +1442,15 @@ class RandomEventScheduleResponse(ApiModel):
     scene_name: str | None
     event_name: str | None
     is_cross_day: bool
+    has_details: bool = False
+
+
+class PaginatedRandomEventSchedulesResponse(ApiModel):
+    items: list[RandomEventScheduleResponse]
+    page: int
+    page_size: int
+    total: int
+    pages: int
 
 
 class CreateTodayRandomEventRequest(ApiModel):

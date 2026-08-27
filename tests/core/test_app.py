@@ -22,6 +22,8 @@ from dzmm_bot.core.schema import (
     NumberBombRoundPlayerRecord,
     NumberBombRoundRecord,
     OutboundRecord,
+    RandomEventRecord,
+    RandomEventScheduleRecord,
     RandomEventSubmissionRecord,
     TexasHoldemGameRecord,
     TexasHoldemPlayerRecord,
@@ -2732,6 +2734,73 @@ def test_today_random_event_can_be_added_and_removed_through_internal_api(
     assert client.delete(
         f"/internal/game/random-events/today/{created.json()['id']}", headers=headers
     ).json() == {"accepted": True}
+
+
+def test_random_event_history_api_returns_filtered_paginated_results(
+    app_context, headers
+):
+    group = app_context.repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=history-api", NOW
+    )
+    with app_context.session_factory.begin() as session:
+        ended = RandomEventScheduleRecord(
+            group_chat_id=group.id,
+            event_date=(NOW - timedelta(days=2)).date(),
+            scheduled_at=NOW - timedelta(days=2),
+            status="ended",
+            scene_name="历史场景",
+            event_name="历史事件",
+            created_at=NOW - timedelta(days=2),
+        )
+        session.add(ended)
+        session.flush()
+        session.add(
+            RandomEventRecord(
+                group_chat_id=group.id,
+                schedule_id=ended.id,
+                group_key=str(group.id),
+                state="ended",
+                scene_name="历史场景",
+                event_name="历史事件",
+                signup_text="报名",
+                formal_opening_text="开场",
+                reward=1,
+                target_rounds=1,
+                signup_deadline=NOW - timedelta(days=2),
+                started_at=NOW - timedelta(days=2),
+                ended_at=NOW - timedelta(days=2) + timedelta(minutes=5),
+            )
+        )
+        session.add(
+            RandomEventScheduleRecord(
+                group_chat_id=group.id,
+                event_date=(NOW - timedelta(days=1)).date(),
+                scheduled_at=NOW - timedelta(days=1),
+                status="skipped",
+                scene_name="跳过场景",
+                event_name="跳过事件",
+                created_at=NOW - timedelta(days=1),
+            )
+        )
+
+    response = app_context.client.get(
+        "/internal/game/random-events/history",
+        headers=headers,
+        params={
+            "page": 1,
+            "page_size": 10,
+            "status": "ended",
+            "group_chat_id": str(group.id),
+            "start_date": (NOW - timedelta(days=3)).date().isoformat(),
+            "end_date": (NOW - timedelta(days=1)).date().isoformat(),
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["total"] == 1
+    assert response.json()["pages"] == 1
+    assert response.json()["items"][0]["event_name"] == "历史事件"
+    assert response.json()["items"][0]["has_details"] is True
 
 
 def test_trigger_random_event_rejects_active_game_through_internal_api(

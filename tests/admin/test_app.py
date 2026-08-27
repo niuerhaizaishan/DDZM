@@ -265,6 +265,8 @@ class FakeCore:
     random_event_scenes: list[dict] = field(default_factory=list)
     random_event_submissions: list[dict] = field(default_factory=list)
     today_random_events: list[dict] = field(default_factory=list)
+    random_event_history: list[dict] = field(default_factory=list)
+    random_event_history_requests: list[tuple] = field(default_factory=list)
     hide_and_seek_settings: dict = field(
         default_factory=lambda: {
             "enabled": True,
@@ -897,6 +899,14 @@ class FakeCore:
 
     def list_today_random_events(self):
         return self.today_random_events
+
+    def list_random_event_history(
+        self, status_filter, group_chat_id, start_date, end_date, page, page_size
+    ):
+        self.random_event_history_requests.append(
+            (status_filter, group_chat_id, start_date, end_date, page, page_size)
+        )
+        return _page(self.random_event_history, page, page_size)
 
     def reschedule_random_event(self, schedule_id, scheduled_at):
         schedule = next(item for item in self.today_random_events if item["id"] == schedule_id)
@@ -2870,6 +2880,22 @@ def test_random_event_submission_admin_controls_are_rendered(client):
     assert 'id="random-event-submission-enabled"' in page
 
 
+def test_random_event_history_controls_are_rendered(client):
+    page = client.get("/").text
+    script = Path("src/dzmm_bot/admin/static/admin.js").read_text()
+
+    assert 'data-management-tab="history"' in page
+    assert 'id="random-event-history-list"' in page
+    assert 'id="random-event-history-status"' in page
+    assert 'id="random-event-history-group"' in page
+    assert 'id="random-event-history-start-date"' in page
+    assert 'id="random-event-history-end-date"' in page
+    assert 'id="random-event-history-page-size"' in page
+    assert "/api/game/random-events/history" in script
+    assert "/api/group-chats?include_deleted=true" in script
+    assert "randomEventHistoryRequestId" in script
+
+
 def test_random_event_scene_validation_identifies_missing_fields(client, headers):
     response = client.post(
         "/api/game/random-events/scenes",
@@ -2903,6 +2929,41 @@ def test_admin_can_add_and_remove_today_random_event(client, headers):
         },
     )
     assert deleted.json()["accepted"] is True
+
+
+def test_admin_proxies_random_event_history_filters(core, client, headers):
+    core.random_event_history.append(
+        {
+            "id": "history-1",
+            "group_chat_id": "group-1",
+            "event_date": "2026-08-01",
+            "scheduled_at": "2026-08-01T20:00:00+08:00",
+            "status": "ended",
+            "scene_name": "茶水间",
+            "event_name": "咖啡事故",
+            "is_cross_day": False,
+            "has_details": True,
+        }
+    )
+
+    response = client.get(
+        "/api/game/random-events/history",
+        headers=headers,
+        params={
+            "status": "ended",
+            "group_chat_id": "group-1",
+            "start_date": "2026-08-01",
+            "end_date": "2026-08-02",
+            "page": 1,
+            "page_size": 10,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["has_details"] is True
+    assert core.random_event_history_requests == [
+        ("ended", "group-1", "2026-08-01", "2026-08-02", 1, 10)
+    ]
 
 
 def test_random_event_scene_modal_uses_split_copy_fields(client):
