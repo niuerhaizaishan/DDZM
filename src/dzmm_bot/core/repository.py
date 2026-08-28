@@ -16979,6 +16979,7 @@ class CoreRepository:
         now = now.astimezone(BEIJING)
         with self.transaction():
             with self._session() as session:
+                self._lock_gameplay_gate(session)
                 user = session.scalar(
                     select(UserRecord).where(UserRecord.platform_id == platform_id)
                 )
@@ -17148,6 +17149,7 @@ class CoreRepository:
         now = now.astimezone(BEIJING)
         with self.transaction():
             with self._session() as session:
+                self._lock_gameplay_gate(session)
                 event = self._active_random_event(session, group_chat_id)
                 if event is None:
                     return "no_event"

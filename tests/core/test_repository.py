@@ -8203,6 +8203,71 @@ def test_random_event_last_exit_opens_tipping_with_frozen_deadline(
     assert any("小红：基础奖励 0 摸鱼币" in message for message in messages)
 
 
+def test_random_event_last_exit_locks_gameplay_gate_before_active_event(
+    repository, monkeypatch
+):
+    now = datetime(2026, 8, 6, 10, 0, tzinfo=BEIJING)
+    repository.create_random_event_scene(
+        "锁序测试场", "报名", ["正式开始。"], 1, 1, [("员工", 1)]
+    )
+    repository.set_random_event_settings(
+        ["10:00"], "{可选身份}", 15, 5, tipping_duration_seconds=30
+    )
+    repository.create_user("lock-order-player", "锁序玩家", now, 0)
+    repository.schedule_random_events(now)
+    repository.run_random_event_jobs(now)
+    assert repository.join_random_event("lock-order-player", "员工", now) == "started"
+
+    calls = []
+    original_gate = repository._lock_gameplay_gate
+    original_active = repository._active_random_event
+
+    def record_gate(session):
+        calls.append("gate")
+        return original_gate(session)
+
+    def record_active(session, group_chat_id):
+        calls.append("active")
+        return original_active(session, group_chat_id)
+
+    monkeypatch.setattr(repository, "_lock_gameplay_gate", record_gate)
+    monkeypatch.setattr(repository, "_active_random_event", record_active)
+
+    assert repository.leave_random_event("lock-order-player", now) == "left_without_reward"
+    assert calls.index("gate") < calls.index("active")
+
+
+def test_random_event_full_signup_locks_gameplay_gate_before_active_event(
+    repository, monkeypatch
+):
+    now = datetime(2026, 8, 6, 10, 0, tzinfo=BEIJING)
+    repository.create_random_event_scene(
+        "报名锁序测试场", "报名", ["正式开始。"], 1, 1, [("员工", 1)]
+    )
+    repository.set_random_event_settings(["10:00"], "{可选身份}", 15, 5)
+    repository.create_user("signup-lock-player", "报名锁序玩家", now, 0)
+    repository.schedule_random_events(now)
+    repository.run_random_event_jobs(now)
+
+    calls = []
+    original_gate = repository._lock_gameplay_gate
+    original_active = repository._active_random_event
+
+    def record_gate(session):
+        calls.append("gate")
+        return original_gate(session)
+
+    def record_active(session, group_chat_id):
+        calls.append("active")
+        return original_active(session, group_chat_id)
+
+    monkeypatch.setattr(repository, "_lock_gameplay_gate", record_gate)
+    monkeypatch.setattr(repository, "_active_random_event", record_active)
+
+    assert repository.join_random_event("signup-lock-player", "员工", now) == "started"
+    assert calls.index("gate") < calls.index("active")
+
+
 @pytest.mark.parametrize("duration", [9, 3601])
 def test_random_event_tipping_duration_rejects_out_of_range(repository, duration):
     with pytest.raises(ValueError, match="打赏时长"):

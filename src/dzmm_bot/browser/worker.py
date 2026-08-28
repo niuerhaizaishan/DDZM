@@ -157,16 +157,16 @@ class BrowserWorker:
         self._flush_paused_messages()
 
         if self._login_state is LoginState.AUTH_REQUIRED:
-            self._core.run_daily_jobs(now)
+            self._run_daily_jobs(now)
             delay = self._auth_backoff
             self._auth_backoff = min(self._auth_backoff * 2, 2)
             self._sleep(delay)
             return
         if self._login_state is LoginState.AUTH_IN_PROGRESS:
-            self._core.run_daily_jobs(now)
+            self._run_daily_jobs(now)
             return
         if not transport_ready:
-            self._core.run_daily_jobs(now)
+            self._run_daily_jobs(now)
             return
 
         gateway = self._ensure_gateway()
@@ -188,7 +188,7 @@ class BrowserWorker:
             except Exception:
                 _LOGGER.exception("browser message read failed")
                 gateway.close()
-                self._core.run_daily_jobs(now)
+                self._run_daily_jobs(now)
                 return
             for message in messages:
                 if message.platform_message_id in self._seen_message_ids:
@@ -196,7 +196,7 @@ class BrowserWorker:
                 self._queue_inbound(message)
                 self._seen_message_ids.add(message.platform_message_id)
 
-        self._core.run_daily_jobs(now)
+        self._run_daily_jobs(now)
 
         recall = self._core.claim_outbound_recall(
             self._worker_id, self._clock(), self._lease_seconds
@@ -215,6 +215,12 @@ class BrowserWorker:
                 )
 
         self._maintain_recovery(gateway)
+
+    def _run_daily_jobs(self, now: datetime) -> None:
+        try:
+            self._core.run_daily_jobs(now)
+        except Exception:
+            _LOGGER.exception("daily jobs failed")
 
     def _process_profile_image_upload(self, gateway: ChatGateway) -> None:
         claim = self._core.claim_profile_image_upload(

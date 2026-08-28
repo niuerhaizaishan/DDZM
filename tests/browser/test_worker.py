@@ -368,6 +368,27 @@ def test_worker_submits_each_platform_message_once(context):
     assert core.submitted_ids == ["p-1"]
 
 
+def test_worker_keeps_socket_transport_alive_when_daily_jobs_fail_once(context):
+    worker, gateway, session, _, core, _ = context
+    attempts = 0
+
+    def run_daily_jobs(now):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("daily jobs failed")
+        core.daily_job_times.append(now)
+
+    core.run_daily_jobs = run_daily_jobs
+
+    worker.run_once()
+    worker.run_once()
+
+    assert attempts == 2
+    assert session.starts == 1
+    assert len(gateway.read_targets) == 2
+
+
 def test_worker_adds_and_removes_groups_without_restart():
     gateway = FakeGateway()
     session = FakeSession(gateway)
