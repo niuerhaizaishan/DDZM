@@ -8151,6 +8151,41 @@ def test_random_event_lifecycle_rewards_only_completed_participant(
     assert repository.list_ai_activity_facts("u2")[0].last_result == "loss"
 
 
+@pytest.mark.parametrize(
+    "opening",
+    (
+        "｛员工｝已经到场。",
+        "【员工】已经到场。",
+        "[员工]已经到场。",
+    ),
+)
+def test_random_event_renders_legacy_compatible_role_variable_braces(
+    repository, session_factory, opening
+):
+    from dzmm_bot.core.schema import BEIJING, OutboundRecord
+
+    now = datetime(2026, 8, 6, 10, 0, tzinfo=BEIJING)
+    repository.create_random_event_scene(
+        "全角变量测试场",
+        "报名",
+        [opening],
+        1,
+        1,
+        [("员工", 1)],
+    )
+    repository.set_random_event_settings(["10:00"], "{可选身份}", 15, 5)
+    repository.create_user("fullwidth-player", "全角玩家", now, 0)
+    repository.schedule_random_events(now)
+    repository.run_random_event_jobs(now)
+
+    assert repository.join_random_event("fullwidth-player", "员工", now) == "started"
+    with session_factory() as session:
+        messages = list(session.scalars(select(OutboundRecord.text)))
+
+    assert any("全角玩家已经到场。" in message for message in messages)
+    assert not any(opening in message for message in messages)
+
+
 def test_random_event_last_exit_opens_tipping_with_frozen_deadline(
     repository, session_factory
 ):

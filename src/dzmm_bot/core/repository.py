@@ -619,6 +619,7 @@ _DEFAULT_AI_MEMORY_EXTRACTION_PROMPT = (
 _UNDERCOVER_ACTIVE_KEY = "global"
 _UNDERCOVER_CONTINUE_TIMEOUT = timedelta(minutes=20)
 _ROLE_VARIABLE = re.compile(r"\{([^{}]*\S[^{}]*)\}")
+_ROLE_BRACKET_VARIABLE = re.compile(r"【([^【】]+)】|\[([^\[\]]+)\]")
 
 
 def _undercover_card_text(role: str, civilian_word: str, undercover_word: str) -> str:
@@ -23330,15 +23331,23 @@ def _validate_random_event_scene(
         raise ValueError("场景名称和报名公告不能为空")
     if not isinstance(openings, list) or not openings:
         raise ValueError("至少需要一条正式剧情开场白")
+    role_names = {role.strip() for role, _ in seats}
     templates: list[RandomEventTemplate] = []
     for opening in openings:
         if isinstance(opening, str):
-            templates.append(RandomEventTemplate("未命名事件", opening.strip()))
+            templates.append(
+                RandomEventTemplate(
+                    "未命名事件",
+                    _normalize_role_variable_braces(opening, role_names).strip(),
+                )
+            )
         elif isinstance(opening, dict):
             templates.append(
                 RandomEventTemplate(
                     str(opening.get("name", "")).strip(),
-                    str(opening.get("opening_text", "")).strip(),
+                    _normalize_role_variable_braces(
+                        str(opening.get("opening_text", "")), role_names
+                    ).strip(),
                 )
             )
     if len(templates) != len(openings) or any(
@@ -23460,7 +23469,25 @@ def _render_random_event_formal_opening(
         names_by_role.setdefault(role, []).append(display_name)
     return _ROLE_VARIABLE.sub(
         lambda match: "、".join(names_by_role.get(match.group(1), [])),
-        event.formal_opening_text,
+        _normalize_role_variable_braces(
+            event.formal_opening_text, set(names_by_role)
+        ),
+    )
+
+
+def _normalize_role_variable_braces(
+    value: str, roles: set[str] | None = None
+) -> str:
+    normalized = value.translate(str.maketrans({"｛": "{", "｝": "}"}))
+    if not roles:
+        return normalized
+    return _ROLE_BRACKET_VARIABLE.sub(
+        lambda match: (
+            f"{{{match.group(1) or match.group(2)}}}"
+            if (match.group(1) or match.group(2)) in roles
+            else match.group(0)
+        ),
+        normalized,
     )
 
 

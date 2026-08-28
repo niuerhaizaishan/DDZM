@@ -9,6 +9,7 @@ from .repository import (
     CoreRepository,
     RandomEventSubmission,
     RandomEventSubmissionDailyLimitError,
+    _normalize_role_variable_braces,
 )
 from .reply_templates import render_template, template_definition
 
@@ -286,6 +287,9 @@ class RandomEventSubmissionHandler:
                 data["_working_event"] = value
                 next_step = "event_opening"
         elif step == "event_opening":
+            value = _normalize_role_variable_braces(
+                value, {item["role"] for item in data.get("roles", [])}
+            )
             if not 1 <= len(value) <= 2000:
                 error = "剧情开场白需为 1～2000 字。"
             else:

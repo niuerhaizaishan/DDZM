@@ -440,6 +440,47 @@ def test_submission_wizard_rejects_misordered_variable_braces_immediately(reposi
     ).current_step == "event_opening"
 
 
+@pytest.mark.parametrize(
+    "opening",
+    (
+        "｛调查员｝发现了空杯。",
+        "【调查员】发现了空杯。",
+        "[调查员]发现了空杯。",
+    ),
+)
+def test_submission_wizard_normalizes_compatible_role_variable_braces(
+    repository, opening
+):
+    _employee(repository)
+    handler = RandomEventSubmissionHandler(repository)
+    for content in (
+        "/投稿 随机事件", "失踪的咖啡", "茶水间出事了。", "1",
+        "调查员", "现场",
+    ):
+        handler.handle(_direct(content))
+
+    reply = handler.handle(_direct(opening))
+    draft = repository.active_random_event_submission("employee-1", NOW)
+
+    assert "/事件完成" in reply.text
+    assert draft.content["events"][0]["opening_text"] == "{调查员}发现了空杯。"
+
+
+def test_submission_wizard_preserves_bracketed_text_that_is_not_a_role(repository):
+    _employee(repository)
+    handler = RandomEventSubmissionHandler(repository)
+    for content in (
+        "/投稿 随机事件", "失踪的咖啡", "茶水间出事了。", "1",
+        "调查员", "现场",
+    ):
+        handler.handle(_direct(content))
+
+    handler.handle(_direct("【第一幕】[调查员]发现了空杯。"))
+    draft = repository.active_random_event_submission("employee-1", NOW)
+
+    assert draft.content["events"][0]["opening_text"] == "【第一幕】{调查员}发现了空杯。"
+
+
 def test_submission_step_prompt_uses_configured_reply_template(repository):
     _employee(repository)
     repository.set_reply_template(
