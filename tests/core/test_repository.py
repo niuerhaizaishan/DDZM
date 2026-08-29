@@ -10,7 +10,7 @@ from uuid import uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import create_engine, event, exists, func, inspect, select, text
+from sqlalchemy import create_engine, event, exists, func, inspect, select, text, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
 
@@ -23,6 +23,7 @@ from dzmm_bot.core.schema import (
     NumberBombRoundPlayerRecord,
     NumberBombRoundRecord,
     OutboundRecord,
+    BalanceTransactionRecord,
     PRIMARY_GROUP_CHAT_ID,
     RandomEventSubmissionRecord,
     TexasHoldemGameRecord,
@@ -1401,6 +1402,49 @@ def test_employee_balance_ledger_pages_and_reconstructs_balance(repository, now)
     assert [item.source_label for item in second_page.items] == [
         "custom_source", "入职奖励",
     ]
+
+
+def test_balance_change_adds_to_the_database_value_when_the_loaded_user_is_stale(
+    repository, session_factory, now
+):
+    user, _ = repository.create_user("balance-race", "余额并发", now, 0)
+    first = session_factory()
+    second = session_factory()
+    try:
+        first.begin()
+        stale_user = first.get(UserRecord, user.id)
+        assert stale_user is not None
+        with second.begin():
+            second.execute(
+                update(UserRecord)
+                .where(UserRecord.id == user.id)
+                .values(balance=10)
+            )
+            second.add(
+                BalanceTransactionRecord(
+                    user_id=user.id,
+                    amount=10,
+                    source="other_request",
+                    occurred_at=now,
+                )
+            )
+        token = repository._active_session.set(first)
+        try:
+            repository._apply_balance_change(stale_user, 5, "this_request", now)
+        finally:
+            repository._active_session.reset(token)
+        first.commit()
+    finally:
+        first.close()
+        second.close()
+
+    with session_factory() as session:
+        assert session.get(UserRecord, user.id).balance == 15
+        assert session.scalar(
+            select(func.sum(BalanceTransactionRecord.amount)).where(
+                BalanceTransactionRecord.user_id == user.id
+            )
+        ) == 15
 
 
 def test_employee_balance_ledger_handles_empty_missing_and_beyond_last_page(

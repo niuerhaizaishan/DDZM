@@ -17,6 +17,7 @@ from sqlalchemy import and_, delete, exists, func, or_, select, text, union_all,
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session, aliased, sessionmaker
+from sqlalchemy.orm.attributes import set_committed_value
 
 from dzmm_bot.runtime.contracts import (
     GroupChatRuntimeUpdate,
@@ -17962,10 +17963,18 @@ class CoreRepository:
     ) -> None:
         if amount == 0:
             return
-        user.balance += amount
         session = self._active_session.get()
         if session is None:
             raise RuntimeError("balance change requires an active transaction")
+        balance = session.scalar(
+            update(UserRecord)
+            .where(UserRecord.id == user.id)
+            .values(balance=UserRecord.balance + amount)
+            .returning(UserRecord.balance)
+        )
+        if balance is None:
+            raise RuntimeError("balance user disappeared")
+        set_committed_value(user, "balance", int(balance))
         session.add(
             BalanceTransactionRecord(
                 user_id=user.id,
