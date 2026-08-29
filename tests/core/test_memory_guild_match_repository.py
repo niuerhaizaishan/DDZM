@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from random import Random
 
 import pytest
@@ -9,6 +9,8 @@ from dzmm_bot.core.repository import CoreRepository
 from dzmm_bot.core.schema import (
     Base,
     MemoryGuildMatchRecord,
+    MemoryGuildAnswerRecord,
+    MemoryGuildRoundRecord,
     MemoryGuildSeriesRecord,
     MemoryGuildTeamRecord,
     PRIMARY_GROUP_CHAT_ID,
@@ -409,3 +411,130 @@ def test_regular_series_rejects_used_player_but_overtime_allows_reuse(
     assert repository.select_memory_guild_player(
         "blue-2", "玩家A", now, PRIMARY_GROUP_CHAT_ID
     ).status == "series_ready"
+
+
+def _ready_series(repository, now, planned_series_count=1, win_target=2, rounds=3):
+    _configure_match(repository, now, planned_series_count=planned_series_count)
+    repository.create_memory_guild_series(
+        "host", 1, win_target, rounds, now, PRIMARY_GROUP_CHAT_ID
+    )
+    repository.select_memory_guild_player("red-1", "G", now, PRIMARY_GROUP_CHAT_ID)
+    repository.select_memory_guild_player(
+        "blue-1", "玩家A", now, PRIMARY_GROUP_CHAT_ID
+    )
+
+
+def _recall_guild_round(repository, started, now):
+    outbound = repository.enqueue_system_outbound(
+        started.public_message,
+        recall_after_seconds=started.display_seconds,
+        memory_guild_round_id=started.round_id,
+        group_chat_id=PRIMARY_GROUP_CHAT_ID,
+        destination_chatroom_id="memory-guild",
+    )
+    leased = repository.claim_outbound("worker-a", now, 30)
+    assert repository.confirm_sent(
+        outbound.id, "worker-a", leased.lease_token, "platform-question", now
+    )
+    recalled_at = now + timedelta(seconds=started.display_seconds)
+    recall = repository.claim_outbound_recall("worker-a", recalled_at, 30)
+    assert repository.confirm_outbound_recalled(
+        outbound.id,
+        "worker-a",
+        recall.recall_lease_token,
+        recalled_at,
+    )
+    return recalled_at
+
+
+def test_only_host_starts_level_five_round_and_recall_opens_answering(
+    repository, session_factory, now
+):
+    _ready_series(repository, now)
+
+    assert repository.start_memory_guild_round(
+        "red-1", now, PRIMARY_GROUP_CHAT_ID
+    ).status == "host_only"
+    started = repository.start_memory_guild_round(
+        "host", now, PRIMARY_GROUP_CHAT_ID
+    )
+    assert started.status == "round_started"
+    assert started.level == 5
+    assert started.display_seconds == repository.get_memory_assessment_settings().duel_recall_seconds
+    assert started.answer == started.public_message
+
+    recalled_at = _recall_guild_round(repository, started, now)
+    with session_factory() as session:
+        round_record = session.get(MemoryGuildRoundRecord, started.round_id)
+        assert round_record.state == "answering"
+        assert round_record.answer_deadline == recalled_at + timedelta(
+            minutes=repository.get_memory_assessment_settings().duel_answer_timeout_minutes
+        )
+
+
+def test_wrong_answers_can_retry_and_first_correct_answer_wins(
+    repository, session_factory, now
+):
+    _ready_series(repository, now, win_target=2, rounds=3)
+    started = repository.start_memory_guild_round(
+        "host", now, PRIMARY_GROUP_CHAT_ID
+    )
+    recalled_at = _recall_guild_round(repository, started, now)
+
+    assert repository.answer_memory_guild_round(
+        "red-2", "outsider", started.answer, recalled_at, PRIMARY_GROUP_CHAT_ID
+    ).status == "not_current_player"
+    assert repository.answer_memory_guild_round(
+        "red-1", "wrong", "错误", recalled_at, PRIMARY_GROUP_CHAT_ID
+    ).status == "incorrect"
+    won = repository.answer_memory_guild_round(
+        "red-1", "correct", started.answer, recalled_at, PRIMARY_GROUP_CHAT_ID
+    )
+    assert won.status == "round_won"
+    assert "G 赢得本局" in won.public_message
+    assert repository.answer_memory_guild_round(
+        "blue-1", "late", started.answer, recalled_at, PRIMARY_GROUP_CHAT_ID
+    ).status == "round_closed"
+    with session_factory() as session:
+        answers = list(session.scalars(select(MemoryGuildAnswerRecord)))
+        assert [(answer.answer, answer.correct) for answer in answers] == [
+            ("错误", False),
+            (started.answer, True),
+        ]
+
+
+def test_answer_timeout_records_draw_without_incrementing_score(repository, now):
+    _ready_series(repository, now)
+    started = repository.start_memory_guild_round(
+        "host", now, PRIMARY_GROUP_CHAT_ID
+    )
+    recalled_at = _recall_guild_round(repository, started, now)
+    deadline = recalled_at + timedelta(
+        minutes=repository.get_memory_assessment_settings().duel_answer_timeout_minutes
+    )
+
+    results = repository.run_memory_guild_jobs(deadline)
+
+    assert len(results) == 1
+    assert results[0].status == "round_drawn"
+    assert "本局平局" in results[0].public_message
+    assert repository.start_memory_guild_round(
+        "host", deadline, PRIMARY_GROUP_CHAT_ID
+    ).status == "round_started"
+
+
+def test_winning_series_finishes_match_after_all_planned_series(repository, now):
+    _ready_series(repository, now, planned_series_count=1, win_target=1, rounds=1)
+    started = repository.start_memory_guild_round(
+        "host", now, PRIMARY_GROUP_CHAT_ID
+    )
+    recalled_at = _recall_guild_round(repository, started, now)
+
+    finished = repository.answer_memory_guild_round(
+        "red-1", "winner", started.answer, recalled_at, PRIMARY_GROUP_CHAT_ID
+    )
+
+    assert finished.status == "match_finished"
+    assert "🏆 公会赛结束" in finished.public_message
+    assert "女仆公馆队" in finished.public_message
+    assert repository.memory_guild_match_view(PRIMARY_GROUP_CHAT_ID) is None

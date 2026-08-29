@@ -87,7 +87,12 @@ from .number_bomb import (
     calculate_points_tournament_scores,
     render_number_bomb_result,
 )
-from .memory_guild_match import render_guild_match_created, render_guild_series_ready
+from .memory_guild_match import (
+    render_guild_match_created,
+    render_guild_match_finished,
+    render_guild_round_result,
+    render_guild_series_ready,
+)
 from .shop_cards import SYSTEM_SHOP_ITEMS, adult_item, item_by_key, purchase_category
 from .red_packet import RandomSource, generate_red_packet_allocation
 from .texas_holdem import (
@@ -169,7 +174,9 @@ from .schema import (
     MemoryAssessmentRoundRecord,
     MemoryAssessmentSettingsRecord,
     MemoryGuildMatchRecord,
+    MemoryGuildAnswerRecord,
     MemoryGuildMemberRecord,
+    MemoryGuildRoundRecord,
     MemoryGuildSeriesRecord,
     MemoryGuildTeamRecord,
     NumberBombGameRecord,
@@ -1307,9 +1314,13 @@ class MemoryGuildMatchResult:
     status: str
     match_id: UUID | None = None
     series_id: UUID | None = None
+    round_id: UUID | None = None
     host_name: str | None = None
     planned_series_count: int = 0
     public_message: str | None = None
+    answer: str | None = None
+    level: int | None = None
+    display_seconds: int = 0
     team1: MemoryGuildTeamView | None = None
     team2: MemoryGuildTeamView | None = None
 
@@ -14746,6 +14757,395 @@ class CoreRepository:
                     session, match, "series_ready", public_message=public_message
                 )
 
+    def start_memory_guild_round(
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> MemoryGuildMatchResult:
+        now = now.astimezone(BEIJING)
+        settings = self.get_memory_assessment_settings()
+        with self.transaction():
+            with self._session() as session:
+                self._lock_gameplay_gate(session)
+                match = self._active_memory_guild_match(session, group_chat_id)
+                if match is None:
+                    return MemoryGuildMatchResult("no_match")
+                actor = session.scalar(
+                    select(UserRecord)
+                    .where(UserRecord.platform_id == platform_id)
+                    .with_for_update()
+                )
+                if actor is None or actor.id != match.host_user_id:
+                    return self._memory_guild_result_locked(
+                        session, match, "host_only"
+                    )
+                series = session.scalar(
+                    select(MemoryGuildSeriesRecord)
+                    .where(
+                        MemoryGuildSeriesRecord.match_id == match.id,
+                        MemoryGuildSeriesRecord.sequence
+                        == match.current_series_number,
+                    )
+                    .with_for_update()
+                )
+                if (
+                    series is None
+                    or match.state not in {"ready", "waiting_round_start"}
+                    or series.state not in {"ready", "waiting_round_start"}
+                ):
+                    return self._memory_guild_result_locked(
+                        session, match, "round_not_ready"
+                    )
+                rule = session.get(MemoryAssessmentLevelRuleRecord, 5)
+                if rule is None:
+                    raise RuntimeError("记忆考核公会赛缺少 5 级规则")
+                round_sequence = int(
+                    session.scalar(
+                        select(func.count(MemoryGuildRoundRecord.id)).where(
+                            MemoryGuildRoundRecord.series_id == series.id
+                        )
+                    )
+                    or 0
+                ) + 1
+                answer = _memory_assessment_answer(
+                    settings.character_set, rule.answer_length
+                )
+                round_record = MemoryGuildRoundRecord(
+                    match_id=match.id,
+                    series_id=series.id,
+                    sequence=round_sequence,
+                    answer=answer,
+                    display_seconds=settings.duel_recall_seconds,
+                    state="showing",
+                    created_at=now,
+                )
+                session.add(round_record)
+                series.state = "showing"
+                match.state = "showing"
+                session.flush()
+                result = self._memory_guild_result_locked(
+                    session,
+                    match,
+                    "round_started",
+                    public_message=answer,
+                    series_id=series.id,
+                    round_id=round_record.id,
+                    answer=answer,
+                    level=5,
+                    display_seconds=settings.duel_recall_seconds,
+                )
+                return result
+
+    def answer_memory_guild_round(
+        self,
+        platform_id: str,
+        platform_message_id: str,
+        answer: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> MemoryGuildMatchResult:
+        now = now.astimezone(BEIJING)
+        with self.transaction():
+            with self._session() as session:
+                self._lock_gameplay_gate(session)
+                match = self._active_memory_guild_match(session, group_chat_id)
+                if match is None:
+                    return MemoryGuildMatchResult("no_match")
+                series = session.scalar(
+                    select(MemoryGuildSeriesRecord)
+                    .where(
+                        MemoryGuildSeriesRecord.match_id == match.id,
+                        MemoryGuildSeriesRecord.sequence
+                        == match.current_series_number,
+                    )
+                    .with_for_update()
+                )
+                if series is None:
+                    return self._memory_guild_result_locked(
+                        session, match, "round_closed"
+                    )
+                round_record = session.scalar(
+                    select(MemoryGuildRoundRecord)
+                    .where(MemoryGuildRoundRecord.series_id == series.id)
+                    .order_by(MemoryGuildRoundRecord.sequence.desc())
+                    .with_for_update()
+                )
+                if (
+                    round_record is None
+                    or match.state != "answering"
+                    or series.state != "answering"
+                    or round_record.state != "answering"
+                ):
+                    return self._memory_guild_result_locked(
+                        session, match, "round_closed"
+                    )
+                if (
+                    round_record.answer_deadline is not None
+                    and now > round_record.answer_deadline
+                ):
+                    return self._settle_memory_guild_round_locked(
+                        session, match, series, round_record, None, now
+                    )
+                user = session.scalar(
+                    select(UserRecord)
+                    .where(UserRecord.platform_id == platform_id)
+                    .with_for_update()
+                )
+                current_members = tuple(
+                    member_id
+                    for member_id in (
+                        series.team1_member_id,
+                        series.team2_member_id,
+                    )
+                    if member_id is not None
+                )
+                member = None if user is None else session.scalar(
+                    select(MemoryGuildMemberRecord)
+                    .where(
+                        MemoryGuildMemberRecord.id.in_(current_members),
+                        MemoryGuildMemberRecord.user_id == user.id,
+                    )
+                    .with_for_update()
+                )
+                if member is None:
+                    return self._memory_guild_result_locked(
+                        session, match, "not_current_player"
+                    )
+                duplicate = session.scalar(
+                    select(MemoryGuildAnswerRecord.id).where(
+                        MemoryGuildAnswerRecord.platform_message_id
+                        == platform_message_id
+                    )
+                )
+                if duplicate is not None:
+                    return self._memory_guild_result_locked(
+                        session, match, "duplicate_answer"
+                    )
+                correct = answer == round_record.answer
+                session.add(
+                    MemoryGuildAnswerRecord(
+                        round_id=round_record.id,
+                        user_id=user.id,
+                        platform_message_id=platform_message_id,
+                        answer=answer,
+                        correct=correct,
+                        submitted_at=now,
+                    )
+                )
+                if not correct:
+                    return self._memory_guild_result_locked(
+                        session, match, "incorrect"
+                    )
+                return self._settle_memory_guild_round_locked(
+                    session, match, series, round_record, member, now
+                )
+
+    def run_memory_guild_jobs(
+        self, now: datetime
+    ) -> tuple[MemoryGuildMatchResult, ...]:
+        now = now.astimezone(BEIJING)
+        results: list[MemoryGuildMatchResult] = []
+        with self.transaction():
+            with self._session() as session:
+                self._lock_gameplay_gate(session)
+                due_rounds = list(
+                    session.scalars(
+                        select(MemoryGuildRoundRecord)
+                        .where(
+                            MemoryGuildRoundRecord.state == "answering",
+                            MemoryGuildRoundRecord.answer_deadline <= now,
+                        )
+                        .order_by(MemoryGuildRoundRecord.answer_deadline)
+                        .with_for_update(skip_locked=True)
+                    )
+                )
+                for round_record in due_rounds:
+                    match = session.get(
+                        MemoryGuildMatchRecord,
+                        round_record.match_id,
+                        with_for_update=True,
+                    )
+                    series = session.get(
+                        MemoryGuildSeriesRecord,
+                        round_record.series_id,
+                        with_for_update=True,
+                    )
+                    if (
+                        match is None
+                        or series is None
+                        or match.active_key != "global"
+                        or match.state != "answering"
+                        or series.state != "answering"
+                    ):
+                        continue
+                    results.append(
+                        self._settle_memory_guild_round_locked(
+                            session, match, series, round_record, None, now
+                        )
+                    )
+        return tuple(results)
+
+    def _settle_memory_guild_round_locked(
+        self,
+        session: Session,
+        match: MemoryGuildMatchRecord,
+        series: MemoryGuildSeriesRecord,
+        round_record: MemoryGuildRoundRecord,
+        winner: MemoryGuildMemberRecord | None,
+        now: datetime,
+    ) -> MemoryGuildMatchResult:
+        round_record.state = "drawn" if winner is None else "finished"
+        round_record.result = "draw" if winner is None else "won"
+        round_record.winner_user_id = None if winner is None else winner.user_id
+        round_record.answer_deadline = None
+        round_record.finished_at = now
+        teams = list(
+            session.scalars(
+                select(MemoryGuildTeamRecord)
+                .where(MemoryGuildTeamRecord.match_id == match.id)
+                .order_by(MemoryGuildTeamRecord.slot)
+                .with_for_update()
+            )
+        )
+        if len(teams) != 2:
+            raise RuntimeError("记忆考核公会赛队伍数量异常")
+        if winner is not None:
+            if winner.team_id == teams[0].id:
+                series.team1_wins += 1
+            elif winner.team_id == teams[1].id:
+                series.team2_wins += 1
+            else:
+                raise RuntimeError("记忆考核公会赛胜者队伍异常")
+        round_message = render_guild_round_result(
+            series_sequence=series.sequence,
+            round_sequence=round_record.sequence,
+            winner_name=(None if winner is None else winner.display_name_snapshot),
+            team1_wins=series.team1_wins,
+            team2_wins=series.team2_wins,
+        )
+        if winner is None:
+            series.state = "waiting_round_start"
+            match.state = "waiting_round_start"
+            return self._memory_guild_result_locked(
+                session,
+                match,
+                "round_drawn",
+                public_message=round_message,
+                series_id=series.id,
+                round_id=round_record.id,
+            )
+        if max(series.team1_wins, series.team2_wins) < series.win_target:
+            series.state = "waiting_round_start"
+            match.state = "waiting_round_start"
+            return self._memory_guild_result_locked(
+                session,
+                match,
+                "round_won",
+                public_message=round_message,
+                series_id=series.id,
+                round_id=round_record.id,
+            )
+        winning_team = teams[0] if series.team1_wins > series.team2_wins else teams[1]
+        series.state = "finished"
+        series.winner_team_id = winning_team.id
+        series.finished_at = now
+        winning_team.series_wins += 1
+        if series.sequence < match.planned_series_count:
+            match.state = "waiting_series"
+            return self._memory_guild_result_locked(
+                session,
+                match,
+                "series_finished",
+                public_message=(
+                    round_message
+                    + f"\n\n⚔️ 第{series.sequence}场结束，请主持人配置第{series.sequence + 1}场。"
+                ),
+                series_id=series.id,
+                round_id=round_record.id,
+            )
+        if teams[0].series_wins == teams[1].series_wins:
+            match.state = "waiting_series"
+            return self._memory_guild_result_locked(
+                session,
+                match,
+                "tiebreaker_required",
+                public_message=(
+                    round_message
+                    + f"\n\n⚖️ 当前大比分 {teams[0].series_wins} : {teams[1].series_wins}，"
+                    + f"请主持人配置第{series.sequence + 1}场加时赛。"
+                ),
+                series_id=series.id,
+                round_id=round_record.id,
+            )
+        champion = teams[0] if teams[0].series_wins > teams[1].series_wins else teams[1]
+        match.state = "finished"
+        match.active_key = None
+        match.champion_team_id = champion.id
+        match.finish_reason = "completed"
+        match.finished_at = now
+        series_rows = list(
+            session.scalars(
+                select(MemoryGuildSeriesRecord)
+                .where(MemoryGuildSeriesRecord.match_id == match.id)
+                .order_by(MemoryGuildSeriesRecord.sequence)
+            )
+        )
+        series_lines = []
+        for series_row in series_rows:
+            player1 = session.get(MemoryGuildMemberRecord, series_row.team1_member_id)
+            player2 = session.get(MemoryGuildMemberRecord, series_row.team2_member_id)
+            winner_label = (
+                "平局"
+                if series_row.winner_team_id is None
+                else next(
+                    team.name
+                    for team in teams
+                    if team.id == series_row.winner_team_id
+                )
+            )
+            series_lines.append(
+                f"第{series_row.sequence}场 "
+                f"{'' if player1 is None else player1.display_name_snapshot} "
+                f"{series_row.team1_wins}:{series_row.team2_wins} "
+                f"{'' if player2 is None else player2.display_name_snapshot} · {winner_label}"
+            )
+        self._record_memory_guild_facts(session, match, champion.id, now)
+        return self._memory_guild_result_locked(
+            session,
+            match,
+            "match_finished",
+            public_message=render_guild_match_finished(
+                champion_name=champion.name or f"队伍{champion.slot}",
+                team1_score=teams[0].series_wins,
+                team2_score=teams[1].series_wins,
+                series_lines=series_lines,
+            ),
+            series_id=series.id,
+            round_id=round_record.id,
+        )
+
+    def _record_memory_guild_facts(
+        self,
+        session: Session,
+        match: MemoryGuildMatchRecord,
+        champion_team_id: UUID,
+        now: datetime,
+    ) -> None:
+        for member in session.scalars(
+            select(MemoryGuildMemberRecord).where(
+                MemoryGuildMemberRecord.match_id == match.id
+            )
+        ):
+            self._record_ai_activity_fact(
+                session,
+                event_key=f"memory_guild:{match.id}:{member.user_id}",
+                user_id=member.user_id,
+                activity_type="memory_guild_match",
+                result="win" if member.team_id == champion_team_id else "loss",
+                occurred_at=now,
+            )
+
     def end_memory_guild_match(
         self,
         platform_id: str,
@@ -14797,15 +15197,23 @@ class CoreRepository:
         *,
         public_message: str | None = None,
         series_id: UUID | None = None,
+        round_id: UUID | None = None,
+        answer: str | None = None,
+        level: int | None = None,
+        display_seconds: int = 0,
     ) -> MemoryGuildMatchResult:
         view = self._memory_guild_match_view_locked(session, match)
         return MemoryGuildMatchResult(
             status,
             match_id=match.id,
             series_id=series_id,
+            round_id=round_id,
             host_name=view.host_name,
             planned_series_count=match.planned_series_count,
             public_message=public_message,
+            answer=answer,
+            level=level,
+            display_seconds=display_seconds,
             team1=view.team1,
             team2=view.team2,
         )
@@ -19004,6 +19412,22 @@ class CoreRepository:
                             else self.group_chat_destination(game.group_chat_id)
                         ),
                     )
+            for result in self.run_memory_guild_jobs(now):
+                if result.public_message is None or result.match_id is None:
+                    continue
+                with self._session() as session:
+                    match = session.get(MemoryGuildMatchRecord, result.match_id)
+                    group_chat_id = (
+                        None if match is None else match.group_chat_id
+                    )
+                if group_chat_id is not None:
+                    self.enqueue_system_outbound(
+                        result.public_message,
+                        group_chat_id=group_chat_id,
+                        destination_chatroom_id=self.group_chat_destination(
+                            group_chat_id
+                        ),
+                    )
             group_ids = tuple(group.id for group in self.list_group_chats()) or (
                 PRIMARY_GROUP_CHAT_ID,
             )
@@ -22781,6 +23205,7 @@ class CoreRepository:
         *,
         recall_after_seconds: int | None = None,
         memory_round_id: UUID | None = None,
+        memory_guild_round_id: UUID | None = None,
         group_chat_id: UUID | None = None,
         destination_chatroom_id: str | None = None,
         delivery_kind: str = "group",
@@ -22872,6 +23297,15 @@ class CoreRepository:
                 if round_record is None or round_record.state != "showing":
                     raise ValueError("记忆考核轮次无法关联撤回消息")
                 round_record.outbound_message_id = records[0].id
+            if memory_guild_round_id is not None:
+                guild_round = session.get(
+                    MemoryGuildRoundRecord,
+                    memory_guild_round_id,
+                    with_for_update=True,
+                )
+                if guild_round is None or guild_round.state != "showing":
+                    raise ValueError("记忆考核公会赛轮次无法关联撤回消息")
+                guild_round.outbound_message_id = records[0].id
             return records[0]
 
     def enqueue_system_outbound(
@@ -22880,6 +23314,7 @@ class CoreRepository:
         *,
         recall_after_seconds: int | None = None,
         memory_round_id: UUID | None = None,
+        memory_guild_round_id: UUID | None = None,
         group_chat_id: UUID | None = None,
         destination_chatroom_id: str | None = None,
         delivery_kind: str = "group",
@@ -22943,6 +23378,15 @@ class CoreRepository:
                 if round_record is None or round_record.state != "showing":
                     raise ValueError("记忆考核轮次无法关联撤回消息")
                 round_record.outbound_message_id = records[0].id
+            if memory_guild_round_id is not None:
+                guild_round = session.get(
+                    MemoryGuildRoundRecord,
+                    memory_guild_round_id,
+                    with_for_update=True,
+                )
+                if guild_round is None or guild_round.state != "showing":
+                    raise ValueError("记忆考核公会赛轮次无法关联撤回消息")
+                guild_round.outbound_message_id = records[0].id
             return records[0]
 
     @staticmethod
@@ -23355,6 +23799,32 @@ class CoreRepository:
     ) -> bool:
         with self.transaction():
             with self._session() as session:
+                guild_round_hint = session.scalar(
+                    select(MemoryGuildRoundRecord).where(
+                        MemoryGuildRoundRecord.outbound_message_id
+                        == UUID(str(message_id))
+                    )
+                )
+                guild_match = None
+                guild_series = None
+                guild_round = None
+                if guild_round_hint is not None:
+                    self._lock_gameplay_gate(session)
+                    guild_match = session.get(
+                        MemoryGuildMatchRecord,
+                        guild_round_hint.match_id,
+                        with_for_update=True,
+                    )
+                    guild_series = session.get(
+                        MemoryGuildSeriesRecord,
+                        guild_round_hint.series_id,
+                        with_for_update=True,
+                    )
+                    guild_round = session.get(
+                        MemoryGuildRoundRecord,
+                        guild_round_hint.id,
+                        with_for_update=True,
+                    )
                 record = session.scalar(
                     select(OutboundRecord)
                     .where(
@@ -23387,6 +23857,24 @@ class CoreRepository:
                     if game is not None and game.state == "showing_answer":
                         round_record.state = "awaiting_answer"
                         game.state = "awaiting_answer"
+                if (
+                    guild_match is not None
+                    and guild_series is not None
+                    and guild_round is not None
+                    and guild_match.active_key == "global"
+                    and guild_match.state == "showing"
+                    and guild_series.state == "showing"
+                    and guild_round.state == "showing"
+                ):
+                    settings = session.get(MemoryAssessmentSettingsRecord, 1)
+                    if settings is None:
+                        raise RuntimeError("记忆考核配置不存在")
+                    guild_round.state = "answering"
+                    guild_round.answer_deadline = now + timedelta(
+                        minutes=settings.duel_answer_timeout_minutes
+                    )
+                    guild_series.state = "answering"
+                    guild_match.state = "answering"
                 return True
 
     def start_manual_login(

@@ -46,6 +46,7 @@ class CommandReply:
     text: str
     recall_after_seconds: int | None = None
     memory_round_id: UUID | None = None
+    memory_guild_round_id: UUID | None = None
     destination_chatroom_id: str | None = None
     delivery_kind: str = "group"
     content_type: str = "text"
@@ -400,6 +401,7 @@ class CoreService:
                 if (
                     reply.recall_after_seconds is None
                     and reply.memory_round_id is None
+                    and reply.memory_guild_round_id is None
                 ):
                     if (
                         reply.destination_chatroom_id is None
@@ -428,6 +430,7 @@ class CoreService:
                     reply_index,
                     recall_after_seconds=reply.recall_after_seconds,
                     memory_round_id=reply.memory_round_id,
+                    memory_guild_round_id=reply.memory_guild_round_id,
                     group_chat_id=group_chat_id,
                     destination_chatroom_id=destination_chatroom_id,
                     delivery_kind=reply.delivery_kind,
@@ -560,6 +563,7 @@ class CoreService:
                     reply_index,
                     recall_after_seconds=reply.recall_after_seconds,
                     memory_round_id=reply.memory_round_id,
+                    memory_guild_round_id=reply.memory_guild_round_id,
                     group_chat_id=group_chat_id,
                     destination_chatroom_id=destination,
                     delivery_kind=delivery_kind,
