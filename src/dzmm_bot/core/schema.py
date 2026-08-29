@@ -1289,6 +1289,184 @@ class MemoryAssessmentRoundRecord(Base):
     )
 
 
+class MemoryGuildMatchRecord(Base):
+    __tablename__ = "memory_guild_matches"
+    __table_args__ = (
+        CheckConstraint(
+            "planned_series_count BETWEEN 1 AND 20",
+            name="ck_memory_guild_planned_series_count",
+        ),
+        Index(
+            "ux_memory_guild_one_active_per_group",
+            "group_chat_id",
+            unique=True,
+            sqlite_where=text("active_key IS NOT NULL"),
+            postgresql_where=text("active_key IS NOT NULL"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    group_chat_id: Mapped[UUID] = mapped_column(
+        ForeignKey("group_chats.id"), nullable=False
+    )
+    host_user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    active_key: Mapped[str | None] = mapped_column(String(32))
+    planned_series_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    current_series_number: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
+    )
+    champion_team_id: Mapped[UUID | None] = mapped_column(Uuid)
+    finish_reason: Mapped[str | None] = mapped_column(String(64))
+    forced_by_user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(
+        BeijingDateTime, default=beijing_now, nullable=False
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+
+
+class MemoryGuildTeamRecord(Base):
+    __tablename__ = "memory_guild_teams"
+    __table_args__ = (
+        CheckConstraint("slot IN (1, 2)", name="ck_memory_guild_team_slot"),
+        UniqueConstraint("match_id", "slot", name="ux_memory_guild_team_match_slot"),
+        UniqueConstraint("match_id", "name", name="ux_memory_guild_team_match_name"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    match_id: Mapped[UUID] = mapped_column(
+        ForeignKey("memory_guild_matches.id"), nullable=False
+    )
+    slot: Mapped[int] = mapped_column(Integer, nullable=False)
+    name: Mapped[str | None] = mapped_column(String(64))
+    series_wins: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        BeijingDateTime, default=beijing_now, nullable=False
+    )
+
+
+class MemoryGuildMemberRecord(Base):
+    __tablename__ = "memory_guild_members"
+    __table_args__ = (
+        Index(
+            "ux_memory_guild_member_match_user",
+            "match_id",
+            "user_id",
+            unique=True,
+        ),
+        UniqueConstraint(
+            "team_id", "roster_order", name="ux_memory_guild_member_team_order"
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    match_id: Mapped[UUID] = mapped_column(
+        ForeignKey("memory_guild_matches.id"), nullable=False
+    )
+    team_id: Mapped[UUID] = mapped_column(
+        ForeignKey("memory_guild_teams.id"), nullable=False
+    )
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    display_name_snapshot: Mapped[str] = mapped_column(String(64), nullable=False)
+    roster_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        BeijingDateTime, default=beijing_now, nullable=False
+    )
+
+
+class MemoryGuildSeriesRecord(Base):
+    __tablename__ = "memory_guild_series"
+    __table_args__ = (
+        UniqueConstraint(
+            "match_id", "sequence", name="ux_memory_guild_series_match_sequence"
+        ),
+        CheckConstraint("sequence >= 1", name="ck_memory_guild_series_sequence"),
+        CheckConstraint("win_target >= 1", name="ck_memory_guild_series_win_target"),
+        CheckConstraint(
+            "maximum_decisive_rounds >= 1",
+            name="ck_memory_guild_series_maximum_rounds",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    match_id: Mapped[UUID] = mapped_column(
+        ForeignKey("memory_guild_matches.id"), nullable=False
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    win_target: Mapped[int] = mapped_column(Integer, nullable=False)
+    maximum_decisive_rounds: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_tiebreaker: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    team1_member_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("memory_guild_members.id")
+    )
+    team2_member_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("memory_guild_members.id")
+    )
+    team1_wins: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    team2_wins: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    winner_team_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("memory_guild_teams.id")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        BeijingDateTime, default=beijing_now, nullable=False
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+
+
+class MemoryGuildRoundRecord(Base):
+    __tablename__ = "memory_guild_rounds"
+    __table_args__ = (
+        UniqueConstraint(
+            "series_id", "sequence", name="ux_memory_guild_round_series_sequence"
+        ),
+        CheckConstraint("sequence >= 1", name="ck_memory_guild_round_sequence"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    match_id: Mapped[UUID] = mapped_column(
+        ForeignKey("memory_guild_matches.id"), nullable=False
+    )
+    series_id: Mapped[UUID] = mapped_column(
+        ForeignKey("memory_guild_series.id"), nullable=False
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    answer: Mapped[str] = mapped_column(Text, nullable=False)
+    display_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    answer_deadline: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    outbound_message_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("outbound_messages.id"), unique=True
+    )
+    winner_user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))
+    result: Mapped[str | None] = mapped_column(String(16))
+    created_at: Mapped[datetime] = mapped_column(
+        BeijingDateTime, default=beijing_now, nullable=False
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+
+
+class MemoryGuildAnswerRecord(Base):
+    __tablename__ = "memory_guild_answers"
+    __table_args__ = (
+        Index(
+            "ux_memory_guild_answer_platform_message",
+            "platform_message_id",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    round_id: Mapped[UUID] = mapped_column(
+        ForeignKey("memory_guild_rounds.id"), nullable=False
+    )
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    platform_message_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    answer: Mapped[str] = mapped_column(Text, nullable=False)
+    correct: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    submitted_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+
+
 class RandomEventSceneRecord(Base):
     __tablename__ = "random_event_scenes"
 
