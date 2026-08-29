@@ -232,9 +232,11 @@
 
               <section id="memory-assessment-view" class="dashboard-view panel" hidden>
                 <p class="eyebrow">撤回记忆小游戏</p>
-                <nav class="management-tabs" data-management-tabs="memory-assessment" aria-label="记忆考核分类"><button class="management-tab active" data-management-tab="single" type="button">单人规则</button><button class="management-tab" data-management-tab="duel" type="button">对战规则</button></nav>
+                <nav class="management-tabs" data-management-tabs="memory-assessment" aria-label="记忆考核分类"><button class="management-tab active" data-management-tab="single" type="button">单人规则</button><button class="management-tab" data-management-tab="duel" type="button">对战规则</button><button class="management-tab" data-management-tab="guild-current" type="button">公会赛当前</button><button class="management-tab" data-management-tab="guild-history" type="button">公会赛历史</button></nav>
                 <section class="management-pane" data-management-pane="single"><div class="panel-heading"><div><h2>单人挑战规则</h2><p class="muted">考题自动展示后按秒撤回；单人每日限一次。</p></div><button id="edit-memory-assessment-settings" class="primary" type="button">编辑规则</button></div><div id="memory-assessment-settings-card" class="settings-card" aria-live="polite"></div></section>
                 <section class="management-pane" data-management-pane="duel" hidden><div class="panel-heading"><div><h2>双人对战规则</h2><p class="muted">对战为奖池制；同一组设置在规则窗口内统一维护。</p></div><button class="secondary" data-open-memory-assessment-settings type="button">查看并编辑规则</button></div><div class="settings-card" data-memory-assessment-duel-summary aria-live="polite"></div></section>
+                <section class="management-pane" data-management-pane="guild-current" hidden><div class="panel-heading"><div><h2>当前公会赛</h2><p class="muted">展示主持人、双队阵容、当前场次与公开比分；可强制结束异常对局。</p></div></div><div id="memory-guild-current-card" class="settings-card" aria-live="polite"></div></section>
+                <section class="management-pane" data-management-pane="guild-history" hidden><div class="panel-heading"><div><h2>公会赛历史</h2><p class="muted">保存队伍比分、每场对阵、每小局结果与作答记录。</p></div></div><div id="memory-guild-history-list" class="data-list"></div><nav id="memory-guild-history-pagination" class="pagination" aria-label="公会赛历史分页"></nav><div id="memory-guild-history-detail" class="settings-card" aria-live="polite"></div></section>
               </section>
 
               <section id="undercover-view" class="dashboard-view panel" hidden>

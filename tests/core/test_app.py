@@ -22,6 +22,7 @@ from dzmm_bot.core.schema import (
     NumberBombRoundPlayerRecord,
     NumberBombRoundRecord,
     OutboundRecord,
+    PRIMARY_GROUP_CHAT_ID,
     RandomEventRecord,
     RandomEventScheduleRecord,
     RandomEventSubmissionRecord,
@@ -731,6 +732,51 @@ def test_gameplay_current_hides_numbers_and_force_end_requires_exact_identity(
     assert game.finish_reason == "admin_forced"
     assert outbounds == ["【蹦蹦数字炸弹】管理员已强制结束当前游戏。"]
     assert activity_events == []
+
+
+def test_memory_guild_current_and_paginated_history_api(app_context, headers):
+    repository = app_context.repository
+    repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=memory-guild-api", NOW
+    )
+    for platform_id, name in (
+        ("guild-api-host", "主持人"),
+        ("guild-api-red", "G"),
+        ("guild-api-blue", "玩家A"),
+    ):
+        repository.create_user(platform_id, name, NOW, 0)
+    created = repository.start_memory_guild_match(
+        "guild-api-host", 1, NOW
+    )
+    repository.set_memory_guild_team_name("guild-api-host", 1, "红队", NOW)
+    repository.set_memory_guild_team_name("guild-api-host", 2, "蓝队", NOW)
+    repository.set_memory_guild_roster("guild-api-host", 1, ("G",), NOW)
+    repository.set_memory_guild_roster("guild-api-host", 2, ("玩家A",), NOW)
+
+    current = app_context.client.get(
+        "/internal/game/memory-assessment/guild/current", headers=headers
+    )
+    assert current.status_code == 200
+    assert current.json()["item"]["id"] == str(created.match_id)
+    assert current.json()["item"]["teams"][0]["name"] == "红队"
+
+    ended = app_context.client.post(
+        f"/internal/gameplay/{PRIMARY_GROUP_CHAT_ID}/memory_guild/{created.match_id}/force-end",
+        headers=headers,
+    )
+    assert ended.status_code == 200
+    page = app_context.client.get(
+        "/internal/game/memory-assessment/guild/history?page=1&page_size=20",
+        headers=headers,
+    )
+    assert page.status_code == 200
+    assert page.json()["total"] == 1
+    detail = app_context.client.get(
+        f"/internal/game/memory-assessment/guild/history/{created.match_id}",
+        headers=headers,
+    )
+    assert detail.status_code == 200
+    assert [team["name"] for team in detail.json()["teams"]] == ["红队", "蓝队"]
 
 
 def test_gameplay_current_exposes_number_bomb_tournament_progress_and_points(
@@ -1453,7 +1499,7 @@ def test_game_management_lists_commands_employees_and_shop_items(client, headers
 
     assert commands.status_code == 200
     assert {record["command"] for record in commands.json()} == {
-            "/入职", "/我的物品", "/购买", "/使用", "/邀请参与", "/取消使用", "/同意使用", "/拒绝使用", "/打卡", "/余额", "/修改名称", "/编辑档案", "/编辑档案形象", "/我的档案", "/发奖金", "/发红包", "/抢红包", "/打赏", "/我", "/商店", "/帮助", "/当前游戏", "/加入", "/退出", "/开始", "/跳过", "/摸鱼躲猫猫", "/记忆考核", "/继续", "/收手", "/投降", "/谁是卧底", "/开始投票", "/投票", "/退出谁是卧底", "/结束游戏", "/甩锅游戏", "/甩锅", "/退出甩锅", "/蹦蹦数字炸弹", "/报数", "/德州扑克", "/看牌", "/过牌", "/跟注", "/加注", "/全下", "/弃牌", "/上架暗网", "/取消上架", "/确认", "/报价", "/公开", "/不公开", "/查看暗网", "/确认收货", "/投诉", "/预约公演", "/我的公演预约", "/取消公演预约", "/公演日程", "/延期", "/end", "/部门", "/部门人数", "/我的部门人数", "/加入部门", "/切换部门", "/部门申请列表", "/同意部门", "/全部同意部门", "/拒绝部门", "/全部拒绝部门", "/职位", "/晋升", "/晋升申请列表", "/同意", "/全部同意", "/拒绝", "/全部拒绝", "/投稿", "/我的投稿", "/撤回投稿", "/上一步", "/取消投稿", "/确认取消投稿", "/确认投稿", "/继续添加", "/事件完成", "/修改身份", "/删除身份", "/修改事件", "/删除事件"
+            "/入职", "/我的物品", "/购买", "/使用", "/邀请参与", "/取消使用", "/同意使用", "/拒绝使用", "/打卡", "/余额", "/修改名称", "/编辑档案", "/编辑档案形象", "/我的档案", "/发奖金", "/发红包", "/抢红包", "/打赏", "/我", "/商店", "/帮助", "/当前游戏", "/加入", "/退出", "/开始", "/跳过", "/摸鱼躲猫猫", "/记忆考核", "/答案", "/继续", "/收手", "/投降", "/队伍1", "/队伍2", "/队伍1人员", "/队伍2人员", "/公会赛场次", "/开始对战", "/上场", "/谁是卧底", "/开始投票", "/投票", "/退出谁是卧底", "/结束游戏", "/甩锅游戏", "/甩锅", "/退出甩锅", "/蹦蹦数字炸弹", "/报数", "/德州扑克", "/看牌", "/过牌", "/跟注", "/加注", "/全下", "/弃牌", "/上架暗网", "/取消上架", "/确认", "/报价", "/公开", "/不公开", "/查看暗网", "/确认收货", "/投诉", "/预约公演", "/我的公演预约", "/取消公演预约", "/公演日程", "/延期", "/end", "/部门", "/部门人数", "/我的部门人数", "/加入部门", "/切换部门", "/部门申请列表", "/同意部门", "/全部同意部门", "/拒绝部门", "/全部拒绝部门", "/职位", "/晋升", "/晋升申请列表", "/同意", "/全部同意", "/拒绝", "/全部拒绝", "/投稿", "/我的投稿", "/撤回投稿", "/上一步", "/取消投稿", "/确认取消投稿", "/确认投稿", "/继续添加", "/事件完成", "/修改身份", "/删除身份", "/修改事件", "/删除事件"
             }
     command_records = {record["command"]: record for record in commands.json()}
     for command in ("/部门人数", "/我的部门人数"):

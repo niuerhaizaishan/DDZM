@@ -2150,6 +2150,38 @@ def create_app(
             items.append(GameplaySummaryResponse(**values))
         return GameplaySummariesResponse(items=items)
 
+    @app.get("/internal/game/memory-assessment/guild/current")
+    def memory_guild_current(
+        _: Annotated[None, Depends(authorize)],
+        group_chat_id: UUID | None = Query(default=None),
+    ) -> dict:
+        return {"item": repository.memory_guild_current_detail(group_chat_id)}
+
+    @app.get("/internal/game/memory-assessment/guild/history")
+    def memory_guild_history(
+        _: Annotated[None, Depends(authorize)],
+        page: int = Query(default=1, ge=1),
+        page_size: int = Query(default=20, ge=1, le=100),
+    ) -> dict:
+        items, total = repository.list_memory_guild_history(page, page_size)
+        return {
+            "items": items,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "pages": max(1, (total + page_size - 1) // page_size),
+        }
+
+    @app.get("/internal/game/memory-assessment/guild/history/{match_id}")
+    def memory_guild_history_detail(
+        match_id: UUID,
+        _: Annotated[None, Depends(authorize)],
+    ) -> dict:
+        detail = repository.memory_guild_history_detail(match_id)
+        if detail is None:
+            raise HTTPException(status_code=404, detail="guild match not found")
+        return detail
+
     @app.post(
         "/internal/gameplay/{group_chat_id}/{game_type}/{game_id}/force-end",
         response_model=AcceptedResponse,

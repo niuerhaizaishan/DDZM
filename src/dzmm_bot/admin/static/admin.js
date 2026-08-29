@@ -37,6 +37,7 @@ let randomEventAddScenes = [];
 let hideAndSeekSettings = null;
 let hideAndSeekScenePage = 1;
 let memoryAssessmentSettings = null;
+let memoryGuildHistoryPage = 1;
 let undercoverSettings = null;
 let blameBombSettings = null;
 let blameIncidentPage = 1;
@@ -609,12 +610,12 @@ function renderCurrentGameplay(gameplay) {
   }
   const names = {
     number_bomb: "蹦蹦数字炸弹", blame_bomb: "甩锅游戏", undercover: "谁是卧底",
-    memory_duel: "记忆考核对战", random_event: "随机事件", texas_holdem: "德州扑克", conflict: "玩法状态冲突",
+    memory_duel: "记忆考核对战", memory_guild: "记忆考核公会赛", random_event: "随机事件", texas_holdem: "德州扑克", conflict: "玩法状态冲突",
   };
   const states = {
     signup: "报名中", collecting: "报数中", waiting_continue: "等待继续",
     awaiting_continue: "等待继续", active: "进行中", in_progress: "进行中",
-    waiting_opponent: "等待对手", tipping: "打赏中", conflict: "状态冲突",
+    waiting_opponent: "等待对手", configuring: "配置队伍中", waiting_lineup: "等待选手", ready: "等待开题", showing: "题目展示中", answering: "作答中", waiting_round_start: "等待下一小局", waiting_series: "等待下一场", tipping: "打赏中", conflict: "状态冲突",
   };
   card.innerHTML = items.map((item) => {
     const participants = item.participants.map((participant) => {
@@ -724,10 +725,60 @@ function renderMemoryAssessmentSettings(settings) {
   }
 }
 
+function renderMemoryGuildCurrent(payload) {
+  gameplayVersion = payload.version ?? gameplayVersion;
+  const container = document.querySelector("#memory-guild-current-card");
+  const match = payload.item;
+  if (!match) {
+    container.innerHTML = '<p class="muted">当前没有进行中的记忆考核公会赛。</p>';
+    return;
+  }
+  const teams = (match.teams || []).map((team) => {
+    const members = (team.members || []).map((member) => member.display_name).join("、") || "暂无";
+    return `<article><span>${escapeHtml(team.name || `队伍${team.slot}`)}</span><strong>${team.series_wins} 胜</strong><small>${escapeHtml(members)}</small></article>`;
+  }).join("");
+  container.innerHTML = `<article><span>${escapeHtml(match.group_name)}</span><strong>${escapeHtml(match.state)}</strong><small>主持人：${escapeHtml(match.host_name)} · 当前第 ${match.current_series_number}/${match.planned_series_count} 场</small><button class="danger-button" type="button" data-force-end-game data-group-chat-id="${escapeHtml(match.group_chat_id)}" data-game-type="memory_guild" data-game-id="${escapeHtml(match.id)}">强制结束</button></article>${teams}`;
+}
+
+function renderMemoryGuildHistory(pageData) {
+  const container = document.querySelector("#memory-guild-history-list");
+  container.innerHTML = pageData.items.map((match) => {
+    const teams = match.teams || [];
+    const score = teams.length === 2 ? `${teams[0].series_wins} : ${teams[1].series_wins}` : "—";
+    const names = teams.map((team) => team.name || `队伍${team.slot}`).join(" VS ");
+    return `<article class="data-row"><div><b>${escapeHtml(names)}</b><small>${escapeHtml(match.group_name)} · ${escapeHtml(match.state)} · ${escapeHtml(score)}</small><small>${formatHeartbeat(match.created_at)}${match.finish_reason ? ` · ${escapeHtml(match.finish_reason)}` : ""}</small></div><button class="secondary" data-memory-guild-detail="${escapeHtml(match.id)}" type="button">查看详情</button></article>`;
+  }).join("") || '<p class="muted">暂无公会赛历史。</p>';
+  renderPagination(document.querySelector("#memory-guild-history-pagination"), pageData, "场比赛", loadMemoryGuildHistory);
+}
+
+async function loadMemoryGuildHistory(page = memoryGuildHistoryPage) {
+  const pageData = await requestGame(`/api/game/memory-assessment/guild/history?page=${page}&page_size=20`);
+  memoryGuildHistoryPage = pageData.page;
+  renderMemoryGuildHistory(pageData);
+}
+
+async function loadMemoryGuildDetail(matchId) {
+  const match = await requestGame(`/api/game/memory-assessment/guild/history/${encodeURIComponent(matchId)}`);
+  const teams = match.teams || [];
+  const teamNames = new Map(teams.map((team) => [team.id, team.name || `队伍${team.slot}`]));
+  const seriesHtml = (match.series || []).map((series) => {
+    const rounds = (series.rounds || []).map((round) => `第${round.sequence}局 ${round.result === "draw" ? "🤝 平局" : round.result === "won" ? "✅ 已决胜" : escapeHtml(round.state)}`).join("；") || "暂无小局";
+    return `<article><span>${series.is_tiebreaker ? "⚖️ 加时赛" : `⚔️ 第${series.sequence}场`}</span><strong>${series.team1_wins} : ${series.team2_wins}</strong><small>${escapeHtml(series.team1_player || "待定")} VS ${escapeHtml(series.team2_player || "待定")} · ${escapeHtml(rounds)}</small></article>`;
+  }).join("");
+  const champion = match.champion_team_id ? teamNames.get(match.champion_team_id) : null;
+  document.querySelector("#memory-guild-history-detail").innerHTML = `<article><span>比赛结果</span><strong>${champion ? `🏆 ${escapeHtml(champion)}` : escapeHtml(match.finish_reason || match.state)}</strong><small>${escapeHtml(match.host_name)} 主持 · ${escapeHtml(match.group_name)}</small></article>${seriesHtml}`;
+}
+
 async function loadMemoryAssessment() {
-  memoryAssessmentSettings = await requestGame("/api/game/memory-assessment/settings");
+  const [settings, current] = await Promise.all([
+    requestGame("/api/game/memory-assessment/settings"),
+    requestGame("/api/game/memory-assessment/guild/current"),
+    loadMemoryGuildHistory(1),
+  ]);
+  memoryAssessmentSettings = settings;
   configurationVersion = memoryAssessmentSettings.version;
   renderMemoryAssessmentSettings(memoryAssessmentSettings);
+  renderMemoryGuildCurrent(current);
 }
 
 async function openMemoryAssessmentSettingsModal() {
@@ -2961,7 +3012,7 @@ redPacketSettingsModal.addEventListener("click", async (event) => {
     setResult(`保存失败（${error.message}）`, "error");
   }
 });
-for (const gameplayCard of document.querySelectorAll("#gameplay-current-card, #texas-holdem-session-card")) gameplayCard.addEventListener("click", async (event) => {
+for (const gameplayCard of document.querySelectorAll("#gameplay-current-card, #texas-holdem-session-card, #memory-guild-current-card")) gameplayCard.addEventListener("click", async (event) => {
   const button = event.target.closest("[data-force-end-game]");
   if (!button) return;
   const {groupChatId, gameType, gameId} = button.dataset;
@@ -2980,12 +3031,17 @@ for (const gameplayCard of document.querySelectorAll("#gameplay-current-card, #t
         },
       );
       gameplayVersion = ended.version;
-      await loadCurrentGameplay();
+      if (gameType === "memory_guild") await loadMemoryAssessment();
+      else await loadCurrentGameplay();
     });
     setResult("当前游戏已强制结束", "success");
   } catch (error) {
     setResult(`强制结束失败（${error.message}）`, "error");
   }
+});
+document.querySelector("#memory-guild-history-list").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-memory-guild-detail]");
+  if (button) void loadMemoryGuildDetail(button.dataset.memoryGuildDetail);
 });
 randomEventSettingsModal.addEventListener("click", async (event) => {
   if (event.target.closest("[data-close-random-event-settings-modal]")) {

@@ -14467,6 +14467,249 @@ class CoreRepository:
                 else self._memory_guild_match_view_locked(session, match)
             )
 
+    def memory_guild_current_detail(
+        self, group_chat_id: UUID | None = None
+    ) -> dict | None:
+        with self._session() as session:
+            query = select(MemoryGuildMatchRecord).where(
+                MemoryGuildMatchRecord.active_key == "global"
+            )
+            if group_chat_id is not None:
+                query = query.where(
+                    MemoryGuildMatchRecord.group_chat_id == group_chat_id
+                )
+            match = session.scalar(query.order_by(MemoryGuildMatchRecord.created_at))
+            return None if match is None else self._memory_guild_detail_locked(session, match)
+
+    def list_memory_guild_history(
+        self, page: int, page_size: int
+    ) -> tuple[list[dict], int]:
+        if page < 1 or not 1 <= page_size <= 100:
+            raise ValueError("分页参数无效")
+        with self._session() as session:
+            filters = (MemoryGuildMatchRecord.active_key.is_(None),)
+            total = int(
+                session.scalar(
+                    select(func.count(MemoryGuildMatchRecord.id)).where(*filters)
+                )
+                or 0
+            )
+            matches = list(
+                session.scalars(
+                    select(MemoryGuildMatchRecord)
+                    .where(*filters)
+                    .order_by(
+                        MemoryGuildMatchRecord.created_at.desc(),
+                        MemoryGuildMatchRecord.id.desc(),
+                    )
+                    .offset((page - 1) * page_size)
+                    .limit(page_size)
+                )
+            )
+            items = []
+            for match in matches:
+                detail = self._memory_guild_detail_locked(session, match)
+                items.append(
+                    {
+                        key: detail[key]
+                        for key in (
+                            "id",
+                            "group_chat_id",
+                            "group_name",
+                            "host_name",
+                            "state",
+                            "planned_series_count",
+                            "finish_reason",
+                            "created_at",
+                            "finished_at",
+                            "champion_team_id",
+                        )
+                    }
+                    | {
+                        "teams": [
+                            {
+                                "slot": team["slot"],
+                                "name": team["name"],
+                                "series_wins": team["series_wins"],
+                            }
+                            for team in detail["teams"]
+                        ]
+                    }
+                )
+            return items, total
+
+    def memory_guild_history_detail(self, match_id: UUID) -> dict | None:
+        with self._session() as session:
+            match = session.get(MemoryGuildMatchRecord, match_id)
+            return None if match is None else self._memory_guild_detail_locked(session, match)
+
+    @staticmethod
+    def _memory_guild_detail_locked(
+        session: Session, match: MemoryGuildMatchRecord
+    ) -> dict:
+        group = session.get(GroupChatRecord, match.group_chat_id)
+        host = session.get(UserRecord, match.host_user_id)
+        forced_by = (
+            None
+            if match.forced_by_user_id is None
+            else session.get(UserRecord, match.forced_by_user_id)
+        )
+        teams = list(
+            session.scalars(
+                select(MemoryGuildTeamRecord)
+                .where(MemoryGuildTeamRecord.match_id == match.id)
+                .order_by(MemoryGuildTeamRecord.slot)
+            )
+        )
+        members = list(
+            session.scalars(
+                select(MemoryGuildMemberRecord)
+                .where(MemoryGuildMemberRecord.match_id == match.id)
+                .order_by(
+                    MemoryGuildMemberRecord.team_id,
+                    MemoryGuildMemberRecord.roster_order,
+                )
+            )
+        )
+        users = {
+            user.id: user
+            for user in session.scalars(
+                select(UserRecord).where(
+                    UserRecord.id.in_({member.user_id for member in members})
+                )
+            )
+        }
+        series_rows = list(
+            session.scalars(
+                select(MemoryGuildSeriesRecord)
+                .where(MemoryGuildSeriesRecord.match_id == match.id)
+                .order_by(MemoryGuildSeriesRecord.sequence)
+            )
+        )
+        rounds = list(
+            session.scalars(
+                select(MemoryGuildRoundRecord)
+                .where(MemoryGuildRoundRecord.match_id == match.id)
+                .order_by(
+                    MemoryGuildRoundRecord.series_id,
+                    MemoryGuildRoundRecord.sequence,
+                )
+            )
+        )
+        answers = list(
+            session.scalars(
+                select(MemoryGuildAnswerRecord)
+                .join(
+                    MemoryGuildRoundRecord,
+                    MemoryGuildRoundRecord.id == MemoryGuildAnswerRecord.round_id,
+                )
+                .where(MemoryGuildRoundRecord.match_id == match.id)
+                .order_by(MemoryGuildAnswerRecord.submitted_at)
+            )
+        )
+        answer_users = {
+            user.id: user
+            for user in session.scalars(
+                select(UserRecord).where(
+                    UserRecord.id.in_({answer.user_id for answer in answers})
+                )
+            )
+        }
+        members_by_id = {member.id: member for member in members}
+        return {
+            "id": match.id,
+            "group_chat_id": match.group_chat_id,
+            "group_name": "主群聊" if group is None else group.name,
+            "host_user_id": match.host_user_id,
+            "host_name": "未知" if host is None else host.display_name,
+            "state": match.state,
+            "planned_series_count": match.planned_series_count,
+            "current_series_number": match.current_series_number,
+            "champion_team_id": match.champion_team_id,
+            "finish_reason": match.finish_reason,
+            "forced_by_name": None if forced_by is None else forced_by.display_name,
+            "created_at": match.created_at,
+            "finished_at": match.finished_at,
+            "teams": [
+                {
+                    "id": team.id,
+                    "slot": team.slot,
+                    "name": team.name,
+                    "series_wins": team.series_wins,
+                    "members": [
+                        {
+                            "id": member.id,
+                            "user_id": member.user_id,
+                            "display_name": member.display_name_snapshot,
+                            "employee_number": (
+                                None
+                                if users.get(member.user_id) is None
+                                else users[member.user_id].employee_number
+                            ),
+                            "roster_order": member.roster_order,
+                        }
+                        for member in members
+                        if member.team_id == team.id
+                    ],
+                }
+                for team in teams
+            ],
+            "series": [
+                {
+                    "id": series.id,
+                    "sequence": series.sequence,
+                    "state": series.state,
+                    "win_target": series.win_target,
+                    "maximum_decisive_rounds": series.maximum_decisive_rounds,
+                    "is_tiebreaker": series.is_tiebreaker,
+                    "team1_player": (
+                        None
+                        if series.team1_member_id is None
+                        else members_by_id[series.team1_member_id].display_name_snapshot
+                    ),
+                    "team2_player": (
+                        None
+                        if series.team2_member_id is None
+                        else members_by_id[series.team2_member_id].display_name_snapshot
+                    ),
+                    "team1_wins": series.team1_wins,
+                    "team2_wins": series.team2_wins,
+                    "winner_team_id": series.winner_team_id,
+                    "created_at": series.created_at,
+                    "finished_at": series.finished_at,
+                    "rounds": [
+                        {
+                            "id": round_record.id,
+                            "sequence": round_record.sequence,
+                            "state": round_record.state,
+                            "result": round_record.result,
+                            "winner_user_id": round_record.winner_user_id,
+                            "created_at": round_record.created_at,
+                            "finished_at": round_record.finished_at,
+                            "answers": [
+                                {
+                                    "user_id": answer.user_id,
+                                    "display_name": (
+                                        "未知"
+                                        if answer_users.get(answer.user_id) is None
+                                        else answer_users[answer.user_id].display_name
+                                    ),
+                                    "answer": answer.answer,
+                                    "correct": answer.correct,
+                                    "submitted_at": answer.submitted_at,
+                                }
+                                for answer in answers
+                                if answer.round_id == round_record.id
+                            ],
+                        }
+                        for round_record in rounds
+                        if round_record.series_id == series.id
+                    ],
+                }
+                for series in series_rows
+            ],
+        }
+
     def create_memory_guild_series(
         self,
         platform_id: str,

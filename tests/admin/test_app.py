@@ -221,6 +221,15 @@ class FakeCore:
         }
     )
     forced_gameplays: list[tuple[str, str, str]] = field(default_factory=list)
+    memory_guild_current: dict = field(
+        default_factory=lambda: {"item": None}
+    )
+    memory_guild_history: dict = field(
+        default_factory=lambda: {
+            "items": [], "total": 0, "page": 1, "page_size": 20
+        }
+    )
+    memory_guild_details: dict[str, dict] = field(default_factory=dict)
     ai_assistant_settings: dict = field(
         default_factory=lambda: {
             "enabled": False,
@@ -836,6 +845,19 @@ class FakeCore:
     def force_end_gameplay(self, group_chat_id, game_type, game_id):
         self.forced_gameplays.append((group_chat_id, game_type, game_id))
         return {"accepted": True}
+
+    def get_memory_guild_current(self):
+        return self.memory_guild_current
+
+    def list_memory_guild_history(self, page, page_size):
+        return {
+            **self.memory_guild_history,
+            "page": page,
+            "page_size": page_size,
+        }
+
+    def get_memory_guild_detail(self, match_id):
+        return self.memory_guild_details[match_id]
 
     def get_random_event_settings(self):
         return self.random_event_settings
@@ -2405,6 +2427,29 @@ def test_concrete_core_client_requests_employee_balance_ledger_page():
     assert result == {"items": [], "total": 0}
 
 
+def test_concrete_core_client_requests_memory_guild_history_page():
+    from dzmm_bot.admin.core_client import CoreClient
+
+    def handle(request):
+        assert request.url.path == "/internal/game/memory-assessment/guild/history"
+        assert dict(request.url.params) == {"page": "2", "page_size": "10"}
+        return httpx.Response(
+            200,
+            json={"items": [], "total": 0, "page": 2, "page_size": 10},
+        )
+
+    client = CoreClient(
+        "unused",
+        "unused",
+        client=httpx.Client(
+            base_url="http://127.0.0.1:18120",
+            transport=httpx.MockTransport(handle),
+        ),
+    )
+
+    assert client.list_memory_guild_history(2, 10)["page"] == 2
+
+
 def test_concrete_core_client_gets_and_sets_texas_holdem_settings():
     from dzmm_bot.admin.core_client import CoreClient
 
@@ -3499,6 +3544,21 @@ def test_texas_holdem_admin_surface_has_settings_and_public_table_state():
     assert "hole_cards" not in script
 
 
+def test_memory_guild_admin_surface_has_current_history_and_force_end_controls():
+    root = Path(__file__).resolve().parents[2]
+    page = (root / "src/dzmm_bot/admin/templates/index.html").read_text()
+    script = (root / "src/dzmm_bot/admin/static/admin.js").read_text()
+
+    assert 'data-management-tab="guild-current"' in page
+    assert 'data-management-tab="guild-history"' in page
+    assert 'id="memory-guild-current-card"' in page
+    assert 'id="memory-guild-history-list"' in page
+    assert "/api/game/memory-assessment/guild/current" in script
+    assert "/api/game/memory-assessment/guild/history" in script
+    assert 'data-game-type="memory_guild"' in script
+    assert "🏆" in script
+
+
 def test_number_bomb_admin_surface_shows_tournament_progress_points_and_retirement():
     root = Path(__file__).resolve().parents[2]
     script = (root / "src/dzmm_bot/admin/static/admin.js").read_text()
@@ -3531,3 +3591,38 @@ def test_admin_relays_current_gameplay_and_versioned_force_end(client, headers, 
             "00000000-0000-0000-0000-000000000099",
         )
     ]
+
+
+def test_admin_relays_memory_guild_current_history_and_detail(
+    client, headers, core
+):
+    match_id = "00000000-0000-0000-0000-000000000123"
+    core.memory_guild_current = {"item": {"id": match_id, "state": "answering"}}
+    core.memory_guild_history = {
+        "items": [{"id": match_id, "state": "finished"}],
+        "total": 1,
+        "page": 1,
+        "page_size": 20,
+    }
+    core.memory_guild_details[match_id] = {
+        "id": match_id,
+        "teams": [{"name": "红队"}, {"name": "蓝队"}],
+        "series": [],
+    }
+
+    current = client.get(
+        "/api/game/memory-assessment/guild/current", headers=headers
+    )
+    history = client.get(
+        "/api/game/memory-assessment/guild/history?page=2&page_size=10",
+        headers=headers,
+    )
+    detail = client.get(
+        f"/api/game/memory-assessment/guild/history/{match_id}",
+        headers=headers,
+    )
+
+    assert current.json()["item"]["state"] == "answering"
+    assert history.json()["page"] == 2
+    assert history.json()["page_size"] == 10
+    assert detail.json()["teams"][0]["name"] == "红队"

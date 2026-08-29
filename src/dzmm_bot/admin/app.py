@@ -1369,6 +1369,32 @@ def create_app(
             "version": repository.config_version(),
         }
 
+    @app.get("/api/game/memory-assessment/guild/current")
+    def memory_guild_current(
+        _: Annotated[None, Depends(authorize)],
+    ) -> dict:
+        return {
+            **_relay_core(core.get_memory_guild_current),
+            "version": repository.config_version(),
+        }
+
+    @app.get("/api/game/memory-assessment/guild/history")
+    def memory_guild_history(
+        _: Annotated[None, Depends(authorize)],
+        page: int = Query(default=1, ge=1),
+        page_size: int = Query(default=20, ge=1, le=100),
+    ) -> dict:
+        return _relay_core(
+            lambda: core.list_memory_guild_history(page, page_size)
+        )
+
+    @app.get("/api/game/memory-assessment/guild/history/{match_id}")
+    def memory_guild_detail(
+        match_id: str,
+        _: Annotated[None, Depends(authorize)],
+    ) -> dict:
+        return _relay_core(lambda: core.get_memory_guild_detail(match_id))
+
     @app.post("/api/gameplay/{group_chat_id}/{game_type}/{game_id}/force-end")
     def force_end_gameplay(
         group_chat_id: str,

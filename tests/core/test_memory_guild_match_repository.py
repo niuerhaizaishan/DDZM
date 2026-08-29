@@ -539,3 +539,10 @@ def test_winning_series_finishes_match_after_all_planned_series(repository, now)
     assert "🏆 公会赛结束" in finished.public_message
     assert "女仆公馆队" in finished.public_message
     assert repository.memory_guild_match_view(PRIMARY_GROUP_CHAT_ID) is None
+
+    items, total = repository.list_memory_guild_history(1, 20)
+    detail = repository.memory_guild_history_detail(finished.match_id)
+    assert total == 1
+    assert items[0]["teams"][0]["name"] == "女仆公馆队"
+    assert detail["series"][0]["rounds"][0]["result"] == "won"
+    assert detail["series"][0]["rounds"][0]["answers"][0]["correct"] is True

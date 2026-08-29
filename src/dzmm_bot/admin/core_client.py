@@ -198,6 +198,12 @@ class AdminCorePort(Protocol):
         self, group_chat_id: str, game_type: str, game_id: str
     ) -> dict: ...
 
+    def get_memory_guild_current(self) -> dict: ...
+
+    def list_memory_guild_history(self, page: int, page_size: int) -> dict: ...
+
+    def get_memory_guild_detail(self, match_id: str) -> dict: ...
+
     def get_random_event_settings(self) -> dict: ...
 
     def set_random_event_settings(self, settings: dict) -> dict: ...
@@ -712,6 +718,20 @@ class CoreClient:
         )
         response.raise_for_status()
         return response.json()
+
+    def get_memory_guild_current(self) -> dict:
+        return self._get("/internal/game/memory-assessment/guild/current")
+
+    def list_memory_guild_history(self, page: int, page_size: int) -> dict:
+        return self._get(
+            "/internal/game/memory-assessment/guild/history",
+            params={"page": page, "page_size": page_size},
+        )
+
+    def get_memory_guild_detail(self, match_id: str) -> dict:
+        return self._get(
+            f"/internal/game/memory-assessment/guild/history/{match_id}"
+        )
 
     def get_ai_assistant_settings(self) -> dict:
         return self._get("/internal/game/ai-assistant/settings")
