@@ -5671,6 +5671,24 @@ class CoreRepository:
                     )
                 )
             )
+            active_platform_ids.update(
+                session.scalars(
+                    select(UserRecord.platform_id)
+                    .join(
+                        MemoryGuildMemberRecord,
+                        MemoryGuildMemberRecord.user_id == UserRecord.id,
+                    )
+                    .join(
+                        MemoryGuildMatchRecord,
+                        MemoryGuildMatchRecord.id
+                        == MemoryGuildMemberRecord.match_id,
+                    )
+                    .where(
+                        MemoryGuildMatchRecord.active_key == "global",
+                        MemoryGuildMatchRecord.state == "waiting_lineup",
+                    )
+                )
+            )
             if not active_platform_ids:
                 return ()
             return tuple(

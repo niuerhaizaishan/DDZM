@@ -302,6 +302,24 @@ def test_private_lineup_first_selection_locks_until_both_teams_ready(repository,
     assert "请主持人发送 /开始对战" in second.public_message
 
 
+def test_waiting_lineup_subscribes_all_team_members_direct_rooms(repository, now):
+    _configure_match(repository, now)
+    assert repository.direct_inbound_chatroom_ids(now) == ()
+
+    repository.create_memory_guild_series(
+        "host", 1, 2, 3, now, PRIMARY_GROUP_CHAT_ID
+    )
+
+    assert set(repository.direct_inbound_chatroom_ids(now)) == {
+        "direct-red-1",
+        "direct-red-2",
+        "direct-red-3",
+        "direct-blue-1",
+        "direct-blue-2",
+        "direct-blue-3",
+    }
+
+
 def test_lineup_must_select_a_member_of_the_actors_team(repository, now):
     _configure_match(repository, now)
     repository.create_memory_guild_series(
