@@ -7,6 +7,7 @@ from sqlalchemy.orm import sessionmaker
 
 from dzmm_bot.core.repository import CoreRepository
 from dzmm_bot.core.schema import (
+    AIActivityEventRecord,
     Base,
     MemoryGuildMatchRecord,
     MemoryGuildAnswerRecord,
@@ -628,3 +629,56 @@ def test_winning_series_finishes_match_after_all_planned_series(repository, now)
     assert items[0]["teams"][0]["name"] == "女仆公馆队"
     assert detail["series"][0]["rounds"][0]["result"] == "won"
     assert detail["series"][0]["rounds"][0]["answers"][0]["correct"] is True
+
+
+def test_completed_match_records_team_results_and_host_fact(
+    repository, session_factory, now
+):
+    _ready_series(repository, now, planned_series_count=1, win_target=1, rounds=1)
+    started = repository.start_memory_guild_round(
+        "host", now, PRIMARY_GROUP_CHAT_ID
+    )
+    recalled_at = _recall_guild_round(repository, started, now)
+
+    repository.answer_memory_guild_round(
+        "red-1", "fact-winner", started.answer, recalled_at, PRIMARY_GROUP_CHAT_ID
+    )
+
+    with session_factory() as session:
+        events = list(
+            session.scalars(
+                select(AIActivityEventRecord)
+                .where(AIActivityEventRecord.activity_type == "memory_guild_match")
+                .order_by(AIActivityEventRecord.result, AIActivityEventRecord.detail)
+            )
+        )
+    assert [event.result for event in events].count("win") == 3
+    assert [event.result for event in events].count("loss") == 3
+    assert [event.result for event in events].count("ended") == 1
+    assert {event.detail for event in events} == {
+        "女仆公馆队",
+        "摸鱼事务所队",
+        "host",
+    }
+
+
+def test_forced_match_records_participation_without_winner(
+    repository, session_factory, now
+):
+    _configure_match(repository, now, planned_series_count=1)
+    match = repository.memory_guild_match_view(PRIMARY_GROUP_CHAT_ID)
+
+    assert repository.force_end_gameplay(
+        "memory_guild", match.id, now, PRIMARY_GROUP_CHAT_ID
+    )
+
+    with session_factory() as session:
+        events = list(
+            session.scalars(
+                select(AIActivityEventRecord).where(
+                    AIActivityEventRecord.activity_type == "memory_guild_match"
+                )
+            )
+        )
+    assert len(events) == 7
+    assert {event.result for event in events} == {"ended"}

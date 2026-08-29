@@ -11117,6 +11117,9 @@ class CoreRepository:
                         and match.active_key == "global"
                         and match.group_chat_id == group_chat_id
                     ):
+                        self._record_memory_guild_facts(
+                            session, match, None, now
+                        )
                         self._finish_memory_guild_match_locked(
                             match, "admin_forced", now
                         )
@@ -15421,9 +15424,17 @@ class CoreRepository:
         self,
         session: Session,
         match: MemoryGuildMatchRecord,
-        champion_team_id: UUID,
+        champion_team_id: UUID | None,
         now: datetime,
     ) -> None:
+        team_names = {
+            team.id: team.name or f"队伍{team.slot}"
+            for team in session.scalars(
+                select(MemoryGuildTeamRecord).where(
+                    MemoryGuildTeamRecord.match_id == match.id
+                )
+            )
+        }
         for member in session.scalars(
             select(MemoryGuildMemberRecord).where(
                 MemoryGuildMemberRecord.match_id == match.id
@@ -15434,9 +15445,25 @@ class CoreRepository:
                 event_key=f"memory_guild:{match.id}:{member.user_id}",
                 user_id=member.user_id,
                 activity_type="memory_guild_match",
-                result="win" if member.team_id == champion_team_id else "loss",
+                result=(
+                    "ended"
+                    if champion_team_id is None
+                    else "win"
+                    if member.team_id == champion_team_id
+                    else "loss"
+                ),
+                detail=team_names.get(member.team_id),
                 occurred_at=now,
             )
+        self._record_ai_activity_fact(
+            session,
+            event_key=f"memory_guild:{match.id}:{match.host_user_id}",
+            user_id=match.host_user_id,
+            activity_type="memory_guild_match",
+            result="ended",
+            detail="host",
+            occurred_at=now,
+        )
 
     def end_memory_guild_match(
         self,
@@ -15463,6 +15490,7 @@ class CoreRepository:
                 result = self._memory_guild_result_locked(
                     session, match, "forced_ended"
                 )
+                self._record_memory_guild_facts(session, match, None, now)
                 self._finish_memory_guild_match_locked(
                     match, "host_ended", now, actor.id
                 )
