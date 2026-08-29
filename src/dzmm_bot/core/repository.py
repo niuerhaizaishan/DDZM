@@ -87,6 +87,7 @@ from .number_bomb import (
     calculate_points_tournament_scores,
     render_number_bomb_result,
 )
+from .memory_guild_match import render_guild_match_created
 from .shop_cards import SYSTEM_SHOP_ITEMS, adult_item, item_by_key, purchase_category
 from .red_packet import RandomSource, generate_red_packet_allocation
 from .texas_holdem import (
@@ -167,6 +168,9 @@ from .schema import (
     MemoryAssessmentParticipantRecord,
     MemoryAssessmentRoundRecord,
     MemoryAssessmentSettingsRecord,
+    MemoryGuildMatchRecord,
+    MemoryGuildMemberRecord,
+    MemoryGuildTeamRecord,
     NumberBombGameRecord,
     NumberBombMemberRecord,
     NumberBombRoundPlayerRecord,
@@ -1267,6 +1271,48 @@ class MemoryAssessmentGameResult:
 
 
 @dataclass(frozen=True)
+class MemoryGuildMemberView:
+    id: UUID
+    user_id: UUID
+    platform_id: str
+    display_name: str
+    roster_order: int
+
+
+@dataclass(frozen=True)
+class MemoryGuildTeamView:
+    id: UUID
+    slot: int
+    name: str | None
+    series_wins: int
+    members: tuple[MemoryGuildMemberView, ...] = ()
+
+
+@dataclass(frozen=True)
+class MemoryGuildMatchView:
+    id: UUID
+    group_chat_id: UUID
+    host_user_id: UUID
+    host_name: str
+    state: str
+    planned_series_count: int
+    current_series_number: int
+    team1: MemoryGuildTeamView
+    team2: MemoryGuildTeamView
+
+
+@dataclass(frozen=True)
+class MemoryGuildMatchResult:
+    status: str
+    match_id: UUID | None = None
+    host_name: str | None = None
+    planned_series_count: int = 0
+    public_message: str | None = None
+    team1: MemoryGuildTeamView | None = None
+    team2: MemoryGuildTeamView | None = None
+
+
+@dataclass(frozen=True)
 class UndercoverSettings:
     enabled: bool
     vote_seconds: int
@@ -2277,6 +2323,19 @@ class CoreRepository:
     def _group_has_active_game_type(
         session: Session, group_id: UUID, game_type: str
     ) -> bool:
+        if game_type == "memory_assessment":
+            memory_assessment = select(MemoryAssessmentGameRecord.id).where(
+                MemoryAssessmentGameRecord.group_chat_id == group_id,
+                MemoryAssessmentGameRecord.active_key.is_not(None),
+            )
+            memory_guild = select(MemoryGuildMatchRecord.id).where(
+                MemoryGuildMatchRecord.group_chat_id == group_id,
+                MemoryGuildMatchRecord.active_key.is_not(None),
+            )
+            return bool(
+                session.scalar(select(exists(memory_assessment)))
+                or session.scalar(select(exists(memory_guild)))
+            )
         checks = {
             "red_packet": select(RedPacketRecord.id).where(
                 RedPacketRecord.group_chat_id == group_id,
@@ -2285,10 +2344,6 @@ class CoreRepository:
             "hide_and_seek": select(HideAndSeekGameRecord.id).where(
                 HideAndSeekGameRecord.group_chat_id == group_id,
                 HideAndSeekGameRecord.state == "selecting",
-            ),
-            "memory_assessment": select(MemoryAssessmentGameRecord.id).where(
-                MemoryAssessmentGameRecord.group_chat_id == group_id,
-                MemoryAssessmentGameRecord.active_key.is_not(None),
             ),
             "undercover": select(UndercoverSessionRecord.id).where(
                 UndercoverSessionRecord.group_chat_id == group_id,
@@ -10653,6 +10708,46 @@ class CoreRepository:
                     )
                 )
 
+            memory_guild = session.scalar(
+                select(MemoryGuildMatchRecord).where(
+                    MemoryGuildMatchRecord.active_key == "global",
+                    MemoryGuildMatchRecord.group_chat_id == group_chat_id,
+                )
+            )
+            if memory_guild is not None:
+                view = self._memory_guild_match_view_locked(session, memory_guild)
+                actor = session.scalar(
+                    select(UserRecord).where(UserRecord.platform_id == platform_id)
+                )
+                participant_names = tuple(
+                    member.display_name
+                    for team in (view.team1, view.team2)
+                    for member in team.members
+                )
+                if actor is not None and actor.id == memory_guild.host_user_id:
+                    role = "host"
+                    commands = ("/结束游戏",)
+                elif actor is not None and any(
+                    member.user_id == actor.id
+                    for team in (view.team1, view.team2)
+                    for member in team.members
+                ):
+                    role = "participant"
+                    commands = ()
+                else:
+                    role = "nonparticipant"
+                    commands = ()
+                active.append(
+                    ActiveGameplaySummary(
+                        "memory_guild",
+                        memory_guild.id,
+                        memory_guild.state,
+                        role,
+                        participant_names,
+                        commands,
+                    )
+                )
+
             event = session.scalar(
                 select(RandomEventRecord)
                 .where(
@@ -10880,6 +10975,7 @@ class CoreRepository:
             "undercover": "谁是卧底",
             "memory_duel": "记忆考核对战",
             "memory_single": "记忆考核",
+            "memory_guild": "记忆考核公会赛",
             "random_event": "随机事件",
         }
         if game_type not in game_names:
@@ -10961,6 +11057,19 @@ class CoreRepository:
                             .with_for_update()
                         ):
                             participant.state = "cancelled"
+                        ended = True
+                elif game_type == "memory_guild":
+                    match = session.get(
+                        MemoryGuildMatchRecord, game_id, with_for_update=True
+                    )
+                    if (
+                        match is not None
+                        and match.active_key == "global"
+                        and match.group_chat_id == group_chat_id
+                    ):
+                        self._finish_memory_guild_match_locked(
+                            match, "admin_forced", now
+                        )
                         ended = True
                 else:
                     event = session.get(RandomEventRecord, game_id, with_for_update=True)
@@ -13282,11 +13391,35 @@ class CoreRepository:
             )
         )
 
+    def _active_memory_guild_match(
+        self, session: Session, group_chat_id: UUID | None = None
+    ) -> MemoryGuildMatchRecord | None:
+        return session.scalar(
+            select(MemoryGuildMatchRecord)
+            .where(
+                MemoryGuildMatchRecord.active_key == "global",
+                *(
+                    ()
+                    if group_chat_id is None
+                    else (MemoryGuildMatchRecord.group_chat_id == group_chat_id,)
+                ),
+            )
+            .with_for_update()
+        )
+
     def _has_active_game(
         self, session: Session, group_chat_id: UUID | None = None
     ) -> bool:
         return bool(
             session.scalar(
+                select(exists().where(
+                    MemoryGuildMatchRecord.active_key == "global",
+                    *(() if group_chat_id is None else (
+                        MemoryGuildMatchRecord.group_chat_id == group_chat_id,
+                    )),
+                ))
+            )
+            or session.scalar(
                 select(exists().where(
                     MemoryAssessmentGameRecord.active_key == "global",
                     *(() if group_chat_id is None else (
@@ -14030,6 +14163,380 @@ class CoreRepository:
         if roles.count("undercover") >= roles.count("civilian"):
             return "undercover"
         return None
+
+    def start_memory_guild_match(
+        self,
+        platform_id: str,
+        planned_series_count: int,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> MemoryGuildMatchResult:
+        if not 1 <= planned_series_count <= 20:
+            return MemoryGuildMatchResult("invalid_series_count")
+        now = now.astimezone(BEIJING)
+        settings = self.get_memory_assessment_settings()
+        with self.transaction():
+            with self._session() as session:
+                self._lock_gameplay_gate(session)
+                host = session.scalar(
+                    select(UserRecord)
+                    .where(UserRecord.platform_id == platform_id)
+                    .with_for_update()
+                )
+                if host is None:
+                    return MemoryGuildMatchResult("not_joined")
+                if not settings.enabled:
+                    return MemoryGuildMatchResult("disabled", host_name=host.display_name)
+                group = session.get(GroupChatRecord, group_chat_id)
+                if (
+                    group is None
+                    or not group.games_enabled
+                    or "memory_assessment" not in group.enabled_game_types
+                ):
+                    return MemoryGuildMatchResult("disabled", host_name=host.display_name)
+                if self._active_memory_guild_match(session, group_chat_id) is not None:
+                    return MemoryGuildMatchResult(
+                        "already_active", host_name=host.display_name
+                    )
+                if (
+                    self._performance_blocks_new_game_locked(session, group_chat_id)
+                    or self._active_random_event(session, group_chat_id) is not None
+                    or self._has_active_game(session, group_chat_id)
+                ):
+                    return MemoryGuildMatchResult(
+                        "multiplayer_active", host_name=host.display_name
+                    )
+                match = MemoryGuildMatchRecord(
+                    group_chat_id=group_chat_id,
+                    host_user_id=host.id,
+                    state="configuring",
+                    active_key="global",
+                    planned_series_count=planned_series_count,
+                    current_series_number=0,
+                    created_at=now,
+                )
+                session.add(match)
+                session.flush()
+                session.add_all(
+                    [
+                        MemoryGuildTeamRecord(
+                            match_id=match.id,
+                            slot=slot,
+                            series_wins=0,
+                            created_at=now,
+                        )
+                        for slot in (1, 2)
+                    ]
+                )
+                session.flush()
+                view = self._memory_guild_match_view_locked(session, match)
+                return MemoryGuildMatchResult(
+                    "created",
+                    match_id=match.id,
+                    host_name=host.display_name,
+                    planned_series_count=planned_series_count,
+                    public_message=render_guild_match_created(
+                        host.display_name, planned_series_count
+                    ),
+                    team1=view.team1,
+                    team2=view.team2,
+                )
+
+    def set_memory_guild_team_name(
+        self,
+        platform_id: str,
+        slot: int,
+        name: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> MemoryGuildMatchResult:
+        normalized_name = name.strip()
+        if slot not in (1, 2) or not 1 <= len(normalized_name) <= 64:
+            return MemoryGuildMatchResult("invalid_team")
+        now = now.astimezone(BEIJING)
+        with self.transaction():
+            with self._session() as session:
+                self._lock_gameplay_gate(session)
+                match = self._active_memory_guild_match(session, group_chat_id)
+                if match is None:
+                    return MemoryGuildMatchResult("no_match")
+                actor = session.scalar(
+                    select(UserRecord)
+                    .where(UserRecord.platform_id == platform_id)
+                    .with_for_update()
+                )
+                if actor is None or actor.id != match.host_user_id:
+                    return self._memory_guild_result_locked(
+                        session, match, "host_only"
+                    )
+                if match.state != "configuring":
+                    return self._memory_guild_result_locked(
+                        session, match, "configuration_locked"
+                    )
+                duplicate = session.scalar(
+                    select(MemoryGuildTeamRecord.id).where(
+                        MemoryGuildTeamRecord.match_id == match.id,
+                        MemoryGuildTeamRecord.slot != slot,
+                        MemoryGuildTeamRecord.name == normalized_name,
+                    )
+                )
+                if duplicate is not None:
+                    return self._memory_guild_result_locked(
+                        session, match, "duplicate_team_name"
+                    )
+                team = session.scalar(
+                    select(MemoryGuildTeamRecord)
+                    .where(
+                        MemoryGuildTeamRecord.match_id == match.id,
+                        MemoryGuildTeamRecord.slot == slot,
+                    )
+                    .with_for_update()
+                )
+                if team is None:
+                    raise RuntimeError("记忆考核公会赛队伍不存在")
+                team.name = normalized_name
+                session.flush()
+                return self._memory_guild_result_locked(
+                    session, match, "team_updated"
+                )
+
+    def set_memory_guild_roster(
+        self,
+        platform_id: str,
+        slot: int,
+        display_names: Sequence[str],
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> MemoryGuildMatchResult:
+        names = tuple(name.strip() for name in display_names if name.strip())
+        if slot not in (1, 2) or not names or len(names) != len(set(names)):
+            return MemoryGuildMatchResult("invalid_roster")
+        now = now.astimezone(BEIJING)
+        with self.transaction():
+            with self._session() as session:
+                self._lock_gameplay_gate(session)
+                match = self._active_memory_guild_match(session, group_chat_id)
+                if match is None:
+                    return MemoryGuildMatchResult("no_match")
+                actor = session.scalar(
+                    select(UserRecord)
+                    .where(UserRecord.platform_id == platform_id)
+                    .with_for_update()
+                )
+                if actor is None or actor.id != match.host_user_id:
+                    return self._memory_guild_result_locked(
+                        session, match, "host_only"
+                    )
+                if match.state != "configuring":
+                    return self._memory_guild_result_locked(
+                        session, match, "configuration_locked"
+                    )
+                users = list(
+                    session.scalars(
+                        select(UserRecord)
+                        .where(UserRecord.display_name.in_(names))
+                        .order_by(UserRecord.id)
+                        .with_for_update()
+                    )
+                )
+                users_by_name = {user.display_name: user for user in users}
+                if any(name not in users_by_name for name in names):
+                    return self._memory_guild_result_locked(
+                        session, match, "unknown_member"
+                    )
+                selected_users = [users_by_name[name] for name in names]
+                if any(user.id == match.host_user_id for user in selected_users):
+                    return self._memory_guild_result_locked(
+                        session, match, "host_cannot_play"
+                    )
+                team = session.scalar(
+                    select(MemoryGuildTeamRecord)
+                    .where(
+                        MemoryGuildTeamRecord.match_id == match.id,
+                        MemoryGuildTeamRecord.slot == slot,
+                    )
+                    .with_for_update()
+                )
+                if team is None:
+                    raise RuntimeError("记忆考核公会赛队伍不存在")
+                selected_user_ids = {user.id for user in selected_users}
+                cross_team_member = session.scalar(
+                    select(MemoryGuildMemberRecord.id)
+                    .join(
+                        MemoryGuildTeamRecord,
+                        MemoryGuildTeamRecord.id == MemoryGuildMemberRecord.team_id,
+                    )
+                    .where(
+                        MemoryGuildMemberRecord.match_id == match.id,
+                        MemoryGuildTeamRecord.slot != slot,
+                        MemoryGuildMemberRecord.user_id.in_(selected_user_ids),
+                    )
+                    .limit(1)
+                )
+                if cross_team_member is not None:
+                    return self._memory_guild_result_locked(
+                        session, match, "member_in_other_team"
+                    )
+                session.execute(
+                    delete(MemoryGuildMemberRecord).where(
+                        MemoryGuildMemberRecord.match_id == match.id,
+                        MemoryGuildMemberRecord.team_id == team.id,
+                    )
+                )
+                session.add_all(
+                    [
+                        MemoryGuildMemberRecord(
+                            match_id=match.id,
+                            team_id=team.id,
+                            user_id=user.id,
+                            display_name_snapshot=user.display_name,
+                            roster_order=index,
+                            created_at=now,
+                        )
+                        for index, user in enumerate(selected_users, 1)
+                    ]
+                )
+                session.flush()
+                return self._memory_guild_result_locked(
+                    session, match, "roster_updated"
+                )
+
+    def memory_guild_match_view(
+        self, group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID
+    ) -> MemoryGuildMatchView | None:
+        with self._session() as session:
+            match = session.scalar(
+                select(MemoryGuildMatchRecord).where(
+                    MemoryGuildMatchRecord.group_chat_id == group_chat_id,
+                    MemoryGuildMatchRecord.active_key == "global",
+                )
+            )
+            return (
+                None
+                if match is None
+                else self._memory_guild_match_view_locked(session, match)
+            )
+
+    def end_memory_guild_match(
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> MemoryGuildMatchResult:
+        now = now.astimezone(BEIJING)
+        with self.transaction():
+            with self._session() as session:
+                self._lock_gameplay_gate(session)
+                match = self._active_memory_guild_match(session, group_chat_id)
+                if match is None:
+                    return MemoryGuildMatchResult("no_match")
+                actor = session.scalar(
+                    select(UserRecord)
+                    .where(UserRecord.platform_id == platform_id)
+                    .with_for_update()
+                )
+                if actor is None or actor.id != match.host_user_id:
+                    return self._memory_guild_result_locked(
+                        session, match, "host_only"
+                    )
+                result = self._memory_guild_result_locked(
+                    session, match, "forced_ended"
+                )
+                self._finish_memory_guild_match_locked(
+                    match, "host_ended", now, actor.id
+                )
+                return result
+
+    @staticmethod
+    def _finish_memory_guild_match_locked(
+        match: MemoryGuildMatchRecord,
+        reason: str,
+        now: datetime,
+        forced_by_user_id: UUID | None = None,
+    ) -> None:
+        match.state = "forced_ended"
+        match.active_key = None
+        match.finish_reason = reason
+        match.forced_by_user_id = forced_by_user_id
+        match.finished_at = now
+
+    def _memory_guild_result_locked(
+        self,
+        session: Session,
+        match: MemoryGuildMatchRecord,
+        status: str,
+        *,
+        public_message: str | None = None,
+    ) -> MemoryGuildMatchResult:
+        view = self._memory_guild_match_view_locked(session, match)
+        return MemoryGuildMatchResult(
+            status,
+            match_id=match.id,
+            host_name=view.host_name,
+            planned_series_count=match.planned_series_count,
+            public_message=public_message,
+            team1=view.team1,
+            team2=view.team2,
+        )
+
+    @staticmethod
+    def _memory_guild_match_view_locked(
+        session: Session, match: MemoryGuildMatchRecord
+    ) -> MemoryGuildMatchView:
+        host = session.get(UserRecord, match.host_user_id)
+        if host is None:
+            raise RuntimeError("记忆考核公会赛主持人不存在")
+        teams = list(
+            session.scalars(
+                select(MemoryGuildTeamRecord)
+                .where(MemoryGuildTeamRecord.match_id == match.id)
+                .order_by(MemoryGuildTeamRecord.slot)
+            )
+        )
+        if len(teams) != 2:
+            raise RuntimeError("记忆考核公会赛队伍数量异常")
+        members = list(
+            session.execute(
+                select(MemoryGuildMemberRecord, UserRecord)
+                .join(UserRecord, UserRecord.id == MemoryGuildMemberRecord.user_id)
+                .where(MemoryGuildMemberRecord.match_id == match.id)
+                .order_by(
+                    MemoryGuildMemberRecord.team_id,
+                    MemoryGuildMemberRecord.roster_order,
+                )
+            )
+        )
+
+        def team_view(team: MemoryGuildTeamRecord) -> MemoryGuildTeamView:
+            return MemoryGuildTeamView(
+                id=team.id,
+                slot=team.slot,
+                name=team.name,
+                series_wins=team.series_wins,
+                members=tuple(
+                    MemoryGuildMemberView(
+                        id=member.id,
+                        user_id=user.id,
+                        platform_id=user.platform_id,
+                        display_name=member.display_name_snapshot,
+                        roster_order=member.roster_order,
+                    )
+                    for member, user in members
+                    if member.team_id == team.id
+                ),
+            )
+
+        return MemoryGuildMatchView(
+            id=match.id,
+            group_chat_id=match.group_chat_id,
+            host_user_id=match.host_user_id,
+            host_name=host.display_name,
+            state=match.state,
+            planned_series_count=match.planned_series_count,
+            current_series_number=match.current_series_number,
+            team1=team_view(teams[0]),
+            team2=team_view(teams[1]),
+        )
 
     def start_memory_assessment_single(
         self,
