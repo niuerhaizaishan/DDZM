@@ -15230,33 +15230,45 @@ class CoreRepository:
             with self._session() as session:
                 self._lock_gameplay_gate(session)
                 due_rounds = list(
-                    session.scalars(
-                        select(MemoryGuildRoundRecord)
+                    session.execute(
+                        select(
+                            MemoryGuildRoundRecord.id,
+                            MemoryGuildRoundRecord.match_id,
+                            MemoryGuildRoundRecord.series_id,
+                        )
                         .where(
                             MemoryGuildRoundRecord.state == "answering",
                             MemoryGuildRoundRecord.answer_deadline <= now,
                         )
                         .order_by(MemoryGuildRoundRecord.answer_deadline)
-                        .with_for_update(skip_locked=True)
                     )
                 )
-                for round_record in due_rounds:
+                for round_id, match_id, series_id in due_rounds:
                     match = session.get(
                         MemoryGuildMatchRecord,
-                        round_record.match_id,
+                        match_id,
                         with_for_update=True,
                     )
                     series = session.get(
                         MemoryGuildSeriesRecord,
-                        round_record.series_id,
+                        series_id,
+                        with_for_update=True,
+                    )
+                    round_record = session.get(
+                        MemoryGuildRoundRecord,
+                        round_id,
                         with_for_update=True,
                     )
                     if (
                         match is None
                         or series is None
+                        or round_record is None
                         or match.active_key != "global"
                         or match.state != "answering"
                         or series.state != "answering"
+                        or round_record.state != "answering"
+                        or round_record.answer_deadline is None
+                        or round_record.answer_deadline > now
                     ):
                         continue
                     results.append(

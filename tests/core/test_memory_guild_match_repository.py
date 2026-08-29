@@ -425,13 +425,19 @@ def _ready_series(repository, now, planned_series_count=1, win_target=2, rounds=
     )
 
 
-def _recall_guild_round(repository, started, now):
+def _recall_guild_round(
+    repository,
+    started,
+    now,
+    group_chat_id=PRIMARY_GROUP_CHAT_ID,
+    destination_chatroom_id="memory-guild",
+):
     outbound = repository.enqueue_system_outbound(
         started.public_message,
         recall_after_seconds=started.display_seconds,
         memory_guild_round_id=started.round_id,
-        group_chat_id=PRIMARY_GROUP_CHAT_ID,
-        destination_chatroom_id="memory-guild",
+        group_chat_id=group_chat_id,
+        destination_chatroom_id=destination_chatroom_id,
     )
     leased = repository.claim_outbound("worker-a", now, 30)
     assert repository.confirm_sent(
@@ -522,6 +528,82 @@ def test_answer_timeout_records_draw_without_incrementing_score(repository, now)
     assert repository.start_memory_guild_round(
         "host", deadline, PRIMARY_GROUP_CHAT_ID
     ).status == "round_started"
+
+
+def test_timeout_job_recovers_after_repository_restart_and_is_idempotent(
+    repository, session_factory, now
+):
+    _ready_series(repository, now)
+    started = repository.start_memory_guild_round(
+        "host", now, PRIMARY_GROUP_CHAT_ID
+    )
+    recalled_at = _recall_guild_round(repository, started, now)
+    deadline = recalled_at + timedelta(
+        minutes=repository.get_memory_assessment_settings().duel_answer_timeout_minutes
+    )
+    restarted = CoreRepository(session_factory, number_bomb_random=Random(2))
+
+    first = restarted.run_memory_guild_jobs(deadline + timedelta(seconds=1))
+    second = restarted.run_memory_guild_jobs(deadline + timedelta(seconds=2))
+
+    assert len(first) == 1
+    assert first[0].status == "round_drawn"
+    assert second == ()
+
+
+def test_answering_one_group_does_not_change_another_group(repository, now):
+    second_group = repository.create_group_chat(
+        "第二群",
+        "https://www.aikda.com/chat?c=memory-guild-second-round",
+        True,
+        True,
+        False,
+        False,
+        now,
+        enabled_game_types=("memory_assessment",),
+    )
+    for group_chat_id in (PRIMARY_GROUP_CHAT_ID, second_group.id):
+        _configure_match(
+            repository,
+            now,
+            planned_series_count=1,
+            group_chat_id=group_chat_id,
+        )
+        repository.create_memory_guild_series(
+            "host", 1, 1, 1, now, group_chat_id
+        )
+        repository.select_memory_guild_player("red-1", "G", now, group_chat_id)
+        repository.select_memory_guild_player(
+            "blue-1", "玩家A", now, group_chat_id
+        )
+
+    first_started = repository.start_memory_guild_round(
+        "host", now, PRIMARY_GROUP_CHAT_ID
+    )
+    second_started = repository.start_memory_guild_round(
+        "host", now, second_group.id
+    )
+    first_recalled_at = _recall_guild_round(repository, first_started, now)
+    _recall_guild_round(
+        repository,
+        second_started,
+        now,
+        group_chat_id=second_group.id,
+        destination_chatroom_id="memory-guild-second-round",
+    )
+
+    finished = repository.answer_memory_guild_round(
+        "red-1",
+        "first-group-winner",
+        first_started.answer,
+        first_recalled_at,
+        PRIMARY_GROUP_CHAT_ID,
+    )
+
+    assert finished.status == "match_finished"
+    second_view = repository.memory_guild_match_view(second_group.id)
+    assert second_view is not None
+    assert second_view.state == "answering"
 
 
 def test_winning_series_finishes_match_after_all_planned_series(repository, now):
