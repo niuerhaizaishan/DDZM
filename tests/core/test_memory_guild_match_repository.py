@@ -185,7 +185,8 @@ def test_active_summary_identifies_host_and_team_members(repository, now):
 
     assert host.game_type == "memory_guild"
     assert host.actor_role == "host"
-    assert host.available_commands == ("/结束游戏",)
+    assert "/队伍1 队名" in host.available_commands
+    assert "/结束游戏" in host.available_commands
     assert member.game_type == "memory_guild"
     assert member.actor_role == "participant"
 

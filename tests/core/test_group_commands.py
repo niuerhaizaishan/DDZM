@@ -2878,6 +2878,87 @@ def test_memory_assessment_duel_replies_when_multiplayer_game_is_active():
     assert _latest_reply(factory) == "当前已有多人玩法进行中，暂不能发起记忆考核对战。"
 
 
+def test_memory_guild_match_command_flow_uses_private_lineups_and_recalled_question(
+    monkeypatch,
+):
+    from dzmm_bot.core.schema import MemoryGuildRoundRecord
+
+    service, repository, factory = _service()
+    now = datetime(2026, 8, 30, 10, 0, tzinfo=BEIJING)
+    group = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=memory-guild-command", now
+    )
+    for platform_id, name in (
+        ("guild-host", "主持人"),
+        ("guild-red", "G"),
+        ("guild-blue", "玩家A"),
+    ):
+        repository.create_user(platform_id, name, now, 0)
+        repository.upsert_direct_chats(
+            [(platform_id, f"direct-{platform_id}")], now
+        )
+    monkeypatch.setattr("dzmm_bot.core.repository.choice", lambda _: "A")
+
+    commands = (
+        ("guild-create", "/记忆考核 公会赛 1"),
+        ("guild-team1", "/队伍1 女仆公馆队"),
+        ("guild-team1-members", "/队伍1人员 G"),
+        ("guild-team2", "/队伍2 摸鱼事务所队"),
+        ("guild-team2-members", "/队伍2人员 玩家A"),
+        ("guild-series", "/第1场 1/1"),
+    )
+    for message_id, content in commands:
+        _group_receive(
+            service,
+            message_id,
+            "guild-host",
+            content,
+            now,
+            group.chatroom_id,
+        )
+
+    first = _direct_receive(
+        service,
+        "guild-lineup-red",
+        "guild-red",
+        "/上场 G",
+        now,
+        "direct-guild-red",
+    )
+    assert "已锁定" in "".join(_replies_for(factory, first.message_id))
+    second = _direct_receive(
+        service,
+        "guild-lineup-blue",
+        "guild-blue",
+        "/上场 玩家A",
+        now,
+        "direct-guild-blue",
+    )
+    second_outbounds = _outbounds_for(factory, second.message_id)
+    assert any(outbound.delivery_kind == "direct" for outbound in second_outbounds)
+    assert any(
+        outbound.delivery_kind == "group"
+        and "G" in outbound.text
+        and "玩家A" in outbound.text
+        for outbound in second_outbounds
+    )
+
+    started = _group_receive(
+        service,
+        "guild-round",
+        "guild-host",
+        "/开始对战",
+        now,
+        group.chatroom_id,
+    )
+    outbounds = _outbounds_for(factory, started.message_id)
+    assert len(outbounds) == 1
+    assert outbounds[0].recall_after_seconds == 3
+    with factory() as session:
+        round_record = session.scalar(select(MemoryGuildRoundRecord))
+        assert round_record.outbound_message_id == outbounds[0].id
+
+
 def test_disabled_command_does_not_reply_or_change_data():
     from dzmm_bot.core.schema import UserRecord
 

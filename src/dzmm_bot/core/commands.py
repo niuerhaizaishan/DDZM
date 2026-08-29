@@ -1,10 +1,17 @@
 from collections import Counter
+import re
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from dzmm_bot.runtime.contracts import InboundMessage
 
 from .group_games import GROUP_GAME_COMMANDS, GROUP_GAME_LABELS
+from .memory_guild_match import (
+    parse_guild_match_start,
+    parse_series_command,
+    parse_team_command,
+    split_roster_names,
+)
 from .performance import parse_postponement
 from .reply_templates import render_template, template_definition
 from .schema import PRIMARY_GROUP_CHAT_ID
@@ -21,7 +28,7 @@ from .service import CommandReply
 
 _BEIJING = ZoneInfo("Asia/Shanghai")
 _COMMANDS = {
-    "/入职", "/我的物品", "/购买", "/使用", "/邀请参与", "/取消使用", "/同意使用", "/拒绝使用", "/打卡", "/余额", "/修改名称", "/编辑档案", "/编辑档案形象", "/我的档案", "/发奖金", "/发红包", "/抢红包", "/打赏", "/我", "/商店", "/帮助", "/当前游戏", "/加入", "/退出", "/开始", "/摸鱼躲猫猫", "/记忆考核", "/继续", "/收手", "/投降", "/部门", "/部门人数", "/我的部门人数", "/加入部门", "/切换部门", "/部门申请列表", "/同意部门", "/全部同意部门", "/拒绝部门", "/全部拒绝部门", "/职位", "/晋升", "/晋升申请列表", "/同意", "/全部同意", "/拒绝", "/全部拒绝", "/谁是卧底", "/开始投票", "/投票", "/退出谁是卧底", "/结束游戏", "/甩锅游戏", "/甩锅", "/退出甩锅", "/蹦蹦数字炸弹", "/报数", "/跳过", "/德州扑克", "/看牌", "/过牌", "/跟注", "/加注", "/全下", "/弃牌", "/上架暗网", "/取消上架", "/确认", "/报价", "/公开", "/不公开", "/查看暗网", "/确认收货", "/投诉", "/预约公演", "/我的公演预约", "/取消公演预约", "/公演日程", "/延期", "/end",
+    "/入职", "/我的物品", "/购买", "/使用", "/邀请参与", "/取消使用", "/同意使用", "/拒绝使用", "/打卡", "/余额", "/修改名称", "/编辑档案", "/编辑档案形象", "/我的档案", "/发奖金", "/发红包", "/抢红包", "/打赏", "/我", "/商店", "/帮助", "/当前游戏", "/加入", "/退出", "/开始", "/摸鱼躲猫猫", "/记忆考核", "/答案", "/继续", "/收手", "/投降", "/队伍1", "/队伍2", "/队伍1人员", "/队伍2人员", "/公会赛场次", "/开始对战", "/上场", "/部门", "/部门人数", "/我的部门人数", "/加入部门", "/切换部门", "/部门申请列表", "/同意部门", "/全部同意部门", "/拒绝部门", "/全部拒绝部门", "/职位", "/晋升", "/晋升申请列表", "/同意", "/全部同意", "/拒绝", "/全部拒绝", "/谁是卧底", "/开始投票", "/投票", "/退出谁是卧底", "/结束游戏", "/甩锅游戏", "/甩锅", "/退出甩锅", "/蹦蹦数字炸弹", "/报数", "/跳过", "/德州扑克", "/看牌", "/过牌", "/跟注", "/加注", "/全下", "/弃牌", "/上架暗网", "/取消上架", "/确认", "/报价", "/公开", "/不公开", "/查看暗网", "/确认收货", "/投诉", "/预约公演", "/我的公演预约", "/取消公演预约", "/公演日程", "/延期", "/end",
 }
 
 _DARK_MARKET_QUERY_ALIASES = {
@@ -48,19 +55,14 @@ class GroupCommandHandler:
             return None
         command = content.split(maxsplit=1)[0]
         command = _DARK_MARKET_QUERY_ALIASES.get(command, command)
+        if re.fullmatch(r"/第[1-9]\d*场", command):
+            command = "/公会赛场次"
         if command == "/摸鱼躲猫猫":
             return None
         if command in {"/开始摸鱼躲藏", "/躲"}:
             command = "/摸鱼躲猫猫"
         if command == "/me":
             command = "/我"
-        if command == "/答案":
-            parts = content.split(maxsplit=1)
-            if len(parts) != 2 or not parts[1].strip():
-                return None
-            return self._memory_assessment_answer(
-                message.sender_platform_id, parts[1].strip(), message.received_at.astimezone(_BEIJING)
-            )
         if command not in _COMMANDS:
             return None
         self._repository.ensure_command_definitions()
@@ -73,6 +75,38 @@ class GroupCommandHandler:
             else None
         )
         group_chat_id = None if group is None else group.id
+        if command == "/上场":
+            return self._memory_guild_lineup(message, content, received_at)
+        if command == "/答案":
+            parts = content.split(maxsplit=1)
+            if len(parts) != 2 or not parts[1].strip():
+                return None
+            if group_chat_id is not None:
+                summary = self._repository.active_gameplay_summary(
+                    message.sender_platform_id, received_at, group_chat_id
+                )
+                if summary.game_type == "memory_guild":
+                    return self._memory_guild_answer(
+                        message,
+                        parts[1].strip(),
+                        received_at,
+                        group_chat_id,
+                    )
+            return self._memory_assessment_answer(
+                message.sender_platform_id, parts[1].strip(), received_at
+            )
+        if command in {"/队伍1", "/队伍2", "/队伍1人员", "/队伍2人员"}:
+            return self._memory_guild_team_config(
+                message, content, received_at, group_chat_id
+            )
+        if command == "/公会赛场次":
+            return self._memory_guild_series_config(
+                message, content, received_at, group_chat_id
+            )
+        if command == "/开始对战":
+            return self._memory_guild_start_round(
+                message, received_at, group_chat_id
+            )
         if command == "/预约公演":
             if message.source_type != "group" or group_chat_id is None:
                 return "请在已启用的群聊中发送 /预约公演。"
@@ -425,6 +459,21 @@ class GroupCommandHandler:
                 )
             if summary.game_type in {"memory_duel", "memory_single"}:
                 return self._reply("/结束游戏", "memory_use_exit", received_at)
+            if summary.game_type == "memory_guild":
+                result = self._repository.end_memory_guild_match(
+                    message.sender_platform_id,
+                    received_at,
+                    **(
+                        {}
+                        if group_chat_id is None
+                        else {"group_chat_id": group_chat_id}
+                    ),
+                )
+                if result.status == "forced_ended":
+                    return "【记忆考核公会赛】主持人已结束本场比赛。"
+                if result.status == "host_only":
+                    return "只有本场主持人可以结束记忆考核公会赛。"
+                return "当前没有可结束的记忆考核公会赛。"
             if summary.game_type == "conflict":
                 return self._reply("/当前游戏", "conflict", received_at)
             return self._reply("/结束游戏", "no_current_game", received_at)
@@ -556,6 +605,8 @@ class GroupCommandHandler:
                 return self._memory_assessment_surrender(
                     message.sender_platform_id, received_at, group_chat_id
                 )
+            if summary.game_type == "memory_guild":
+                return "记忆考核公会赛不支持退出或投降；仅主持人可发送 /结束游戏。"
             if summary.game_type == "conflict":
                 return self._reply("/当前游戏", "conflict", received_at)
             return self._event_leave(
@@ -593,6 +644,11 @@ class GroupCommandHandler:
                 message.sender_platform_id, received_at, group_chat_id
             )
         if command == "/投降":
+            summary = self._repository.active_gameplay_summary(
+                message.sender_platform_id, received_at, group_chat_id
+            )
+            if summary.game_type == "memory_guild":
+                return "记忆考核公会赛不支持退出或投降；仅主持人可发送 /结束游戏。"
             return self._memory_assessment_surrender(
                 message.sender_platform_id, received_at, group_chat_id
             )
@@ -914,6 +970,7 @@ class GroupCommandHandler:
             "undercover": "谁是卧底",
             "memory_duel": "记忆考核对战",
             "memory_single": "记忆考核",
+            "memory_guild": "记忆考核公会赛",
             "random_event": "随机事件",
         }[summary.game_type]
         if (
@@ -924,6 +981,13 @@ class GroupCommandHandler:
         state_name = {
             "signup": "报名中",
             "waiting_opponent": "等待对手",
+            "configuring": "配置队伍中",
+            "waiting_lineup": "等待私聊选手",
+            "ready": "等待主持人开题",
+            "showing": "题目展示中",
+            "answering": "作答中",
+            "waiting_round_start": "等待下一小局",
+            "waiting_series": "等待配置下一场",
             "collecting": "报数中",
             "waiting_continue": "等待继续",
             "awaiting_continue": "等待继续",
@@ -2989,6 +3053,26 @@ class GroupCommandHandler:
     def _memory_assessment_start(
         self, platform_id: str, content: str, received_at, group_chat_id=None
     ) -> str:
+        if content.startswith("/记忆考核 公会赛"):
+            if group_chat_id is None:
+                return "请在已启用的群聊中发送 /记忆考核 公会赛 场数。"
+            planned_series_count = parse_guild_match_start(content)
+            if planned_series_count is None:
+                return "格式：/记忆考核 公会赛 场数（1–20）。"
+            result = self._repository.start_memory_guild_match(
+                platform_id,
+                planned_series_count,
+                received_at,
+                group_chat_id,
+            )
+            if result.public_message is not None:
+                return result.public_message
+            return {
+                "not_joined": "请先用 /入职 名称 加入摸鱼公司。",
+                "disabled": "本群未开启记忆考核玩法。",
+                "already_active": "本群已有一场记忆考核公会赛。",
+                "multiplayer_active": "当前已有多人玩法进行中，暂不能发起公会赛。",
+            }.get(result.status, "公会赛创建失败，请稍后重试。")
         if content == "/记忆考核 对战":
             result = self._repository.start_memory_assessment_duel(
                 platform_id,
@@ -3027,6 +3111,204 @@ class GroupCommandHandler:
             "random_event_active": "random_event_active",
         }
         return self._reply("/记忆考核", scenarios[result.status], received_at)
+
+    def _memory_guild_team_config(
+        self, message: InboundMessage, content: str, received_at, group_chat_id
+    ) -> str:
+        if message.source_type != "group" or group_chat_id is None:
+            return "请在公会赛所在群配置队伍。"
+        parsed = parse_team_command(content)
+        if parsed is None:
+            return "格式：/队伍1 队名，或 /队伍1人员 玩家A，玩家B。"
+        slot, field, value = parsed
+        if field == "name":
+            result = self._repository.set_memory_guild_team_name(
+                message.sender_platform_id,
+                slot,
+                value,
+                received_at,
+                group_chat_id,
+            )
+        else:
+            try:
+                names = split_roster_names(value)
+            except ValueError as error:
+                return str(error)
+            result = self._repository.set_memory_guild_roster(
+                message.sender_platform_id,
+                slot,
+                names,
+                received_at,
+                group_chat_id,
+            )
+        if result.status in {"team_updated", "roster_updated"}:
+            team = result.team1 if slot == 1 else result.team2
+            if field == "name":
+                return f"✅ 队伍{slot}名称已设为：{team.name}。"
+            return (
+                f"✅ 队伍{slot}人员已更新："
+                + "、".join(member.display_name for member in team.members)
+                + "。"
+            )
+        return {
+            "no_match": "当前没有记忆考核公会赛。",
+            "host_only": "只有本场主持人可以配置队伍。",
+            "configuration_locked": "首场已进入选人，队伍配置已经锁定。",
+            "duplicate_team_name": "两个队伍不能使用相同名称。",
+            "unknown_member": "队伍人员中存在未入职或名称不正确的员工。",
+            "host_cannot_play": "主持人不能加入参赛队伍。",
+            "member_in_other_team": "同一名员工不能同时加入两个队伍。",
+            "invalid_team": "队伍名称应为 1–64 个字符。",
+            "invalid_roster": "队伍人员不能为空或重复。",
+        }.get(result.status, "队伍配置失败，请稍后重试。")
+
+    def _memory_guild_series_config(
+        self, message: InboundMessage, content: str, received_at, group_chat_id
+    ) -> str:
+        if message.source_type != "group" or group_chat_id is None:
+            return "请在公会赛所在群配置场次。"
+        parsed = parse_series_command(content)
+        if parsed is None:
+            return "格式：/第1场 4/7；胜场必须严格过半。"
+        sequence, win_target, maximum_decisive_rounds = parsed
+        result = self._repository.create_memory_guild_series(
+            message.sender_platform_id,
+            sequence,
+            win_target,
+            maximum_decisive_rounds,
+            received_at,
+            group_chat_id,
+        )
+        if result.status == "series_created":
+            label = "加时赛" if sequence > result.planned_series_count else "正式场"
+            return (
+                f"⚔️ 第{sequence}场（{label}）已创建："
+                f"{maximum_decisive_rounds}局{win_target}胜。\n"
+                "请两队成员分别私聊发送 /上场 玩家名称。"
+            )
+        return {
+            "no_match": "当前没有记忆考核公会赛。",
+            "host_only": "只有本场主持人可以配置场次。",
+            "invalid_series": "场次赛制无效，胜场必须严格过半。",
+            "invalid_sequence": "场次编号必须紧接上一场。",
+            "previous_series_active": "上一场尚未结束，不能配置新场次。",
+            "insufficient_roster": "两队名称必须完整，且每队人数不得少于预设场数。",
+            "tiebreaker_not_needed": "当前大比分无需加时赛。",
+        }.get(result.status, "场次配置失败，请稍后重试。")
+
+    def _memory_guild_lineup(
+        self, message: InboundMessage, content: str, received_at
+    ) -> str | list[CommandReply]:
+        if message.source_type != "direct":
+            return "请私聊总监事发送 /上场 玩家名称。"
+        candidates = self._repository.memory_guild_lineup_candidates(
+            message.sender_platform_id
+        )
+        candidate_lines = "\n".join(
+            f"{candidate.index}. {candidate.group_name}" for candidate in candidates
+        )
+        if not candidates:
+            return "你当前没有等待选择选手的公会赛。"
+        if len(candidates) > 1:
+            parts = content.split(maxsplit=2)
+            if len(parts) != 3 or not parts[1].isdigit():
+                return (
+                    "你在多个群有待选阵容，请发送 /上场 群序号 玩家名称：\n"
+                    + candidate_lines
+                )
+            selected = next(
+                (
+                    candidate
+                    for candidate in candidates
+                    if candidate.index == int(parts[1])
+                ),
+                None,
+            )
+            if selected is None:
+                return "群序号无效，请重新发送：\n" + candidate_lines
+            selected_name = parts[2].strip()
+        else:
+            parts = content.split(maxsplit=1)
+            if len(parts) != 2 or not parts[1].strip():
+                return "格式：/上场 玩家名称。"
+            selected = candidates[0]
+            selected_name = parts[1].strip()
+        result = self._repository.select_memory_guild_player(
+            message.sender_platform_id,
+            selected_name,
+            received_at,
+            selected.group_chat_id,
+        )
+        if result.status == "lineup_recorded":
+            return f"✅ 已锁定本队上场选手：{selected_name}。等待另一队选择。"
+        if result.status == "series_ready" and result.public_message is not None:
+            return [
+                CommandReply(
+                    f"✅ 已锁定本队上场选手：{selected_name}。双方阵容已公开。",
+                    destination_chatroom_id=message.chatroom_id,
+                    delivery_kind="direct",
+                ),
+                CommandReply(
+                    result.public_message,
+                    destination_chatroom_id=self._repository.group_chat_destination(
+                        selected.group_chat_id
+                    ),
+                    delivery_kind="group",
+                    group_chat_id=selected.group_chat_id,
+                ),
+            ]
+        return {
+            "lineup_locked": "本队本场上场选手已经锁定，不能更换。",
+            "invalid_player": "只能选择本队名单中的员工。",
+            "player_already_used": "该员工已在普通场次出场，不能重复上场。",
+            "not_team_member": "只有参赛队伍成员可以为本队选人。",
+            "wrong_state": "当前不在选择上场选手阶段。",
+            "no_match": "当前没有等待选择选手的公会赛。",
+        }.get(result.status, "选择上场选手失败，请稍后重试。")
+
+    def _memory_guild_start_round(
+        self, message: InboundMessage, received_at, group_chat_id
+    ) -> str | CommandReply:
+        if message.source_type != "group" or group_chat_id is None:
+            return "请在公会赛所在群发送 /开始对战。"
+        result = self._repository.start_memory_guild_round(
+            message.sender_platform_id, received_at, group_chat_id
+        )
+        if result.status == "round_started":
+            return CommandReply(
+                result.public_message or "",
+                recall_after_seconds=result.display_seconds,
+                memory_guild_round_id=result.round_id,
+            )
+        return {
+            "no_match": "当前没有记忆考核公会赛。",
+            "host_only": "只有本场主持人可以开始对战。",
+            "round_not_ready": "当前尚未完成双方选人，或上一小局仍未结束。",
+        }.get(result.status, "暂时不能开始新题。")
+
+    def _memory_guild_answer(
+        self,
+        message: InboundMessage,
+        answer: str,
+        received_at,
+        group_chat_id,
+    ) -> str | None:
+        result = self._repository.answer_memory_guild_round(
+            message.sender_platform_id,
+            message.platform_message_id,
+            answer,
+            received_at,
+            group_chat_id,
+        )
+        if result.public_message is not None:
+            return result.public_message
+        return {
+            "incorrect": "❌ 答案不正确，可继续发送 /答案 内容。",
+            "not_current_player": "只有本小局公开的两位选手可以作答。",
+            "round_closed": None,
+            "duplicate_answer": None,
+            "no_match": None,
+        }.get(result.status)
 
     def _memory_assessment_answer(
         self, platform_id: str, content: str, received_at
@@ -3229,11 +3511,18 @@ class GroupCommandHandler:
                 (
                     ("/记忆考核", "/记忆考核：发起单人挑战"),
                     ("/记忆考核", "/记忆考核 对战：发起双人对战"),
+                    ("/记忆考核", "/记忆考核 公会赛 场数：由主持人创建双队公会赛"),
+                    ("/队伍1", "/队伍1 队名；/队伍2 队名：设置两队名称"),
+                    ("/队伍1人员", "/队伍1人员 玩家A，玩家B；队伍2同理"),
+                    ("/公会赛场次", "/第1场 4/7：设置本场七局四胜"),
+                    ("/上场", "队员私聊 /上场 玩家名称：首个有效选择锁定"),
+                    ("/开始对战", "/开始对战：主持人开始当前小局并展示5级题目"),
                     ("/加入", "/加入：加入等待中的对战"),
-                    ("/记忆考核", "/答案 内容：提交记忆答案"),
+                    ("/答案", "/答案 内容：提交记忆答案"),
                     ("/继续", "/继续：单人挑战进入下一等级"),
                     ("/收手", "/收手：结算当前单人挑战奖励"),
                     ("/退出", "/退出：立即退出当前记忆考核对战"),
+                    ("/结束游戏", "/结束游戏：公会赛仅主持人可结束，董事会可强制结束"),
                 ),
             ),
             "谁是卧底": (

@@ -1794,7 +1794,15 @@ _COMMAND_DEFINITIONS = (
     ("/退出", "/退出", "退出当前参与的玩法"),
     ("/开始", "/开始", "开始当前已报名的游戏"),
     ("/摸鱼躲猫猫", "/开始摸鱼躲藏；/躲 编号", "发起单人躲猫猫小游戏"),
-    ("/记忆考核", "/记忆考核；/记忆考核 对战；/答案 内容", "发起或参与记忆考核"),
+    ("/记忆考核", "/记忆考核；/记忆考核 对战；/记忆考核 公会赛 场数", "发起或参与记忆考核"),
+    ("/答案", "/答案 内容", "提交记忆考核答案"),
+    ("/队伍1", "/队伍1 队名", "设置记忆考核公会赛队伍1名称"),
+    ("/队伍2", "/队伍2 队名", "设置记忆考核公会赛队伍2名称"),
+    ("/队伍1人员", "/队伍1人员 玩家A，玩家B", "设置记忆考核公会赛队伍1人员"),
+    ("/队伍2人员", "/队伍2人员 玩家A，玩家B", "设置记忆考核公会赛队伍2人员"),
+    ("/公会赛场次", "/第1场 4/7", "设置记忆考核公会赛场次赛制"),
+    ("/开始对战", "/开始对战", "由主持人开始公会赛当前小局"),
+    ("/上场", "/上场 玩家名称", "私聊选择公会赛本队上场选手"),
     ("/继续", "/继续", "继续当前等待下一轮的玩法"),
     ("/收手", "/收手", "结算当前单人记忆考核的奖励"),
     ("/投降", "/投降", "退出当前记忆考核对战"),
@@ -3862,6 +3870,12 @@ class CoreRepository:
         if "memory_assessment" in topic_set:
             settings = self.get_memory_assessment_settings()
             lines.append(f"记忆考核：{'可用' if settings.enabled else '已停用'}；单人每日 {settings.single_daily_limit} 次；单人展示 {settings.single_recall_seconds} 秒；对战展示 {settings.duel_recall_seconds} 秒")
+            lines.append(
+                "记忆考核公会赛：/记忆考核 公会赛 场数 创建；主持人设置两队名称与人员，"
+                "再用 /第N场 胜场/总局数 配置；队员私聊 /上场 玩家名称，"
+                "主持人逐小局发送 /开始对战，两位选手群内用 /答案 内容 抢答；"
+                "普通场每人只能上场一次，大比分平局后加时可复用选手。"
+            )
         if "undercover" in topic_set:
             settings = self.get_undercover_settings()
             summary = self.undercover_session_summary()
@@ -10739,14 +10753,37 @@ class CoreRepository:
                 )
                 if actor is not None and actor.id == memory_guild.host_user_id:
                     role = "host"
-                    commands = ("/结束游戏",)
+                    if memory_guild.state == "configuring":
+                        commands = (
+                            "/队伍1 队名",
+                            "/队伍1人员 名称列表",
+                            "/队伍2 队名",
+                            "/队伍2人员 名称列表",
+                            "/第1场 胜场/总局数",
+                            "/结束游戏",
+                        )
+                    elif memory_guild.state in {"ready", "waiting_round_start"}:
+                        commands = ("/开始对战", "/结束游戏")
+                    elif memory_guild.state == "waiting_series":
+                        commands = (
+                            f"/第{memory_guild.current_series_number + 1}场 胜场/总局数",
+                            "/结束游戏",
+                        )
+                    else:
+                        commands = ("/结束游戏",)
                 elif actor is not None and any(
                     member.user_id == actor.id
                     for team in (view.team1, view.team2)
                     for member in team.members
                 ):
                     role = "participant"
-                    commands = ()
+                    commands = (
+                        ("私聊 /上场 玩家名称",)
+                        if memory_guild.state == "waiting_lineup"
+                        else ("/答案 内容",)
+                        if memory_guild.state == "answering"
+                        else ()
+                    )
                 else:
                     role = "nonparticipant"
                     commands = ()
