@@ -6,7 +6,14 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from dzmm_bot.core.repository import CoreRepository
-from dzmm_bot.core.schema import Base, PRIMARY_GROUP_CHAT_ID, RankRecord
+from dzmm_bot.core.schema import (
+    Base,
+    MemoryGuildMatchRecord,
+    MemoryGuildSeriesRecord,
+    MemoryGuildTeamRecord,
+    PRIMARY_GROUP_CHAT_ID,
+    RankRecord,
+)
 
 
 @pytest.fixture
@@ -202,3 +209,203 @@ def test_only_host_can_end_match_and_admin_force_end_is_supported(repository, no
         "memory_guild", second.match_id, now, PRIMARY_GROUP_CHAT_ID
     ) is True
     assert repository.memory_guild_match_view(PRIMARY_GROUP_CHAT_ID) is None
+
+
+def _configure_match(
+    repository,
+    now,
+    planned_series_count=2,
+    group_chat_id=PRIMARY_GROUP_CHAT_ID,
+):
+    repository.start_memory_guild_match(
+        "host", planned_series_count, now, group_chat_id
+    )
+    repository.set_memory_guild_team_name(
+        "host", 1, "女仆公馆队", now, group_chat_id
+    )
+    repository.set_memory_guild_team_name(
+        "host", 2, "摸鱼事务所队", now, group_chat_id
+    )
+    repository.set_memory_guild_roster(
+        "host", 1, ("G", "彻", "苏白"), now, group_chat_id
+    )
+    repository.set_memory_guild_roster(
+        "host", 2, ("玩家A", "玩家B", "玩家C"), now, group_chat_id
+    )
+
+
+def test_first_series_requires_complete_rosters(repository, now):
+    repository.start_memory_guild_match("host", 2, now, PRIMARY_GROUP_CHAT_ID)
+    repository.set_memory_guild_team_name(
+        "host", 1, "女仆公馆队", now, PRIMARY_GROUP_CHAT_ID
+    )
+    repository.set_memory_guild_team_name(
+        "host", 2, "摸鱼事务所队", now, PRIMARY_GROUP_CHAT_ID
+    )
+    repository.set_memory_guild_roster(
+        "host", 1, ("G",), now, PRIMARY_GROUP_CHAT_ID
+    )
+    repository.set_memory_guild_roster(
+        "host", 2, ("玩家A", "玩家B"), now, PRIMARY_GROUP_CHAT_ID
+    )
+
+    result = repository.create_memory_guild_series(
+        "host", 1, 2, 3, now, PRIMARY_GROUP_CHAT_ID
+    )
+
+    assert result.status == "insufficient_roster"
+
+
+def test_series_numbers_are_sequential_and_previous_must_be_settled(repository, now):
+    _configure_match(repository, now)
+
+    assert repository.create_memory_guild_series(
+        "host", 2, 2, 3, now, PRIMARY_GROUP_CHAT_ID
+    ).status == "invalid_sequence"
+    assert repository.create_memory_guild_series(
+        "host", 1, 2, 3, now, PRIMARY_GROUP_CHAT_ID
+    ).status == "series_created"
+    assert repository.create_memory_guild_series(
+        "host", 2, 2, 3, now, PRIMARY_GROUP_CHAT_ID
+    ).status == "previous_series_active"
+
+
+def test_private_lineup_first_selection_locks_until_both_teams_ready(repository, now):
+    _configure_match(repository, now)
+    repository.create_memory_guild_series(
+        "host", 1, 2, 3, now, PRIMARY_GROUP_CHAT_ID
+    )
+
+    candidates = repository.memory_guild_lineup_candidates("red-1")
+    assert len(candidates) == 1
+    assert candidates[0].group_chat_id == PRIMARY_GROUP_CHAT_ID
+
+    first = repository.select_memory_guild_player(
+        "red-1", "G", now, PRIMARY_GROUP_CHAT_ID
+    )
+    assert first.status == "lineup_recorded"
+    assert first.public_message is None
+    assert repository.select_memory_guild_player(
+        "red-2", "彻", now, PRIMARY_GROUP_CHAT_ID
+    ).status == "lineup_locked"
+
+    second = repository.select_memory_guild_player(
+        "blue-2", "玩家A", now, PRIMARY_GROUP_CHAT_ID
+    )
+    assert second.status == "series_ready"
+    assert "G" in second.public_message
+    assert "玩家A" in second.public_message
+    assert "请主持人发送 /开始对战" in second.public_message
+
+
+def test_lineup_must_select_a_member_of_the_actors_team(repository, now):
+    _configure_match(repository, now)
+    repository.create_memory_guild_series(
+        "host", 1, 2, 3, now, PRIMARY_GROUP_CHAT_ID
+    )
+
+    assert repository.select_memory_guild_player(
+        "red-1", "玩家A", now, PRIMARY_GROUP_CHAT_ID
+    ).status == "invalid_player"
+    assert repository.select_memory_guild_player(
+        "host", "G", now, PRIMARY_GROUP_CHAT_ID
+    ).status == "not_team_member"
+
+
+def test_regular_series_rejects_a_player_used_in_an_earlier_series(
+    repository, session_factory, now
+):
+    _configure_match(repository, now, planned_series_count=2)
+    repository.create_memory_guild_series(
+        "host", 1, 1, 1, now, PRIMARY_GROUP_CHAT_ID
+    )
+    repository.select_memory_guild_player("red-1", "G", now, PRIMARY_GROUP_CHAT_ID)
+    repository.select_memory_guild_player(
+        "blue-1", "玩家A", now, PRIMARY_GROUP_CHAT_ID
+    )
+    with session_factory.begin() as session:
+        match = session.scalar(select(MemoryGuildMatchRecord))
+        series = session.scalar(select(MemoryGuildSeriesRecord))
+        teams = list(
+            session.scalars(
+                select(MemoryGuildTeamRecord).order_by(MemoryGuildTeamRecord.slot)
+            )
+        )
+        series.state = "finished"
+        series.winner_team_id = teams[0].id
+        series.finished_at = now
+        teams[0].series_wins = 1
+        match.state = "waiting_series"
+
+    assert repository.create_memory_guild_series(
+        "host", 2, 1, 1, now, PRIMARY_GROUP_CHAT_ID
+    ).status == "series_created"
+    assert repository.select_memory_guild_player(
+        "red-2", "G", now, PRIMARY_GROUP_CHAT_ID
+    ).status == "player_already_used"
+
+
+def test_private_lineup_candidates_disambiguate_multiple_groups(repository, now):
+    second_group = repository.create_group_chat(
+        "第二群",
+        "https://www.aikda.com/chat?c=memory-guild-second",
+        True,
+        True,
+        False,
+        False,
+        now,
+        enabled_game_types=("memory_assessment",),
+    )
+    for group_chat_id in (PRIMARY_GROUP_CHAT_ID, second_group.id):
+        _configure_match(repository, now, group_chat_id=group_chat_id)
+        repository.create_memory_guild_series(
+            "host", 1, 2, 3, now, group_chat_id
+        )
+
+    candidates = repository.memory_guild_lineup_candidates("red-1")
+
+    assert len(candidates) == 2
+    assert {candidate.group_chat_id for candidate in candidates} == {
+        PRIMARY_GROUP_CHAT_ID,
+        second_group.id,
+    }
+    assert repository.select_memory_guild_player(
+        "red-1", "G", now
+    ).status == "ambiguous_group"
+
+
+def test_regular_series_rejects_used_player_but_overtime_allows_reuse(
+    repository, session_factory, now
+):
+    _configure_match(repository, now, planned_series_count=1)
+    repository.create_memory_guild_series(
+        "host", 1, 1, 1, now, PRIMARY_GROUP_CHAT_ID
+    )
+    repository.select_memory_guild_player("red-1", "G", now, PRIMARY_GROUP_CHAT_ID)
+    repository.select_memory_guild_player(
+        "blue-1", "玩家A", now, PRIMARY_GROUP_CHAT_ID
+    )
+    with session_factory.begin() as session:
+        match = session.scalar(select(MemoryGuildMatchRecord))
+        series = session.scalar(select(MemoryGuildSeriesRecord))
+        teams = list(
+            session.scalars(
+                select(MemoryGuildTeamRecord).order_by(MemoryGuildTeamRecord.slot)
+            )
+        )
+        series.state = "finished"
+        series.winner_team_id = teams[0].id
+        series.finished_at = now
+        teams[0].series_wins = 1
+        teams[1].series_wins = 1
+        match.state = "waiting_series"
+
+    assert repository.create_memory_guild_series(
+        "host", 2, 1, 1, now, PRIMARY_GROUP_CHAT_ID
+    ).status == "series_created"
+    assert repository.select_memory_guild_player(
+        "red-2", "G", now, PRIMARY_GROUP_CHAT_ID
+    ).status == "lineup_recorded"
+    assert repository.select_memory_guild_player(
+        "blue-2", "玩家A", now, PRIMARY_GROUP_CHAT_ID
+    ).status == "series_ready"
