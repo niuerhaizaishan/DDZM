@@ -192,7 +192,7 @@ def test_migration_60_persists_inbound_image_metadata(
             )
         )
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "20260827_60")
 
     inspector = inspect(engine)
     assert {

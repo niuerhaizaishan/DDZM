@@ -91,7 +91,10 @@ def test_command_registry_exposes_exact_enabled_syntax(repository):
 
     assert commands["/入职"] == "/入职 名字"
     assert commands["/摸鱼躲猫猫"] == "/开始摸鱼躲藏；/躲 编号"
-    assert commands["/记忆考核"] == "/记忆考核；/记忆考核 对战；/答案 内容"
+    assert commands["/记忆考核"] == (
+        "/记忆考核；/记忆考核 对战；/记忆考核 公会赛 场数"
+    )
+    assert commands["/答案"] == "/答案 内容"
     assert commands["/谁是卧底"] == "/谁是卧底 人数"
     assert commands["/甩锅"] == "/甩锅 玩家编号 甩锅理由"
     assert commands["/发奖金"] == (
