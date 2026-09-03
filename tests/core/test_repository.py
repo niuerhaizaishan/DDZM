@@ -6811,6 +6811,30 @@ def test_undercover_active_session_blocks_memory_assessment_duel(
     assert repository.start_memory_assessment_duel("undercover-1", now).status == "multiplayer_active"
 
 
+def test_king_game_blocks_memory_assessment_single(repository, now):
+    repository.bootstrap_primary_group("https://www.aikda.com/chat?c=king-memory", now)
+    repository.create_user("king-host", "国王主持", now, 20)
+    repository.create_user("memory-player", "考核玩家", now, 20)
+
+    assert repository.start_king_game("king-host", now).status == "signup_started"
+    assert (
+        repository.start_memory_assessment_single("memory-player", now).status
+        == "multiplayer_active"
+    )
+
+
+def test_king_game_blocks_memory_assessment_duel(repository, now):
+    repository.bootstrap_primary_group("https://www.aikda.com/chat?c=king-memory", now)
+    repository.create_user("king-host", "国王主持", now, 20)
+    repository.create_user("duel-player", "对战玩家", now, 20)
+
+    assert repository.start_king_game("king-host", now).status == "signup_started"
+    assert (
+        repository.start_memory_assessment_duel("duel-player", now).status
+        == "multiplayer_active"
+    )
+
+
 def test_due_random_event_is_skipped_while_undercover_signup_is_active(
     repository, session_factory, now
 ):

@@ -1305,10 +1305,12 @@ class GroupCommandHandler:
         )
         if result.status == "joined":
             return f"已加入国王游戏，当前 {len(result.players)} 人。"
+        if result.status == "queued":
+            return "已加入下一轮候选，下一轮开始时自动加入。"
         return {
             "no_game": "当前没有可加入的国王游戏报名局。",
-            "already_started": "本局国王游戏已经开始，不能再加入。",
             "already_joined": "你已经在当前国王游戏中。",
+            "already_queued": "你已经在下一轮候选中。",
             "not_joined": "请先用 /入职 名字 加入摸鱼公司。",
         }.get(result.status, "当前不能加入国王游戏。")
 
@@ -3492,6 +3494,7 @@ class GroupCommandHandler:
             "disabled": "disabled",
             "daily_limit": "daily_limit",
             "already_active": "already_active",
+            "multiplayer_active": "single_multiplayer_active",
             "random_event_active": "random_event_active",
         }
         return self._reply("/记忆考核", scenarios[result.status], received_at)

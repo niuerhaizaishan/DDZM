@@ -270,6 +270,7 @@ TEMPLATE_DEFINITIONS = (
     TemplateDefinition("/记忆考核", "duel_daily_limit", "对战次数已用完", "你今天可发起的多人小游戏次数已用完。", ("{日期}",)),
     TemplateDefinition("/记忆考核", "already_active", "考核正在进行", "当前有一场记忆考核正在进行，请稍后再试。", ("{日期}",)),
     TemplateDefinition("/记忆考核", "multiplayer_active", "多人玩法进行中", "当前已有多人玩法进行中，暂不能发起记忆考核对战。", ("{日期}",)),
+    TemplateDefinition("/记忆考核", "single_multiplayer_active", "多人玩法进行中", "当前已有多人玩法进行中，暂不能发起记忆考核。", ("{日期}",)),
     TemplateDefinition("/记忆考核", "random_event_active", "随机事件优先", "当前随机事件正在报名或进行中，暂不能发起或加入记忆考核。", ("{日期}",)),
     TemplateDefinition("/记忆考核", "started", "展示考题", "【记忆考核·第 {等级} 级】请记住：{考核文本}", ("{昵称}", "{等级}", "{考核文本}", "{撤回秒数}", "{日期}")),
     TemplateDefinition("/记忆考核", "duel_waiting", "等待对手", "{昵称} 发起了记忆考核对战，另一位员工请发送 /加入 入局。", ("{昵称}", "{等级}", "{日期}")),

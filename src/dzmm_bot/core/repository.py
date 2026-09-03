@@ -11748,8 +11748,6 @@ class CoreRepository:
                 game = self._active_king_game(session, group_chat_id)
                 if game is None:
                     return KingGameResult("no_game")
-                if game.state != "signup":
-                    return self._king_game_result_locked(session, game, "already_started")
                 user = self._king_game_user(session, platform_id)
                 if user is None:
                     return self._king_game_result_locked(session, game, "not_joined")
@@ -11761,6 +11759,26 @@ class CoreRepository:
                     )
                     .with_for_update()
                 )
+                if game.state != "signup":
+                    if player is not None and player.state == "active":
+                        return self._king_game_result_locked(session, game, "already_joined")
+                    if player is not None and player.state == "signup":
+                        return self._king_game_result_locked(session, game, "already_queued")
+                    if player is None:
+                        player = KingGamePlayerRecord(
+                            game_id=game.id,
+                            user_id=user.id,
+                            roster_order=self._next_king_game_roster_order(session, game.id),
+                            state="signup",
+                            joined_at=now,
+                        )
+                        session.add(player)
+                    else:
+                        player.state = "signup"
+                        player.joined_at = now
+                        player.left_at = None
+                    session.flush()
+                    return self._king_game_result_locked(session, game, "queued")
                 if player is not None and player.state != "withdrawn":
                     return self._king_game_result_locked(session, game, "already_joined")
                 if player is None:
@@ -11865,9 +11883,11 @@ class CoreRepository:
                     return self._king_game_result_locked(session, game, "not_participant")
                 if game.state != "revealed":
                     return self._king_game_result_locked(session, game, "wrong_state")
-                if game.end_after_round or len(self._active_king_game_players(session, game.id)) < 3:
+                self._promote_king_game_candidates_locked(session, game.id)
+                if len(self._active_king_game_players(session, game.id)) < 3:
                     self._finish_king_game_locked(game, "completed", "not_enough_players", now)
                     return self._king_game_result_locked(session, game, "completed")
+                game.end_after_round = False
                 game.state = "awaiting_reveal"
                 self._start_king_game_round_locked(session, game, now, settings)
                 return self._king_game_result_locked(session, game, "next_round")
@@ -12012,6 +12032,12 @@ class CoreRepository:
                 .with_for_update()
             )
         )
+
+    def _promote_king_game_candidates_locked(
+        self, session: Session, game_id: UUID
+    ) -> None:
+        for player, _ in self._active_king_game_players(session, game_id, "signup"):
+            player.state = "active"
 
     @staticmethod
     def _is_active_king_game_player(session: Session, game_id: UUID, user_id: UUID) -> bool:
@@ -15663,6 +15689,16 @@ class CoreRepository:
             or session.scalar(
                 select(
                     exists().where(
+                        KingGameRecord.active_key == "global",
+                        *(() if group_chat_id is None else (
+                            KingGameRecord.group_chat_id == group_chat_id,
+                        )),
+                    )
+                )
+            )
+            or session.scalar(
+                select(
+                    exists().where(
                         PerformanceReservationRecord.state.in_(
                             ("previewed", "waiting", "performing", "tipping")
                         ),
@@ -17761,10 +17797,6 @@ class CoreRepository:
                     return MemoryAssessmentGameResult(
                         "random_event_active", display_name=user.display_name
                     )
-                if self._active_number_bomb_game(session, group_chat_id) is not None:
-                    return MemoryAssessmentGameResult(
-                        "already_active", display_name=user.display_name
-                    )
                 self._expire_previous_day_memory_assessment_single(
                     session, now, group_chat_id
                 )
@@ -17779,6 +17811,10 @@ class CoreRepository:
                 if active is not None:
                     return MemoryAssessmentGameResult(
                         "already_active", display_name=user.display_name
+                    )
+                if self._has_active_game(session, group_chat_id):
+                    return MemoryAssessmentGameResult(
+                        "multiplayer_active", display_name=user.display_name
                     )
                 daily = session.scalar(
                     select(MemoryAssessmentDailyPlayRecord)
@@ -17905,18 +17941,6 @@ class CoreRepository:
                     return MemoryAssessmentGameResult(
                         "random_event_active", display_name=user.display_name
                     )
-                if self._active_undercover_session(session, group_chat_id) is not None:
-                    return MemoryAssessmentGameResult(
-                        "multiplayer_active", display_name=user.display_name
-                    )
-                if self._active_blame_game(session, group_chat_id) is not None:
-                    return MemoryAssessmentGameResult(
-                        "multiplayer_active", display_name=user.display_name
-                    )
-                if self._active_number_bomb_game(session, group_chat_id) is not None:
-                    return MemoryAssessmentGameResult(
-                        "multiplayer_active", display_name=user.display_name
-                    )
                 self._expire_previous_day_memory_assessment_single(
                     session, now, group_chat_id
                 )
@@ -17930,6 +17954,10 @@ class CoreRepository:
                 ) is not None:
                     return MemoryAssessmentGameResult(
                         "already_active", display_name=user.display_name
+                    )
+                if self._has_active_game(session, group_chat_id):
+                    return MemoryAssessmentGameResult(
+                        "multiplayer_active", display_name=user.display_name
                     )
                 rule = session.get(
                     MemoryAssessmentLevelRuleRecord, settings.duel_difficulty_level

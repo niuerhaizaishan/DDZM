@@ -176,6 +176,88 @@ def test_king_game_group_command_flow():
     assert "第 2 轮" in _latest_reply(factory)
 
 
+def test_king_game_join_during_a_round_takes_effect_next_round():
+    service, repository, factory = _service()
+    now = datetime(2026, 9, 3, 12, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group("https://www.aikda.com/chat?c=king-game-queue", now)
+    for platform_id, name in (
+        ("host", "主持"),
+        ("u2", "二号"),
+        ("u3", "三号"),
+        ("u4", "四号"),
+    ):
+        _group_receive(
+            service,
+            f"join-{platform_id}",
+            platform_id,
+            f"/入职 {name}",
+            now,
+            "king-game-queue",
+        )
+
+    _group_receive(service, "create", "host", "/国王游戏", now, "king-game-queue")
+    _group_receive(service, "game-join-2", "u2", "/加入", now, "king-game-queue")
+    _group_receive(service, "game-join-3", "u3", "/加入", now, "king-game-queue")
+    _group_receive(service, "begin", "host", "/开始", now, "king-game-queue")
+
+    _group_receive(service, "queue-4", "u4", "/加入", now, "king-game-queue")
+    assert _latest_reply(factory) == "已加入下一轮候选，下一轮开始时自动加入。"
+
+    with repository._session() as session:
+        from dzmm_bot.core.schema import KingGameRecord, KingGameRoundRecord, UserRecord
+
+        game = session.scalar(select(KingGameRecord))
+        assert game is not None
+        first_round = session.scalar(
+            select(KingGameRoundRecord).where(KingGameRoundRecord.game_id == game.id)
+        )
+        queued_user = session.scalar(select(UserRecord).where(UserRecord.platform_id == "u4"))
+        king = session.get(UserRecord, game.current_king_user_id)
+        assert first_round is not None
+        assert queued_user is not None
+        assert king is not None
+        assert str(queued_user.id) not in first_round.number_map
+
+    _group_receive(service, "reveal", king.platform_id, "/公开 1", now, "king-game-queue")
+    _group_receive(service, "continue", "u2", "/继续", now, "king-game-queue")
+
+    with repository._session() as session:
+        from dzmm_bot.core.schema import KingGameRecord, KingGameRoundRecord, UserRecord
+
+        game = session.scalar(select(KingGameRecord))
+        queued_user = session.scalar(select(UserRecord).where(UserRecord.platform_id == "u4"))
+        assert game is not None
+        assert queued_user is not None
+        second_round = session.scalar(
+            select(KingGameRoundRecord).where(
+                KingGameRoundRecord.game_id == game.id,
+                KingGameRoundRecord.sequence == 2,
+            )
+        )
+        assert second_round is not None
+        assert str(queued_user.id) in second_round.number_map
+
+
+def test_king_game_blocks_single_memory_assessment_command():
+    service, repository, factory = _service()
+    now = datetime(2026, 9, 3, 12, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group("https://www.aikda.com/chat?c=king-memory", now)
+    for platform_id, name in (("king-host", "国王主持"), ("memory-player", "考核玩家")):
+        _group_receive(
+            service,
+            f"join-{platform_id}",
+            platform_id,
+            f"/入职 {name}",
+            now,
+            "king-memory",
+        )
+
+    _group_receive(service, "king-game", "king-host", "/国王游戏", now, "king-memory")
+    _group_receive(service, "memory-game", "memory-player", "/记忆考核", now, "king-memory")
+
+    assert _latest_reply(factory) == "当前已有多人玩法进行中，暂不能发起记忆考核。"
+
+
 def test_groups_can_enable_number_bomb_and_texas_holdem_independently():
     service, repository, factory = _service()
     now = datetime(2026, 8, 19, 10, 0, tzinfo=BEIJING)
