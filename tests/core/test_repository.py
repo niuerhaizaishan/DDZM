@@ -6990,10 +6990,41 @@ def test_department_headcounts_include_nonempty_default_disabled_and_unknown_ran
         )
         for item in headcounts
     ] == [
-        ("未分配部门", 2, [("实习生", 1), ("正式员工", 1)]),
+        ("未分配部门", 1, [("正式员工", 1)]),
         ("学院", 1, [("未知职位", 1)]),
         ("核心技术部", 2, [("实习生", 1), ("正式员工", 1)]),
     ]
+
+
+def test_department_headcounts_hide_unassigned_interns_from_overview(
+    repository, session_factory, now
+):
+    from dzmm_bot.core.schema import DepartmentRecord, RankRecord, UserRecord
+
+    repository.create_user("intern", "实习生", now, 0)
+    repository.create_user("employee", "正式员工", now, 0)
+    with session_factory.begin() as session:
+        default = session.scalar(
+            select(DepartmentRecord).where(DepartmentRecord.is_default.is_(True))
+        )
+        rank_two = session.scalar(
+            select(RankRecord).where(RankRecord.sort_order == 2)
+        )
+        assert default is not None
+        assert rank_two is not None
+        session.scalar(
+            select(UserRecord).where(UserRecord.platform_id == "employee")
+        ).rank_id = rank_two.id
+
+    headcounts = repository.list_department_headcounts()
+
+    assert [(item.department_name, item.total_count) for item in headcounts] == [
+        ("未分配部门", 1)
+    ]
+    assert [
+        (rank.rank_name, rank.count) for rank in headcounts[0].ranks
+    ] == [("正式员工", 1)]
+    assert repository.get_user_department_headcount("intern").total_count == 2
 
 
 def test_user_department_headcount_returns_only_current_department(

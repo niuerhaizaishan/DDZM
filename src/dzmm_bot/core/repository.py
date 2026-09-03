@@ -23113,7 +23113,7 @@ class CoreRepository:
     def list_department_headcounts(self) -> tuple[DepartmentHeadcount, ...]:
         with self._session() as session:
             self._ensure_organization_defaults(session)
-            return self._department_headcounts(session)
+            return self._department_headcounts(session, hide_default_interns=True)
 
     def get_user_department_headcount(
         self, platform_id: str
@@ -23132,7 +23132,10 @@ class CoreRepository:
 
     @staticmethod
     def _department_headcounts(
-        session: Session, department_id: UUID | None = None
+        session: Session,
+        department_id: UUID | None = None,
+        *,
+        hide_default_interns: bool = False,
     ) -> tuple[DepartmentHeadcount, ...]:
         statement = (
             select(
@@ -23155,6 +23158,14 @@ class CoreRepository:
         )
         if department_id is not None:
             statement = statement.where(DepartmentRecord.id == department_id)
+        if hide_default_interns:
+            statement = statement.where(
+                or_(
+                    DepartmentRecord.is_default.is_(False),
+                    RankRecord.sort_order != 1,
+                    RankRecord.sort_order.is_(None),
+                )
+            )
         rows = session.execute(statement).all()
         grouped: dict[
             tuple[UUID, str, bool], list[DepartmentRankHeadcount]

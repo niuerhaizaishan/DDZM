@@ -2455,8 +2455,6 @@ def test_department_headcount_commands_show_totals_rank_counts_and_members():
     all_reply = "\n".join(_replies_for(factory, all_result.message_id))
     assert all_reply == (
         "【部门人数统计】\n"
-        "未分配部门：共 1 人\n实习生：1 人\n"
-        "职位人员：\n1. 实习生：未分配同事\n\n"
         "核心技术部：共 3 人\n实习生：2 人\n正式员工：1 人\n"
         "职位人员：\n1. 正式员工：技术乙\n2. 实习生：查询人、技术甲"
     )
@@ -2580,9 +2578,7 @@ def test_department_headcount_command_honors_template_disable_and_help():
     repository.set_reply_template("/部门人数", "shown", "统计如下：\n{部门统计}")
 
     customized = _receive(service, "custom-counts", "employee", "/部门人数", now)
-    assert _replies_for(factory, customized.message_id)[0].startswith(
-        "统计如下：\n未分配部门：共 1 人"
-    )
+    assert _replies_for(factory, customized.message_id) == ["统计如下：\n"]
 
     help_result = _receive(service, "department-help", "employee", "/帮助 部门", now)
     help_reply = _replies_for(factory, help_result.message_id)[0]
