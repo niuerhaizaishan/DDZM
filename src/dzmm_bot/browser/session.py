@@ -192,6 +192,7 @@ class BrowserSession:
                 {
                     "procedure": procedure,
                     "payload": payload,
+                    "method": "POST" if procedure == "chatroom.addBot" else "GET",
                     "timeoutMs": _TRPC_REQUEST_TIMEOUT_MS,
                 },
             )
@@ -410,15 +411,20 @@ _TOKEN_SCRIPT = """async () => {
 }"""
 
 
-_TRPC_SCRIPT = """async ({ procedure, payload, timeoutMs }) => {
+_TRPC_SCRIPT = """async ({ procedure, payload, method, timeoutMs }) => {
   const input = { json: payload ?? null };
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(
-      `/api/trpc/${procedure}?input=${encodeURIComponent(JSON.stringify(input))}`,
-      { signal: controller.signal }
-    );
+    const url = method === 'POST'
+      ? `/api/trpc/${procedure}`
+      : `/api/trpc/${procedure}?input=${encodeURIComponent(JSON.stringify(input))}`;
+    const response = await fetch(url, {
+      method,
+      headers: method === 'POST' ? { 'content-type': 'application/json' } : undefined,
+      body: method === 'POST' ? JSON.stringify(input) : undefined,
+      signal: controller.signal,
+    });
     if (!response.ok) {
       throw new Error(`Aikda ${procedure} request failed status=${response.status}`);
     }

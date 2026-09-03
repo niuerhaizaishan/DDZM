@@ -328,6 +328,21 @@ def test_trpc_unauthorized_response_is_classified_as_authentication_loss(tmp_pat
         session._request("user.getMe")
 
 
+def test_trpc_add_bot_uses_a_post_mutation_request(tmp_path):
+    context = FakeContext("https://chat.example/chat?c=group-1")
+    observed = {}
+    context.pages[0].evaluate = lambda _script, argument=None: observed.update(argument) or {}
+    session = BrowserSession(
+        tmp_path / "profile", "https://chat.example/login",
+        chat_url="https://chat.example/chat?c=group-1",
+    )
+    session._context = context
+
+    session._request("chatroom.addBot", {"chatroomId": "group-1", "botId": "bot-1"})
+
+    assert observed["method"] == "POST"
+
+
 def test_configured_session_recovers_socket_identity_from_auth_cookie_on_418(tmp_path):
     page = FakePage("https://chat.example/chat?c=group-1")
     page.evaluate = lambda _script, _argument=None: (_ for _ in ()).throw(
