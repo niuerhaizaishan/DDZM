@@ -225,6 +225,7 @@ def test_systemd_units_use_environment_factories_and_isolated_ports():
     assert "dzmm-core.service" in ai_worker
     assert "Description=DZMM DeepSeek AI Worker" in ai_worker
     assert "DP_API_KEY=CHANGE_ME" in example_env
+    assert "DZMM_BOT_ID=" in example_env
     assert "DZMM_DEEPSEEK_MODEL=deepseek-v4-flash" in example_env
     assert "DZMM_DEEPSEEK_BASE_URL=https://api.deepseek.com" in example_env
     assert "MINIMAX" not in (ai_worker + example_env).upper()

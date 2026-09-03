@@ -83,6 +83,8 @@ class FakeRequest:
         self.calls.append((procedure, payload))
         if procedure == "user.getMe":
             return self.profile
+        if procedure == "chatroom.addBot":
+            return {"success": True}
         if procedure == "chat.listAll":
             return {"items": self.rooms}
         if procedure == "chatroom.getMessages":
@@ -239,6 +241,23 @@ def test_concurrent_socket_sends_to_the_same_room_wait_for_the_previous_ack():
         thread.join()
 
     assert socket.max_pending_acknowledgements == 1
+
+
+def test_add_bot_uses_the_logged_in_account_and_target_chatroom():
+    request = FakeRequest()
+    gateway = AikdaSocketGateway(
+        TARGET_URL,
+        token_provider=lambda: "token",
+        request=request,
+        socket_factory=FakeSocket,
+        clock=lambda: NOW,
+    )
+
+    gateway.add_bot_to_chatroom("target-room", "long-message-bot")
+
+    assert request.calls == [
+        ("chatroom.addBot", {"chatroomId": "target-room", "botId": "long-message-bot"})
+    ]
 
 
 def test_close_does_not_hold_state_lock_while_waiting_for_disconnect_callback():

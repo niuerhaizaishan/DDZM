@@ -48,6 +48,7 @@ def create_worker(settings: Settings) -> BrowserWorker:
         desktop=desktop,
         clock=lambda: datetime.now(ZoneInfo("Asia/Shanghai")),
         bot_sender=bot_sender,
+        long_message_bot_id=settings.long_message_bot_id,
         outbound_concurrency=settings.outbound_concurrency,
     )
     return worker

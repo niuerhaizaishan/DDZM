@@ -14,6 +14,8 @@ class AdminCorePort(Protocol):
     def update_group_chat(self, group_id: str, group: dict) -> dict: ...
 
     def delete_group_chat(self, group_id: str, now: str) -> dict: ...
+    def add_bot_to_group(self, group_id: str) -> dict: ...
+
 
     def login_state(self) -> str | None: ...
 
@@ -350,6 +352,11 @@ class CoreClient:
         )
         response.raise_for_status()
         return response.json()
+    def add_bot_to_group(self, group_id: str) -> dict:
+        response = self._client.post(f"/internal/group-chats/{group_id}/add-bot")
+        response.raise_for_status()
+        return response.json()
+
 
     def login_state(self) -> str | None:
         heartbeat = self._get("/internal/login-state")

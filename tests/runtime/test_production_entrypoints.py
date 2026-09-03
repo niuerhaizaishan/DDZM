@@ -79,6 +79,7 @@ def test_browser_worker_factory_wires_the_bot_sender_to_the_configured_group(mon
         _settings(),
         chat_url="https://www.dzmm.ai/chat?c=group-1",
         bot_api_token="bot-secret",
+        long_message_bot_id="long-message-bot",
     )
     monkeypatch.setattr(browser_main, "BrowserSession", FakeComponent)
     monkeypatch.setattr(browser_main, "AuthDesktopController", FakeComponent)
@@ -91,4 +92,5 @@ def test_browser_worker_factory_wires_the_bot_sender_to_the_configured_group(mon
     worker = browser_main.create_worker(settings)
 
     assert worker._bot_sender.token == "bot-secret"
+    assert worker._long_message_bot_id == "long-message-bot"
     assert not hasattr(worker, "_bot_chatroom_id")

@@ -73,6 +73,7 @@ class BrowserWorker:
         sleep: Callable[[float], None] = default_sleep,
         lease_seconds: int = 30,
         bot_sender: BotSender | None = None,
+        long_message_bot_id: str | None = None,
         outbound_concurrency: int = 4,
     ) -> None:
         if not 1 <= outbound_concurrency <= 16:
@@ -86,6 +87,7 @@ class BrowserWorker:
         self._sleep = sleep
         self._lease_seconds = lease_seconds
         self._bot_sender = bot_sender
+        self._long_message_bot_id = long_message_bot_id
         self._bot_delivery_status = (
             ("unknown", None) if bot_sender is not None else ("unconfigured", None)
         )
@@ -674,6 +676,15 @@ class BrowserWorker:
                 platform_message_id = gateway.send("【撤回验证】这条消息会立即撤回。")
                 gateway.retract(platform_message_id)
                 _LOGGER.info("worker retraction test succeeded: %s", platform_message_id)
+            elif command.command.startswith("add_bot:"):
+                if not self._long_message_bot_id:
+                    raise ValueError("long message bot ID is not configured")
+                chatroom_id = command.command.removeprefix("add_bot:")
+                if not chatroom_id:
+                    raise ValueError("target chatroom ID is missing")
+                self._ensure_gateway().add_bot_to_chatroom(
+                    chatroom_id, self._long_message_bot_id
+                )
             else:
                 raise ValueError(f"unsupported worker command: {command.command}")
         except Exception:

@@ -79,6 +79,17 @@ def test_settings_reads_optional_bot_api_token(monkeypatch):
     assert Settings.from_environment().bot_api_token == "bot-secret"
 
 
+def test_settings_reads_the_configured_long_message_bot_id(monkeypatch):
+    monkeypatch.setenv("DZMM_DATABASE_URL", "postgresql+psycopg://dzmm@localhost/dzmm")
+    monkeypatch.setenv("DZMM_CORE_TOKEN", "core-secret")
+    monkeypatch.setenv("DZMM_BOT_ID", "311a2438-cff6-4986-b1d8-81396f8ca4ef")
+
+    assert (
+        Settings.from_environment().long_message_bot_id
+        == "311a2438-cff6-4986-b1d8-81396f8ca4ef"
+    )
+
+
 def test_settings_reads_deepseek_runtime_configuration(monkeypatch):
     monkeypatch.setenv("DZMM_DATABASE_URL", "postgresql+psycopg://dzmm@localhost/dzmm")
     monkeypatch.setenv("DZMM_CORE_TOKEN", "core-secret")

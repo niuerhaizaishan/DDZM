@@ -339,6 +339,22 @@ def create_app(
             for target in repository.enabled_group_targets()
         ]
 
+    @app.post(
+        "/internal/group-chats/{group_id}/add-bot",
+        response_model=WorkerCommandResponse,
+    )
+    def add_bot_to_group_chat(
+        group_id: UUID,
+        _: Annotated[None, Depends(authorize)],
+    ) -> WorkerCommandResponse:
+        try:
+            command = repository.enqueue_group_chat_bot_add(group_id)
+        except LookupError as error:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(error))
+        except ValueError as error:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(error))
+        return _worker_command_response(command)
+
     @app.post("/internal/group-chats/runtime", response_model=AcceptedResponse)
     def sync_group_chat_runtime(
         request: SyncGroupChatRuntimeRequest,

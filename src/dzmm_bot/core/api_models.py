@@ -1514,7 +1514,7 @@ class WorkerCommandRequest(ApiModel):
 
 class WorkerCommandResponse(ApiModel):
     id: UUID
-    command: WorkerCommandKind
+    command: str
     status: str
     lease_token: UUID | None = None
     lease_expires_at: datetime | None = None

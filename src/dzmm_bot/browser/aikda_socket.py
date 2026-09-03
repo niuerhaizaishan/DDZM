@@ -308,6 +308,12 @@ class AikdaSocketGateway:
         with self._send_locks_guard:
             return self._send_locks.setdefault(chatroom_id, Lock())
 
+    def add_bot_to_chatroom(self, chatroom_id: str, bot_id: str) -> None:
+        self._request(
+            "chatroom.addBot",
+            {"chatroomId": chatroom_id, "botId": bot_id},
+        )
+
     def retract(self, message_id: str) -> None:
         self._ensure_connected()
         acknowledgement = self._call(

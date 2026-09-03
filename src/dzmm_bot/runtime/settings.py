@@ -17,6 +17,7 @@ class Settings:
     outbound_concurrency: int = 4
     chat_url: str | None = None
     bot_api_token: str | None = None
+    long_message_bot_id: str | None = None
     deepseek_api_key: str | None = None
     deepseek_model: str = "deepseek-v4-flash"
     deepseek_base_url: str = "https://api.deepseek.com"
@@ -45,6 +46,7 @@ class Settings:
             ),
             chat_url=_optional("DZMM_CHAT_URL", empty_as_none=True),
             bot_api_token=_optional("DZMM_BOT_API_TOKEN", empty_as_none=True),
+            long_message_bot_id=_optional("DZMM_BOT_ID", empty_as_none=True),
             deepseek_api_key=_optional("DP_API_KEY", empty_as_none=True),
             deepseek_model=os.environ.get(
                 "DZMM_DEEPSEEK_MODEL", "deepseek-v4-flash"

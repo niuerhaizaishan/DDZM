@@ -1687,7 +1687,7 @@ function renderGroupChats(items) {
       ["成人商店", group.adult_shop_enabled],
       ["公演预约", group.performances_enabled],
     ].map(([label, enabled]) => `${label}：${enabled ? "开" : "关"}`).join(" · ");
-    return `<article class="data-row"><div><b>${escapeHtml(group.name)}</b><small>${statusBadge(groupConnectionLabel(runtime.connection_state), runtime.connection_state === "connected" ? "success" : runtime.connection_state === "failed" ? "warning" : "")}</small><small>群聊 ID：${escapeHtml(group.chatroom_id || "未识别")} · ${escapeHtml(switches)}</small><small>已开启玩法：${escapeHtml(gameSummary)}</small><small>${escapeHtml(group.chat_url || "未配置链接")}</small><small>最近接收：${formatHeartbeat(runtime.last_inbound_at)} · 最近发送：${formatHeartbeat(runtime.last_outbound_at)}</small>${runtime.last_error_summary ? `<small class="form-error">${escapeHtml(runtime.last_error_summary)}</small>` : ""}</div><div class="command-actions"><button class="secondary" data-edit-group-chat="${group.id}" type="button">编辑</button><button class="danger-button" data-delete-group-chat="${group.id}" type="button" ${group.listening_enabled ? "disabled" : ""}>删除</button></div></article>`;
+    return `<article class="data-row"><div><b>${escapeHtml(group.name)}</b><small>${statusBadge(groupConnectionLabel(runtime.connection_state), runtime.connection_state === "connected" ? "success" : runtime.connection_state === "failed" ? "warning" : "")}</small><small>群聊 ID：${escapeHtml(group.chatroom_id || "未识别")} · ${escapeHtml(switches)}</small><small>已开启玩法：${escapeHtml(gameSummary)}</small><small>${escapeHtml(group.chat_url || "未配置链接")}</small><small>最近接收：${formatHeartbeat(runtime.last_inbound_at)} · 最近发送：${formatHeartbeat(runtime.last_outbound_at)}</small>${runtime.last_error_summary ? `<small class="form-error">${escapeHtml(runtime.last_error_summary)}</small>` : ""}</div><div class="command-actions"><button class="secondary" data-add-group-chat-bot="${group.id}" type="button" ${group.chatroom_id ? "" : "disabled"}>添加长消息 Bot</button><button class="secondary" data-edit-group-chat="${group.id}" type="button">编辑</button><button class="danger-button" data-delete-group-chat="${group.id}" type="button" ${group.listening_enabled ? "disabled" : ""}>删除</button></div></article>`;
   }).join("") || '<p class="muted">还没有可管理的群聊。</p>';
 }
 
@@ -2388,6 +2388,21 @@ document.querySelector("#save-group-chat").addEventListener("click", async (even
   }
 });
 document.querySelector("#group-chat-list").addEventListener("click", async (event) => {
+  const addBot = event.target.closest("button[data-add-group-chat-bot]");
+  if (addBot) {
+    try {
+      await runMutation(addBot, "添加中…", async () => {
+        await requestGame(`/api/group-chats/${addBot.dataset.addGroupChatBot}/add-bot`, {
+          method: "POST",
+          headers: configurationHeaders(),
+        });
+      });
+      setResult("已提交添加长消息 Bot 请求，等待 Browser Worker 执行", "success");
+    } catch (error) {
+      setResult(`添加长消息 Bot 失败（${error.message}）`, "error");
+    }
+    return;
+  }
   const edit = event.target.closest("button[data-edit-group-chat]");
   if (edit) {
     openGroupChatModal(groupChats.find((group) => group.id === edit.dataset.editGroupChat));

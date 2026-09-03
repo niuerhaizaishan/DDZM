@@ -359,6 +359,7 @@ class FakeCore:
     manual_login_lease: dict | None = None
     ai_assistant_settings_request: dict | None = None
     group_chats: list[dict] = field(default_factory=list)
+    bot_add_requests: list[str] = field(default_factory=list)
     performance_settings: dict = field(
         default_factory=lambda: {"maximum_duration_minutes": 360}
     )
@@ -415,6 +416,14 @@ class FakeCore:
             }
         )
         return record
+
+    def add_bot_to_group(self, group_id):
+        self.bot_add_requests.append(group_id)
+        return {
+            "id": "00000000-0000-0000-0000-000000000099",
+            "command": f"add_bot:{group_id}",
+            "status": "pending",
+        }
 
     def get_performance_settings(self):
         return self.performance_settings
@@ -1254,6 +1263,16 @@ def test_admin_group_chat_crud_uses_configuration_versioning(client, headers):
     assert deleted.json()["deleted_at"] is not None
 
 
+def test_admin_queues_adding_the_existing_bot_to_a_group(client, core, headers):
+    group_id = "00000000-0000-0000-0000-000000000001"
+
+    response = client.post(f"/api/group-chats/{group_id}/add-bot", headers=headers)
+
+    assert response.status_code == 202
+    assert core.bot_add_requests == [group_id]
+    assert response.json()["command"] == f"add_bot:{group_id}"
+
+
 def test_admin_page_contains_multi_group_controls(client):
     page = client.get("/").text
     script = client.get("/static/admin.js").text
@@ -1275,6 +1294,8 @@ def test_admin_page_contains_multi_group_controls(client):
     ):
         assert f'id="group-chat-game-{game_type}"' in page
     assert 'requestGame("/api/group-chats"' in script
+    assert 'data-add-group-chat-bot' in script
+    assert '/api/group-chats/${addBot.dataset.addGroupChatBot}/add-bot' in script
     assert 'data-employee-group-messages' in script
 
 

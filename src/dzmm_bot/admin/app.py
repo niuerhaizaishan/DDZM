@@ -513,6 +513,21 @@ def create_app(
             scope=f"group-chats:{group_id}:delete",
         )
 
+    @app.post("/api/group-chats/{group_id}/add-bot", status_code=status.HTTP_202_ACCEPTED)
+    def add_bot_to_group_chat(
+        group_id: str,
+        identity: Annotated[AdminIdentity, Depends(authorize)],
+        idempotency_key: Annotated[
+            str | None, Header(alias="Idempotency-Key")
+        ] = None,
+    ) -> JSONResponse:
+        return idempotent_response(
+            identity,
+            idempotency_key,
+            lambda: (202, _relay_core(lambda: core.add_bot_to_group(group_id))),
+            scope=f"group-chats:{group_id}:add-bot",
+        )
+
     @app.get("/api/game/commands")
     def game_commands(_: Annotated[None, Depends(authorize)]) -> list[dict]:
         version = repository.config_version()

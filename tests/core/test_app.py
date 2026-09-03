@@ -1732,6 +1732,21 @@ def test_employee_group_messages_can_be_filtered_by_group(
     assert [item["content"] for item in filtered.json()["items"]] == ["乙群消息"]
 
 
+def test_group_bot_add_request_queues_the_group_chatroom_for_worker(
+    app_context, client, headers
+):
+    group = app_context.repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=group-for-bot", NOW
+    )
+
+    response = client.post(
+        f"/internal/group-chats/{group.id}/add-bot", headers=headers
+    )
+
+    assert response.status_code == 200
+    assert response.json()["command"] == "add_bot:group-for-bot"
+
+
 def test_game_settings_can_be_read_and_updated(client, headers):
     initial = client.get("/internal/game/settings", headers=headers)
     updated = client.patch(

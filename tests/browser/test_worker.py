@@ -56,6 +56,7 @@ class FakeGateway:
     configured_groups: tuple[GroupChatTarget, ...] = ()
     close_count: int = 0
     close_error: Exception | None = None
+    added_bots: list[tuple[str, str]] = field(default_factory=list)
 
     def configure_group_rooms(self, targets):
         self.configured_groups = targets
@@ -138,6 +139,9 @@ class FakeGateway:
         self.close_count += 1
         if self.close_error is not None:
             raise self.close_error
+
+    def add_bot_to_chatroom(self, chatroom_id, bot_id):
+        self.added_bots.append((chatroom_id, bot_id))
 
 @dataclass
 class FakeSession:
@@ -366,6 +370,25 @@ def test_worker_submits_each_platform_message_once(context):
     worker.run_once()
 
     assert core.submitted_ids == ["p-1"]
+
+
+def test_worker_adds_the_configured_long_message_bot_to_a_group():
+    gateway = FakeGateway()
+    core = FakeCore(commands=[WorkerCommand(COMMAND_ID, "add_bot:group-a", LEASE)])
+    worker = BrowserWorker(
+        worker_id="worker-a",
+        core=core,
+        session=FakeSession(gateway),
+        desktop=FakeDesktop(),
+        clock=lambda: NOW,
+        sleep=lambda _: None,
+        long_message_bot_id="long-message-bot",
+    )
+
+    worker.run_once()
+
+    assert gateway.added_bots == [("group-a", "long-message-bot")]
+    assert core.completions[-1][3] == "completed"
 
 
 def test_worker_keeps_socket_transport_alive_when_daily_jobs_fail_once(context):

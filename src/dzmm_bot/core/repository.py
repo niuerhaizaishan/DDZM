@@ -1984,6 +1984,18 @@ class CoreRepository:
             )
             return tuple(_group_chat_runtime(record) for record in records)
 
+    def enqueue_group_chat_bot_add(self, group_id: UUID) -> WorkerCommandRecord:
+        with self._session() as session:
+            group = session.get(GroupChatRecord, group_id, with_for_update=True)
+            if group is None or group.deleted_at is not None:
+                raise LookupError("group_chat_not_found")
+            if not group.chatroom_id:
+                raise ValueError("group chat ID is required")
+            command = WorkerCommandRecord(command=f"add_bot:{group.chatroom_id}")
+            session.add(command)
+            session.flush()
+            return command
+
     def create_group_chat(
         self,
         name: str,
