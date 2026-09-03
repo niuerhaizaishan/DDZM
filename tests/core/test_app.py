@@ -909,6 +909,27 @@ def test_admin_can_force_end_single_memory_assessment(app_context, headers):
     assert activity_events == []
 
 
+def test_gameplay_current_exposes_single_memory_answer_deadline(app_context, headers):
+    repository = app_context.repository
+    repository.create_user("memory-deadline-player", "倒计时玩家", NOW, 0)
+    created = repository.start_memory_assessment_single(
+        "memory-deadline-player", NOW
+    )
+    repository.mark_memory_assessment_round_recalled(created.round_id, NOW)
+
+    response = app_context.client.get("/internal/gameplay/current", headers=headers)
+    item = next(
+        entry
+        for entry in response.json()["items"]
+        if entry["game_type"] == "memory_single"
+    )
+
+    assert item["state"] == "awaiting_answer"
+    assert item["action_deadline"] == (
+        NOW + timedelta(seconds=15)
+    ).astimezone(ZoneInfo("Asia/Shanghai")).isoformat()
+
+
 def test_internal_inbound_executes_enabled_group_commands(app_context, headers, payload):
     payload["content"] = "/入职 小明"
 
@@ -1839,6 +1860,8 @@ def test_memory_assessment_settings_are_managed_over_core_api(client, headers):
             "enabled": True,
             "single_daily_limit": 1,
             "single_recall_seconds": 4,
+            "single_answer_timeout_seconds": 12,
+            "single_decision_timeout_seconds": 13,
             "duel_recall_seconds": 5,
             "duel_difficulty_level": 5,
             "duel_base_pool": 6,
@@ -1857,6 +1880,8 @@ def test_memory_assessment_settings_are_managed_over_core_api(client, headers):
     assert initial.status_code == 200
     assert initial.json()["single_recall_seconds"] == 3
     assert updated.status_code == 200
+    assert updated.json()["single_answer_timeout_seconds"] == 12
+    assert updated.json()["single_decision_timeout_seconds"] == 13
     assert updated.json()["duel_base_pool"] == 6
     assert updated.json()["duel_signup_timeout_minutes"] == 4
     assert updated.json()["levels"][4] == {
@@ -2626,6 +2651,7 @@ def test_random_event_settings_are_available_through_internal_api(client, header
 def test_random_event_tipping_is_visible_in_gameplay_and_event_details(
     app_context, headers
 ):
+    from dzmm_bot.core.schema import OutboundRecord, RandomEventRecord
     from dzmm_bot.runtime.contracts import InboundMessage
 
     repository = app_context.repository
@@ -2644,6 +2670,15 @@ def test_random_event_tipping_is_visible_in_gameplay_and_event_details(
     repository.create_user("api-tip-donor", "接口打赏人", now, 10)
     schedule = repository.schedule_random_events(now)[0]
     repository.run_random_event_jobs(now)
+    with app_context.session_factory.begin() as session:
+        event = session.scalar(
+            select(RandomEventRecord).where(RandomEventRecord.state == "signup")
+        )
+        assert event is not None
+        assert event.signup_notice_outbound_id is not None
+        notice = session.get(OutboundRecord, event.signup_notice_outbound_id)
+        assert notice is not None
+        notice.status = "sent"
     assert repository.join_random_event("api-tip-target", "员工", now) == "started"
     assert repository.leave_random_event("api-tip-target", now) == "left_without_reward"
     repository.accept_inbound(

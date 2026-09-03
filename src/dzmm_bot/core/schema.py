@@ -760,6 +760,241 @@ class NumberBombRoundPlayerRecord(Base):
     result_reason: Mapped[str | None] = mapped_column(String(32))
 
 
+class NeverHaveIEverSettingsRecord(Base):
+    __tablename__ = "never_have_i_ever_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    signup_timeout_minutes: Mapped[int] = mapped_column(
+        Integer, default=10, nullable=False
+    )
+    statement_timeout_seconds: Mapped[int] = mapped_column(
+        Integer, default=60, nullable=False
+    )
+    response_timeout_seconds: Mapped[int] = mapped_column(
+        Integer, default=60, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        BeijingDateTime, default=beijing_now, nullable=False
+    )
+
+
+class NeverHaveIEverGameRecord(Base):
+    __tablename__ = "never_have_i_ever_games"
+    __table_args__ = (
+        Index(
+            "ux_never_have_i_ever_one_active",
+            "group_chat_id",
+            unique=True,
+            sqlite_where=text("active_key IS NOT NULL"),
+            postgresql_where=text("active_key IS NOT NULL"),
+        ),
+        CheckConstraint(
+            "state IN ('signup', 'awaiting_statement', 'awaiting_responses', "
+            "'free_punishment', 'completed', 'cancelled', 'expired', "
+            "'forced_ended')",
+            name="ck_never_have_i_ever_game_state",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    group_chat_id: Mapped[UUID] = mapped_column(
+        ForeignKey("group_chats.id"), default=PRIMARY_GROUP_CHAT_ID, nullable=False
+    )
+    host_user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id"), nullable=False
+    )
+    active_key: Mapped[str | None] = mapped_column(String(32))
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    initial_player_count: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
+    )
+    current_speaker_order: Mapped[int | None] = mapped_column(Integer)
+    round_number: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    signup_deadline: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    statement_deadline: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    response_deadline: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    free_punishment_started_at: Mapped[datetime | None] = mapped_column(
+        BeijingDateTime
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        BeijingDateTime, default=beijing_now, nullable=False
+    )
+    started_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    finished_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    finish_reason: Mapped[str | None] = mapped_column(String(64))
+
+
+class NeverHaveIEverPlayerRecord(Base):
+    __tablename__ = "never_have_i_ever_players"
+    __table_args__ = (
+        UniqueConstraint("game_id", "user_id"),
+        UniqueConstraint("game_id", "roster_order"),
+        CheckConstraint("hearts >= 0", name="ck_never_have_i_ever_hearts"),
+        CheckConstraint(
+            "state IN ('signup', 'active', 'eliminated', 'withdrawn')",
+            name="ck_never_have_i_ever_player_state",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    game_id: Mapped[UUID] = mapped_column(
+        ForeignKey("never_have_i_ever_games.id"), nullable=False
+    )
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    roster_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    hearts: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    joined_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    eliminated_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    elimination_reason: Mapped[str | None] = mapped_column(String(64))
+
+
+class NeverHaveIEverRoundRecord(Base):
+    __tablename__ = "never_have_i_ever_rounds"
+    __table_args__ = (
+        UniqueConstraint("game_id", "sequence"),
+        CheckConstraint(
+            "state IN ('awaiting_statement', 'awaiting_responses', 'settled', "
+            "'statement_timeout')",
+            name="ck_never_have_i_ever_round_state",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    game_id: Mapped[UUID] = mapped_column(
+        ForeignKey("never_have_i_ever_games.id"), nullable=False
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    speaker_user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id"), nullable=False
+    )
+    statement: Mapped[str | None] = mapped_column(Text)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    statement_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    response_deadline: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    settled_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    statement_timed_out: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+
+
+class NeverHaveIEverResponseRecord(Base):
+    __tablename__ = "never_have_i_ever_responses"
+    __table_args__ = (
+        UniqueConstraint("round_id", "user_id"),
+        CheckConstraint(
+            "choice IN ('deduct', 'keep', 'timeout_deduct')",
+            name="ck_never_have_i_ever_response_choice",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    round_id: Mapped[UUID] = mapped_column(
+        ForeignKey("never_have_i_ever_rounds.id"), nullable=False
+    )
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    choice: Mapped[str] = mapped_column(String(32), nullable=False)
+    submitted_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+
+
+class KingGameSettingsRecord(Base):
+    __tablename__ = "king_game_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    king_phase_timeout_seconds: Mapped[int] = mapped_column(
+        Integer, default=500, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        BeijingDateTime, default=beijing_now, nullable=False
+    )
+
+
+class KingGameRecord(Base):
+    __tablename__ = "king_games"
+    __table_args__ = (
+        Index(
+            "ux_king_game_one_active",
+            "group_chat_id",
+            unique=True,
+            sqlite_where=text("active_key IS NOT NULL"),
+            postgresql_where=text("active_key IS NOT NULL"),
+        ),
+        CheckConstraint(
+            "state IN ('signup', 'awaiting_reveal', 'revealed', 'completed', "
+            "'cancelled', 'expired', 'forced_ended')",
+            name="ck_king_game_state",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    group_chat_id: Mapped[UUID] = mapped_column(
+        ForeignKey("group_chats.id"), default=PRIMARY_GROUP_CHAT_ID, nullable=False
+    )
+    host_user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    active_key: Mapped[str | None] = mapped_column(String(32))
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    round_number: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    current_king_user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))
+    signup_deadline: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    king_phase_deadline: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    end_after_round: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        BeijingDateTime, default=beijing_now, nullable=False
+    )
+    started_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    finished_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    finish_reason: Mapped[str | None] = mapped_column(String(64))
+
+
+class KingGamePlayerRecord(Base):
+    __tablename__ = "king_game_players"
+    __table_args__ = (
+        UniqueConstraint("game_id", "user_id"),
+        UniqueConstraint("game_id", "roster_order"),
+        CheckConstraint(
+            "state IN ('signup', 'active', 'withdrawn')",
+            name="ck_king_game_player_state",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    game_id: Mapped[UUID] = mapped_column(
+        ForeignKey("king_games.id"), nullable=False
+    )
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    roster_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    joined_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    left_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+
+
+class KingGameRoundRecord(Base):
+    __tablename__ = "king_game_rounds"
+    __table_args__ = (
+        UniqueConstraint("game_id", "sequence"),
+        CheckConstraint(
+            "state IN ('awaiting_reveal', 'revealed', 'timed_out')",
+            name="ck_king_game_round_state",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    game_id: Mapped[UUID] = mapped_column(
+        ForeignKey("king_games.id"), nullable=False
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    king_user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    number_map: Mapped[dict[str, int]] = mapped_column(JSON, nullable=False)
+    revealed_numbers: Mapped[list[int] | None] = mapped_column(JSON)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    revealed_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+
+
 class TexasHoldemSettingsRecord(Base):
     __tablename__ = "texas_holdem_settings"
 
@@ -1196,6 +1431,12 @@ class MemoryAssessmentSettingsRecord(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     single_daily_limit: Mapped[int] = mapped_column(Integer, nullable=False)
     single_recall_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    single_answer_timeout_seconds: Mapped[int] = mapped_column(
+        Integer, default=15, nullable=False
+    )
+    single_decision_timeout_seconds: Mapped[int] = mapped_column(
+        Integer, default=15, nullable=False
+    )
     duel_recall_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
     duel_difficulty_level: Mapped[int] = mapped_column(Integer, nullable=False)
     duel_base_pool: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -1608,6 +1849,9 @@ class RandomEventRecord(Base):
     )
     schedule_id: Mapped[UUID] = mapped_column(
         ForeignKey("random_event_schedules.id"), nullable=False
+    )
+    signup_notice_outbound_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("outbound_messages.id"), index=True
     )
     group_key: Mapped[str] = mapped_column(String(255), default="default", nullable=False)
     state: Mapped[str] = mapped_column(String(16), nullable=False)

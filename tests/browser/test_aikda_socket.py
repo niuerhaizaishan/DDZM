@@ -959,6 +959,21 @@ def test_retracts_an_acknowledged_message_in_the_target_chatroom(gateway):
     ]
 
 
+def test_retracts_an_acknowledged_message_in_an_explicit_group_chatroom(gateway):
+    """Fails if multi-group recalls are sent to the primary room instead of their source."""
+    adapter, socket, _ = gateway
+
+    adapter.retract("outbound-1", chatroom_id="room-2")
+
+    assert socket.calls == [
+        (
+            "message:recall",
+            {"chatroomId": "room-2", "messageId": "outbound-1"},
+            10,
+        )
+    ]
+
+
 def test_socket_client_defers_reconnection_until_a_fresh_token_is_available():
     """Fails if the Socket.IO client retries with an expired connection token."""
     assert _socket_client().reconnection is False

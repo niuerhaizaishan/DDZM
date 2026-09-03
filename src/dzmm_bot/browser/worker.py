@@ -205,9 +205,18 @@ class BrowserWorker:
         )
         if recall is not None:
             try:
-                gateway.retract(recall.platform_sent_id)
+                gateway.retract(
+                    recall.platform_sent_id,
+                    chatroom_id=recall.destination_chatroom_id,
+                )
             except Exception:
                 _LOGGER.exception("outbound retraction failed: %s", recall.id)
+                self._core.fail_outbound_recall(
+                    recall.id,
+                    self._worker_id,
+                    recall.lease_token,
+                    self._clock(),
+                )
             else:
                 self._core.confirm_outbound_recalled(
                     recall.id,
@@ -512,32 +521,33 @@ class BrowserWorker:
             and outbound.recall_after_seconds is None
             and requires_bot_group_sender(outbound.text)
         ):
-            try:
-                message_id = self._bot_sender.send_to(
-                    outbound.destination_chatroom_id, outbound.text
-                )
-                self._bot_delivery_status = ("ready", None)
-                return message_id
-            except DzmmBotSendError as error:
-                if str(error).strip().lower() == "captcha_required":
-                    self._bot_delivery_status = (
-                        "captcha_required",
-                        "captcha_required",
+            if self._bot_delivery_status[0] != "captcha_required":
+                try:
+                    message_id = self._bot_sender.send_to(
+                        outbound.destination_chatroom_id, outbound.text
                     )
-                _LOGGER.warning(
-                    "Bot API group send failed for %s (%s); falling back to browser sender",
-                    outbound.destination_chatroom_id,
-                    error,
-                )
-                platform_message_id = ""
-                for index, chunk in enumerate(group_message_chunks(outbound.text)):
-                    platform_message_id = gateway.send_to(
+                    self._bot_delivery_status = ("ready", None)
+                    return message_id
+                except DzmmBotSendError as error:
+                    if str(error).strip().lower() == "captcha_required":
+                        self._bot_delivery_status = (
+                            "captcha_required",
+                            "captcha_required",
+                        )
+                    _LOGGER.warning(
+                        "Bot API group send failed for %s (%s); falling back to browser sender",
                         outbound.destination_chatroom_id,
-                        chunk,
-                        message_id=str(uuid5(outbound.id, f"browser-fallback:{index}")),
-                        reference=reference if index == 0 else None,
+                        error,
                     )
-                return platform_message_id
+            platform_message_id = ""
+            for index, chunk in enumerate(group_message_chunks(outbound.text)):
+                platform_message_id = gateway.send_to(
+                    outbound.destination_chatroom_id,
+                    chunk,
+                    message_id=str(uuid5(outbound.id, f"browser-fallback:{index}")),
+                    reference=reference if index == 0 else None,
+                )
+            return platform_message_id
         if (
             outbound.delivery_kind == "group"
             and outbound.group_chat_id is not None

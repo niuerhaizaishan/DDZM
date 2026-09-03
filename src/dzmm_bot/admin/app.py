@@ -1069,6 +1069,89 @@ def create_app(
             scope="number-bomb-settings",
         )
 
+    @app.get("/api/game/never-have-i-ever/settings")
+    def never_have_i_ever_settings(
+        _: Annotated[None, Depends(authorize)],
+    ) -> dict:
+        return {
+            **_relay_core(core.get_never_have_i_ever_settings),
+            "version": repository.config_version(),
+        }
+
+    @app.patch("/api/game/never-have-i-ever/settings")
+    def set_never_have_i_ever_settings(
+        request: dict,
+        identity: Annotated[AdminIdentity, Depends(authorize)],
+        idempotency_key: Annotated[
+            str | None, Header(alias="Idempotency-Key")
+        ] = None,
+        if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+    ) -> JSONResponse:
+        required = {
+            "enabled",
+            "signup_timeout_minutes",
+            "statement_timeout_seconds",
+            "response_timeout_seconds",
+        }
+        if set(request) != required:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid settings"
+            )
+        return versioned_configuration_response(
+            identity,
+            idempotency_key,
+            if_match,
+            lambda: _relay_core(
+                lambda: core.set_never_have_i_ever_settings(
+                    {key: request[key] for key in required}
+                )
+            ),
+            scope="never-have-i-ever-settings",
+        )
+
+    @app.get("/api/game/king-game/settings")
+    def king_game_settings(
+        _: Annotated[None, Depends(authorize)],
+    ) -> dict:
+        return {
+            **_relay_core(core.get_king_game_settings),
+            "version": repository.config_version(),
+        }
+
+    @app.patch("/api/game/king-game/settings")
+    def set_king_game_settings(
+        request: dict,
+        identity: Annotated[AdminIdentity, Depends(authorize)],
+        idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+        if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+    ) -> JSONResponse:
+        required = {"enabled", "king_phase_timeout_seconds"}
+        if set(request) != required:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid settings"
+            )
+        return versioned_configuration_response(
+            identity,
+            idempotency_key,
+            if_match,
+            lambda: _relay_core(
+                lambda: core.set_king_game_settings(
+                    {key: request[key] for key in required}
+                )
+            ),
+            scope="king-game-settings",
+        )
+
+    @app.get("/api/game/never-have-i-ever/history")
+    def never_have_i_ever_history(
+        _: Annotated[None, Depends(authorize)],
+        page: int = Query(default=1, ge=1),
+        page_size: int = Query(default=20, ge=1, le=100),
+    ) -> dict:
+        return _relay_core(
+            lambda: core.list_never_have_i_ever_history(page, page_size)
+        )
+
     @app.get("/api/game/red-packet/settings")
     def red_packet_settings(
         _: Annotated[None, Depends(authorize)],
@@ -1751,6 +1834,8 @@ def create_app(
             "enabled",
             "single_daily_limit",
             "single_recall_seconds",
+            "single_answer_timeout_seconds",
+            "single_decision_timeout_seconds",
             "duel_recall_seconds",
             "duel_difficulty_level",
             "duel_base_pool",

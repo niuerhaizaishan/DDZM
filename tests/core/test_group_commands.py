@@ -70,6 +70,21 @@ def _latest_reply(factory):
         )
 
 
+def _mark_random_event_signup_notice_sent(repository):
+    from dzmm_bot.core.schema import OutboundRecord, RandomEventRecord
+
+    with repository._session() as session:
+        active = session.scalar(
+            select(RandomEventRecord).where(RandomEventRecord.state == "signup")
+        )
+        assert active is not None
+        assert active.signup_notice_outbound_id is not None
+        notice = session.get(OutboundRecord, active.signup_notice_outbound_id)
+        assert notice is not None
+        notice.status = "sent"
+        notice.platform_sent_id = f"test-signup-{active.id}"
+
+
 def test_group_game_switch_blocks_only_new_game_creation():
     service, repository, factory = _service()
     now = datetime(2026, 8, 18, 10, 0, tzinfo=BEIJING)
@@ -102,6 +117,63 @@ def test_group_game_switch_blocks_only_new_game_creation():
     assert repository.active_gameplay_summary(
         "switch-player", now, group.id
     ).game_type is None
+
+
+def test_never_have_i_ever_group_command_flow():
+    service, repository, factory = _service()
+    now = datetime(2026, 8, 31, 12, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=never-have-i-ever", now
+    )
+    for platform_id, name in (("host", "主持"), ("u2", "二号"), ("u3", "三号")):
+        _group_receive(
+            service,
+            f"join-{platform_id}",
+            platform_id,
+            f"/入职 {name}",
+            now,
+            "never-have-i-ever",
+        )
+
+    _group_receive(service, "create", "host", "/我有你没有", now, "never-have-i-ever")
+    assert "主持 发起了报名" in _latest_reply(factory)
+    _group_receive(service, "game-join-2", "u2", "/加入", now, "never-have-i-ever")
+    _group_receive(service, "game-join-3", "u3", "/加入", now, "never-have-i-ever")
+    _group_receive(service, "begin", "host", "/开始", now, "never-have-i-ever")
+    assert "请 1号 主持" in _latest_reply(factory)
+    _group_receive(service, "current", "host", "/当前游戏", now, "never-have-i-ever")
+    assert "你的编号：1号，心数：❤️❤️❤️❤️❤️" in _latest_reply(factory)
+    _group_receive(service, "statement", "host", "/发言 我得过5km第一", now, "never-have-i-ever")
+    assert "发送 /扣（没有这项经历）或 /不扣" in _latest_reply(factory)
+    _group_receive(service, "deduct", "u2", "/扣", now, "never-have-i-ever")
+    assert "二号 已选择（1/2）。" == _latest_reply(factory)
+    _group_receive(service, "keep", "u3", "/不扣", now, "never-have-i-ever")
+    assert "2. 二号：❤️❤️❤️❤️🖤" in _latest_reply(factory)
+
+
+def test_king_game_group_command_flow():
+    service, repository, factory = _service()
+    now = datetime(2026, 9, 3, 12, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group("https://www.aikda.com/chat?c=king-game", now)
+    for platform_id, name in (("host", "主持"), ("u2", "二号"), ("u3", "三号")):
+        _group_receive(service, f"join-{platform_id}", platform_id, f"/入职 {name}", now, "king-game")
+
+    _group_receive(service, "create", "host", "/国王游戏", now, "king-game")
+    assert "报名已开启" in _latest_reply(factory)
+    _group_receive(service, "join-2", "u2", "/加入", now, "king-game")
+    _group_receive(service, "join-3", "u3", "/加入", now, "king-game")
+    _group_receive(service, "begin", "host", "/开始", now, "king-game")
+    assert "本轮国王" in _latest_reply(factory)
+    summary = repository.active_gameplay_summary("host", now, None)
+    assert summary.game_type == "king_game"
+    with repository._session() as session:
+        from dzmm_bot.core.schema import KingGameRecord, UserRecord
+        game = session.scalar(select(KingGameRecord))
+        king = session.get(UserRecord, game.current_king_user_id)
+    _group_receive(service, "reveal", king.platform_id, "/公开 1，2", now, "king-game")
+    assert "第 1 轮公开" in _latest_reply(factory)
+    _group_receive(service, "continue", "u2", "/继续", now, "king-game")
+    assert "第 2 轮" in _latest_reply(factory)
 
 
 def test_groups_can_enable_number_bomb_and_texas_holdem_independently():
@@ -880,6 +952,7 @@ def _prepare_group_tip_event(repository, now):
     repository.create_user("group-tip-donor", "热心员工", now, 10)
     repository.schedule_random_events(now)
     repository.run_random_event_jobs(now)
+    _mark_random_event_signup_notice_sent(repository)
     assert repository.join_random_event("group-tip-target", "员工", now) == "started"
     assert repository.leave_random_event("group-tip-target", now) == "left_without_reward"
 
@@ -926,6 +999,7 @@ def test_random_event_tip_command_reaches_business_validation_before_tipping():
     repository.create_user("in-progress-player", "进行中玩家", now, 10)
     repository.schedule_random_events(now)
     repository.run_random_event_jobs(now)
+    _mark_random_event_signup_notice_sent(repository)
     assert repository.join_random_event("in-progress-player", "员工", now) == "started"
 
     result = _receive(
@@ -1628,6 +1702,7 @@ def test_board_member_force_end_settles_random_event_tipping_phase():
     )
     repository.schedule_random_events(now)
     repository.run_random_event_jobs(now)
+    _mark_random_event_signup_notice_sent(repository)
     assert repository.join_random_event("tipping-player", "员工", now) == "started"
     assert repository.leave_random_event("tipping-player", now) == "left_without_reward"
 
@@ -2629,6 +2704,7 @@ def test_random_event_commands_join_count_rounds_and_settle_on_exit():
     repository.schedule_random_events(now)
     repository.run_random_event_jobs(now)
     assert "可选身份：员工 × 2；截止：15" in _latest_reply(factory)
+    _mark_random_event_signup_notice_sent(repository)
 
     _receive(service, "event-join-1", "u1", "/加入 员工", now)
     assert _latest_reply(factory) == "小明 已加入随机事件，担任 员工。\n剩余可选身份：员工 × 1"
@@ -2638,6 +2714,30 @@ def test_random_event_commands_join_count_rounds_and_settle_on_exit():
     _receive(service, "event-leave", "u1", "/退出", now)
 
     assert "领取 4 摸鱼币" in _latest_reply(factory)
+
+
+def test_random_event_join_explains_that_signup_notice_is_still_sending():
+    service, repository, factory = _service()
+    now = datetime(2026, 8, 6, 10, 0, tzinfo=BEIJING)
+    repository.create_random_event_scene(
+        "通知发送测试场", "报名", ["正式开始。"], 1, 1, [("员工", 1)]
+    )
+    repository.set_random_event_settings(["10:00"], "{可选身份}", 15, 5)
+    _receive(service, "notice-player-join", "notice-player", "/入职 通知玩家", now)
+    repository.schedule_random_events(now)
+    repository.run_random_event_jobs(now)
+
+    joined = _receive(
+        service,
+        "event-join-before-notice",
+        "notice-player",
+        "/加入 员工",
+        now,
+    )
+
+    assert _replies_for(factory, joined.message_id) == [
+        "随机事件报名通知正在发送，请稍候。"
+    ]
 
 
 @pytest.mark.parametrize("seat_count", [2, 1])
@@ -2654,6 +2754,7 @@ def test_random_event_replies_when_blocking_checkin_but_keeps_required_event_act
     _receive(service, "join-2", "u2", "/入职 小红", now)
     repository.schedule_random_events(now)
     repository.run_random_event_jobs(now)
+    _mark_random_event_signup_notice_sent(repository)
 
     if seat_count == 1:
         _receive(service, "start-event", "u2", "/加入 员工", now)
@@ -2695,6 +2796,7 @@ def test_random_event_executes_checkin_when_admin_explicitly_allows_it(seat_coun
     _receive(service, "join-2", "u2", "/入职 小红", now)
     repository.schedule_random_events(now)
     repository.run_random_event_jobs(now)
+    _mark_random_event_signup_notice_sent(repository)
     if seat_count == 1:
         assert repository.join_random_event("u2", "员工", now) == "started"
 
@@ -2800,6 +2902,31 @@ def test_memory_assessment_single_uses_continue_and_cash_out_commands(monkeypatc
     _receive(service, "cash-out", "u1", "/收手", now)
 
     assert _latest_reply(factory) == "小明 收手成功，获得 1 摸鱼币。当前余额：1 摸鱼币。"
+
+
+def test_memory_assessment_single_reports_late_answer_as_timeout(monkeypatch):
+    from dzmm_bot.core.schema import MemoryAssessmentRoundRecord
+
+    service, repository, factory = _service()
+    now = datetime(2026, 8, 6, 10, 0, tzinfo=BEIJING)
+    _receive(service, "timeout-join", "timeout-player", "/入职 超时玩家", now)
+    monkeypatch.setattr("dzmm_bot.core.repository.choice", lambda _: "A")
+    _receive(service, "timeout-start", "timeout-player", "/记忆考核", now)
+    with factory() as session:
+        round_record = session.scalar(select(MemoryAssessmentRoundRecord))
+    repository.mark_memory_assessment_round_recalled(round_record.id, now)
+
+    answered = _receive(
+        service,
+        "timeout-answer",
+        "timeout-player",
+        "/答案 AAAAA",
+        now + timedelta(seconds=15),
+    )
+
+    assert _replies_for(factory, answered.message_id) == [
+        "作答超时，本次记忆考核失败。"
+    ]
 
 
 def test_memory_assessment_only_accepts_answers_prefixed_with_answer_command(monkeypatch):
@@ -3093,6 +3220,8 @@ def test_help_game_topic_links_to_each_game_guide():
     assert "/帮助 记忆考核" in reply
     assert "/帮助 谁是卧底" in reply
     assert "/帮助 蹦蹦数字炸弹" in reply
+    assert "/帮助 我有你没有" in reply
+    assert "/帮助 公演预约" in reply
     for command in (
         "/蹦蹦数字炸弹", "/加入", "/开始", "/报数 数字",
         "/跳过 编号", "/继续", "/结束游戏",
@@ -3101,6 +3230,18 @@ def test_help_game_topic_links_to_each_game_guide():
     assert "3-10" not in reply
     assert "3 至 10" not in reply
     assert "无操作释放" not in reply
+
+
+def test_help_performance_reservation_alias_shows_booking_flow():
+    service, _, factory = _service()
+    received_at = datetime(2026, 8, 5, 2, 0, tzinfo=UTC)
+
+    _receive(service, "help-performance", "platform-xiaoming", "/帮助 公演预约", received_at)
+
+    reply = _latest_reply(factory)
+    assert "【公演场次预约】" in reply
+    assert "/预约公演" in reply
+    assert "/公演日程" in reply
 
 
 def test_help_number_bomb_topic_shows_group_and_private_commands():

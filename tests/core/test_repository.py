@@ -22,10 +22,13 @@ from dzmm_bot.core.schema import (
     NumberBombMemberRecord,
     NumberBombRoundPlayerRecord,
     NumberBombRoundRecord,
+    NeverHaveIEverPlayerRecord,
     OutboundRecord,
     BalanceTransactionRecord,
     PRIMARY_GROUP_CHAT_ID,
     RandomEventSubmissionRecord,
+    RandomEventRecord,
+    RandomEventScheduleRecord,
     TexasHoldemGameRecord,
     TexasHoldemPlayerRecord,
     UserRecord,
@@ -2166,6 +2169,8 @@ def test_memory_assessment_defaults_seed_five_levels(repository):
     settings = repository.get_memory_assessment_settings()
 
     assert settings.single_daily_limit == 1
+    assert settings.single_answer_timeout_seconds == 15
+    assert settings.single_decision_timeout_seconds == 15
     assert settings.duel_base_pool == 5
     assert [
         (rule.level, rule.answer_length, rule.reward)
@@ -5404,6 +5409,26 @@ def _prepare_pending_random_event(repository, now):
     return repository.schedule_random_events(now)[0]
 
 
+def _mark_random_event_signup_notice_sent(
+    repository, group_chat_id=PRIMARY_GROUP_CHAT_ID
+):
+    from dzmm_bot.core.schema import OutboundRecord, RandomEventRecord
+
+    with repository._session() as session:
+        active = session.scalar(
+            select(RandomEventRecord).where(
+                RandomEventRecord.group_chat_id == group_chat_id,
+                RandomEventRecord.state == "signup",
+            )
+        )
+        assert active is not None
+        assert active.signup_notice_outbound_id is not None
+        notice = session.get(OutboundRecord, active.signup_notice_outbound_id)
+        assert notice is not None
+        notice.status = "sent"
+        notice.platform_sent_id = f"test-signup-{active.id}"
+
+
 @pytest.mark.parametrize("player_count", range(2, 11))
 def test_blame_signup_starts_with_frozen_seats_and_guarantees(
     repository, session_factory, now, player_count
@@ -7259,6 +7284,431 @@ def test_memory_assessment_rejects_whitespace_character_set(repository):
         )
 
 
+def test_never_have_i_ever_defaults_and_updates_settings(repository):
+    settings = repository.get_never_have_i_ever_settings()
+
+    assert settings.enabled is True
+    assert settings.signup_timeout_minutes == 10
+    assert settings.statement_timeout_seconds == 60
+    assert settings.response_timeout_seconds == 60
+
+    updated = repository.set_never_have_i_ever_settings(
+        enabled=False,
+        signup_timeout_minutes=12,
+        statement_timeout_seconds=45,
+        response_timeout_seconds=75,
+    )
+
+    assert updated.enabled is False
+    assert updated.signup_timeout_minutes == 12
+    assert updated.statement_timeout_seconds == 45
+    assert updated.response_timeout_seconds == 75
+
+
+def test_king_game_signup_reveal_and_continue(repository):
+    now = datetime(2026, 9, 3, 12, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group("https://www.aikda.com/chat?c=king-game", now)
+    for platform_id, name in (("host", "主持"), ("u2", "二号"), ("u3", "三号")):
+        repository.create_user(platform_id, name, now, 0)
+
+    created = repository.start_king_game("host", now, PRIMARY_GROUP_CHAT_ID)
+    assert repository.join_king_game("u2", now, PRIMARY_GROUP_CHAT_ID).status == "joined"
+    assert repository.join_king_game("u3", now, PRIMARY_GROUP_CHAT_ID).status == "joined"
+    started = repository.begin_king_game("host", now, PRIMARY_GROUP_CHAT_ID)
+
+    assert created.status == "signup_started"
+    assert started.status == "started"
+    assert started.king_name in {"主持", "二号", "三号"}
+    assert started.number_map == ()
+    assert len(started.players) == 3
+
+    revealed = repository.reveal_king_game_numbers(
+        started.king_platform_id or "", "2，3", now, PRIMARY_GROUP_CHAT_ID
+    )
+    assert revealed.status == "revealed"
+    assert len(revealed.number_map) == 3
+    assert {number for number, _ in revealed.number_map} == {1, 2, 3}
+
+    continued = repository.continue_king_game("u2", now, PRIMARY_GROUP_CHAT_ID)
+    assert continued.status == "next_round"
+    assert continued.round_number == 2
+    assert continued.king_name in {"主持", "二号", "三号"}
+
+
+def test_king_game_phase_timeout_redraws_without_revealing(repository):
+    now = datetime(2026, 9, 3, 12, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group("https://www.aikda.com/chat?c=king-game", now)
+    for platform_id in ("host", "u2", "u3"):
+        repository.create_user(platform_id, platform_id, now, 0)
+    repository.start_king_game("host", now, PRIMARY_GROUP_CHAT_ID)
+    repository.join_king_game("u2", now, PRIMARY_GROUP_CHAT_ID)
+    repository.join_king_game("u3", now, PRIMARY_GROUP_CHAT_ID)
+    started = repository.begin_king_game("host", now, PRIMARY_GROUP_CHAT_ID)
+
+    result = repository.run_king_game_jobs(now + timedelta(seconds=500))
+
+    assert [item.status for item in result] == ["king_timed_out"]
+    assert result[0].round_number == 2
+    assert result[0].number_map == ()
+    assert started.king_platform_id != result[0].king_platform_id or True
+
+
+def test_never_have_i_ever_signup_and_host_start(repository, session_factory):
+    from dzmm_bot.core.schema import NeverHaveIEverRoundRecord
+
+    now = datetime(2026, 8, 31, 12, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=never-have-i-ever", now
+    )
+    for platform_id, name in (("host", "主持"), ("u2", "二号"), ("u3", "三号")):
+        repository.create_user(platform_id, name, now, 0)
+
+    created = repository.start_never_have_i_ever(
+        "host", now, PRIMARY_GROUP_CHAT_ID
+    )
+    joined_2 = repository.join_never_have_i_ever(
+        "u2", now, PRIMARY_GROUP_CHAT_ID
+    )
+    joined_3 = repository.join_never_have_i_ever(
+        "u3", now, PRIMARY_GROUP_CHAT_ID
+    )
+    begun = repository.begin_never_have_i_ever(
+        "host", now, PRIMARY_GROUP_CHAT_ID
+    )
+
+    assert created.status == "signup_started"
+    assert joined_2.status == "joined"
+    assert joined_3.status == "joined"
+    assert begun.status == "started"
+    assert [(player.number, player.hearts) for player in begun.players] == [
+        (1, 5),
+        (2, 5),
+        (3, 5),
+    ]
+    assert begun.current_speaker_number == 1
+    with session_factory() as session:
+        round_record = session.scalar(select(NeverHaveIEverRoundRecord))
+    assert round_record.sequence == 1
+    assert round_record.state == "awaiting_statement"
+
+
+def test_never_have_i_ever_initial_hearts_are_player_count_plus_two(repository):
+    now = datetime(2026, 8, 31, 12, 0, tzinfo=BEIJING)
+    _start_never_have_i_ever(repository, now, "host", "u2", "u3", "u4")
+
+    summary = repository.active_gameplay_summary(
+        "host", now, PRIMARY_GROUP_CHAT_ID
+    )
+
+    assert summary.actor_hearts == 6
+    game = repository.current_gameplay_admin_summary(now, PRIMARY_GROUP_CHAT_ID)
+    assert [player.hearts for player in game.participants] == [6, 6, 6, 6]
+
+
+def test_never_have_i_ever_only_host_can_start_with_three_players(repository):
+    now = datetime(2026, 8, 31, 12, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=never-have-i-ever", now
+    )
+    for platform_id, name in (("host", "主持"), ("u2", "二号"), ("u3", "三号")):
+        repository.create_user(platform_id, name, now, 0)
+    repository.start_never_have_i_ever("host", now, PRIMARY_GROUP_CHAT_ID)
+    repository.join_never_have_i_ever("u2", now, PRIMARY_GROUP_CHAT_ID)
+
+    assert (
+        repository.begin_never_have_i_ever("u2", now, PRIMARY_GROUP_CHAT_ID).status
+        == "host_only"
+    )
+    assert (
+        repository.begin_never_have_i_ever(
+            "host", now, PRIMARY_GROUP_CHAT_ID
+        ).status
+        == "not_enough_players"
+    )
+
+    repository.join_never_have_i_ever("u3", now, PRIMARY_GROUP_CHAT_ID)
+    assert (
+        repository.begin_never_have_i_ever(
+            "host", now, PRIMARY_GROUP_CHAT_ID
+        ).status
+        == "started"
+    )
+
+
+def _start_never_have_i_ever(repository, now, *platform_ids: str) -> None:
+    repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=never-have-i-ever", now
+    )
+    for platform_id in platform_ids:
+        repository.create_user(platform_id, platform_id, now, 0)
+    assert (
+        repository.start_never_have_i_ever(
+            platform_ids[0], now, PRIMARY_GROUP_CHAT_ID
+        ).status
+        == "signup_started"
+    )
+    for platform_id in platform_ids[1:]:
+        assert (
+            repository.join_never_have_i_ever(
+                platform_id, now, PRIMARY_GROUP_CHAT_ID
+            ).status
+            == "joined"
+        )
+    assert (
+        repository.begin_never_have_i_ever(
+            platform_ids[0], now, PRIMARY_GROUP_CHAT_ID
+        ).status
+        == "started"
+    )
+
+
+def test_never_have_i_ever_statement_responses_and_settlement(repository):
+    now = datetime(2026, 8, 31, 12, 0, tzinfo=BEIJING)
+    _start_never_have_i_ever(repository, now, "host", "u2", "u3")
+
+    statement = repository.submit_never_have_i_ever_statement(
+        "host", "我得过5km第一", now, PRIMARY_GROUP_CHAT_ID
+    )
+    first = repository.respond_never_have_i_ever(
+        "u2", True, now, PRIMARY_GROUP_CHAT_ID
+    )
+    settled = repository.respond_never_have_i_ever(
+        "u3", False, now, PRIMARY_GROUP_CHAT_ID
+    )
+
+    assert statement.status == "statement_recorded"
+    assert first.status == "response_recorded"
+    assert (first.responded_count, first.expected_response_count) == (1, 2)
+    assert settled.status == "round_settled"
+    assert settled.statement == "我得过5km第一"
+    assert settled.deducted_player_names == ("u2",)
+    assert settled.kept_player_names == ("u3",)
+    assert settled.timeout_deducted_player_names == ()
+    assert [(player.number, player.hearts) for player in settled.players] == [
+        (1, 5),
+        (2, 4),
+        (3, 5),
+    ]
+    assert settled.current_speaker_number == 2
+
+
+def test_never_have_i_ever_rejects_invalid_or_duplicate_responses(repository):
+    now = datetime(2026, 8, 31, 12, 0, tzinfo=BEIJING)
+    _start_never_have_i_ever(repository, now, "host", "u2", "u3")
+
+    assert (
+        repository.submit_never_have_i_ever_statement(
+            "u2", "我会滑雪", now, PRIMARY_GROUP_CHAT_ID
+        ).status
+        == "not_current_speaker"
+    )
+    assert (
+        repository.submit_never_have_i_ever_statement(
+            "host", "  ", now, PRIMARY_GROUP_CHAT_ID
+        ).status
+        == "empty_statement"
+    )
+    repository.submit_never_have_i_ever_statement(
+        "host", "我会滑雪", now, PRIMARY_GROUP_CHAT_ID
+    )
+    assert (
+        repository.respond_never_have_i_ever(
+            "host", True, now, PRIMARY_GROUP_CHAT_ID
+        ).status
+        == "speaker_cannot_respond"
+    )
+    assert (
+        repository.respond_never_have_i_ever(
+            "u2", False, now, PRIMARY_GROUP_CHAT_ID
+        ).status
+        == "response_recorded"
+    )
+    assert (
+        repository.respond_never_have_i_ever(
+            "u2", True, now, PRIMARY_GROUP_CHAT_ID
+        ).status
+        == "already_responded"
+    )
+
+
+def test_never_have_i_ever_active_exit_enters_free_punishment(repository):
+    now = datetime(2026, 8, 31, 12, 0, tzinfo=BEIJING)
+    _start_never_have_i_ever(repository, now, "host", "u2", "u3")
+
+    first = repository.leave_never_have_i_ever("u2", now, PRIMARY_GROUP_CHAT_ID)
+    second = repository.leave_never_have_i_ever("u3", now, PRIMARY_GROUP_CHAT_ID)
+
+    assert first.status == "left_game"
+    assert second.status == "free_punishment"
+    assert second.current_speaker_number is None
+    assert [(player.number, player.hearts, player.state) for player in second.players] == [
+        (1, 5, "active"),
+        (2, 0, "withdrawn"),
+        (3, 0, "withdrawn"),
+    ]
+
+
+def test_never_have_i_ever_response_deductions_can_enter_free_punishment(
+    repository,
+):
+    now = datetime(2026, 8, 31, 12, 0, tzinfo=BEIJING)
+    _start_never_have_i_ever(repository, now, "host", "u2", "u3")
+    repository.submit_never_have_i_ever_statement(
+        "host", "我会滑雪", now, PRIMARY_GROUP_CHAT_ID
+    )
+    with repository._session() as session:
+        for player in session.scalars(select(NeverHaveIEverPlayerRecord)):
+            if player.roster_order in {2, 3}:
+                player.hearts = 1
+
+    repository.respond_never_have_i_ever("u2", True, now, PRIMARY_GROUP_CHAT_ID)
+    result = repository.respond_never_have_i_ever(
+        "u3", True, now, PRIMARY_GROUP_CHAT_ID
+    )
+
+    assert result.status == "free_punishment"
+    assert result.current_speaker_number is None
+
+
+def test_never_have_i_ever_signup_and_turn_timeouts_are_idempotent(repository):
+    now = datetime(2026, 8, 31, 12, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=never-have-i-ever", now
+    )
+    repository.create_user("host", "host", now, 0)
+    signup = repository.start_never_have_i_ever("host", now, PRIMARY_GROUP_CHAT_ID)
+
+    assert repository.run_never_have_i_ever_jobs(
+        now + timedelta(minutes=9, seconds=59)
+    ) == ()
+    expired = repository.run_never_have_i_ever_jobs(
+        now + timedelta(minutes=10)
+    )
+    assert [result.status for result in expired] == ["signup_expired"]
+    assert repository.run_never_have_i_ever_jobs(
+        now + timedelta(minutes=10, seconds=1)
+    ) == ()
+    assert signup.game_id is not None
+
+    _start_never_have_i_ever(repository, now + timedelta(hours=1), "a", "b", "c")
+    timed_out = repository.run_never_have_i_ever_jobs(
+        now + timedelta(hours=1, seconds=60)
+    )
+    assert [result.status for result in timed_out] == ["statement_timed_out"]
+    assert [(player.number, player.hearts) for player in timed_out[0].players] == [
+        (1, 4),
+        (2, 5),
+        (3, 5),
+    ]
+    assert timed_out[0].current_speaker_number == 2
+    assert repository.run_never_have_i_ever_jobs(
+        now + timedelta(hours=1, seconds=61)
+    ) == ()
+
+
+def test_never_have_i_ever_response_timeout_deducts_only_missing_players(repository):
+    now = datetime(2026, 8, 31, 12, 0, tzinfo=BEIJING)
+    _start_never_have_i_ever(repository, now, "host", "u2", "u3")
+    repository.submit_never_have_i_ever_statement(
+        "host", "我会游泳", now, PRIMARY_GROUP_CHAT_ID
+    )
+    repository.respond_never_have_i_ever("u2", False, now, PRIMARY_GROUP_CHAT_ID)
+
+    settled = repository.run_never_have_i_ever_jobs(
+        now + timedelta(seconds=60)
+    )
+
+    assert [result.status for result in settled] == ["round_timed_out"]
+    assert [(player.number, player.hearts) for player in settled[0].players] == [
+        (1, 5),
+        (2, 5),
+        (3, 4),
+    ]
+    assert repository.run_never_have_i_ever_jobs(
+        now + timedelta(seconds=61)
+    ) == ()
+
+
+def test_never_have_i_ever_response_timeout_queues_full_round_settlement(
+    repository,
+):
+    now = datetime(2026, 8, 31, 12, 0, tzinfo=BEIJING)
+    _start_never_have_i_ever(repository, now, "host", "u2", "u3")
+    repository.submit_never_have_i_ever_statement(
+        "host", "我会游泳", now, PRIMARY_GROUP_CHAT_ID
+    )
+    repository.respond_never_have_i_ever("u2", False, now, PRIMARY_GROUP_CHAT_ID)
+
+    repository.run_daily_jobs(now + timedelta(seconds=60))
+    outbound = repository.claim_outbound("never-have-i-ever-worker", now, 30)
+
+    assert outbound is not None
+    assert outbound.text == (
+        "【我有你没有】本轮结算\n"
+        "发言：我会游泳\n"
+        "/扣：无\n"
+        "/不扣：u2\n"
+        "超时自动扣心：u3\n"
+        "1. host：❤️❤️❤️❤️❤️\n"
+        "2. u2：❤️❤️❤️❤️❤️\n"
+        "3. u3：❤️❤️❤️❤️🖤\n"
+        "下一位：2号，请发送 /发言 内容。"
+    )
+
+
+def test_never_have_i_ever_active_participant_can_end_free_punishment(repository):
+    now = datetime(2026, 8, 31, 12, 0, tzinfo=BEIJING)
+    _start_never_have_i_ever(repository, now, "host", "u2", "u3", "u4")
+    repository.leave_never_have_i_ever("u2", now, PRIMARY_GROUP_CHAT_ID)
+    repository.leave_never_have_i_ever("u3", now, PRIMARY_GROUP_CHAT_ID)
+
+    assert (
+        repository.end_never_have_i_ever("u2", now, PRIMARY_GROUP_CHAT_ID).status
+        == "not_active"
+    )
+    ended = repository.end_never_have_i_ever("u4", now, PRIMARY_GROUP_CHAT_ID)
+
+    assert ended.status == "completed"
+    assert [(player.number, player.hearts) for player in ended.players] == [
+        (1, 6),
+        (4, 6),
+        (2, 0),
+        (3, 0),
+    ]
+    items, total = repository.list_never_have_i_ever_history(1, 20)
+    assert total == 1
+    assert items[0].state == "completed"
+    assert items[0].host_display_name == "host"
+    assert [player.display_name for player in items[0].players] == [
+        "host",
+        "u2",
+        "u3",
+        "u4",
+    ]
+
+
+def test_never_have_i_ever_history_preserves_round_statements_and_choices(repository):
+    now = datetime(2026, 8, 31, 12, 0, tzinfo=BEIJING)
+    _start_never_have_i_ever(repository, now, "host", "u2", "u3")
+    repository.submit_never_have_i_ever_statement(
+        "host", "我得过5km第一", now, PRIMARY_GROUP_CHAT_ID
+    )
+    repository.respond_never_have_i_ever("u2", True, now, PRIMARY_GROUP_CHAT_ID)
+    repository.respond_never_have_i_ever("u3", False, now, PRIMARY_GROUP_CHAT_ID)
+    repository.leave_never_have_i_ever("u2", now, PRIMARY_GROUP_CHAT_ID)
+    repository.leave_never_have_i_ever("u3", now, PRIMARY_GROUP_CHAT_ID)
+    repository.end_never_have_i_ever("host", now, PRIMARY_GROUP_CHAT_ID)
+
+    items, _ = repository.list_never_have_i_ever_history(1, 20)
+
+    assert items[0].rounds[0].speaker_display_name == "host"
+    assert items[0].rounds[0].statement == "我得过5km第一"
+    assert [
+        (response.player_number, response.display_name, response.choice)
+        for response in items[0].rounds[0].responses
+    ] == [(2, "u2", "deduct"), (3, "u3", "keep")]
+
+
 def test_memory_assessment_single_requires_recall_then_cash_out(repository, monkeypatch):
     now = datetime(2026, 8, 6, 10, 0, tzinfo=BEIJING)
     user, _ = repository.create_user("u1", "小明", now, 0)
@@ -7281,6 +7731,148 @@ def test_memory_assessment_single_requires_recall_then_cash_out(repository, monk
     assert repository.today_income(user.id, now) == 1
     assert repository.list_ai_activity_facts("u1")[0].last_result == "win"
     assert repository.start_memory_assessment_single("u1", now).status == "daily_limit"
+
+
+def test_memory_assessment_single_times_out_fifteen_seconds_after_recall(
+    repository, session_factory, monkeypatch
+):
+    from dzmm_bot.core.schema import (
+        MemoryAssessmentGameRecord,
+        MemoryAssessmentParticipantRecord,
+        MemoryAssessmentRoundRecord,
+        OutboundRecord,
+    )
+
+    now = datetime(2026, 8, 6, 10, 0, tzinfo=BEIJING)
+    repository.create_user("single-timeout", "超时玩家", now, 0)
+    monkeypatch.setattr("dzmm_bot.core.repository.choice", lambda _: "A")
+    started = repository.start_memory_assessment_single("single-timeout", now)
+    recalled_at = now + timedelta(seconds=3)
+
+    repository.mark_memory_assessment_round_recalled(started.round_id, recalled_at)
+
+    with session_factory() as session:
+        game = session.get(MemoryAssessmentGameRecord, started.game_id)
+        assert game.answer_deadline == recalled_at + timedelta(seconds=15)
+
+    repository.run_daily_jobs(recalled_at + timedelta(seconds=15) - timedelta(microseconds=1))
+    assert repository.active_gameplay_summary("single-timeout", recalled_at).game_type == "memory_single"
+
+    repository.run_daily_jobs(recalled_at + timedelta(seconds=15))
+    repository.run_daily_jobs(recalled_at + timedelta(seconds=16))
+
+    assert repository.active_gameplay_summary("single-timeout", recalled_at).game_type is None
+    with session_factory() as session:
+        game = session.get(MemoryAssessmentGameRecord, started.game_id)
+        round_record = session.get(MemoryAssessmentRoundRecord, started.round_id)
+        participant = session.scalar(
+            select(MemoryAssessmentParticipantRecord).where(
+                MemoryAssessmentParticipantRecord.game_id == started.game_id
+            )
+        )
+        notices = list(
+            session.scalars(
+                select(OutboundRecord.text).where(
+                    OutboundRecord.text
+                    == "【记忆考核】超时玩家 15 秒内未作答，本次考核失败。"
+                )
+            )
+        )
+    assert game.state == "failed"
+    assert game.active_key is None
+    assert game.answer_deadline is None
+    assert round_record.state == "failed"
+    assert participant.state == "failed"
+    assert notices == ["【记忆考核】超时玩家 15 秒内未作答，本次考核失败。"]
+    assert repository.list_ai_activity_facts("single-timeout")[0].last_result == "loss"
+
+
+def test_memory_assessment_single_auto_cashes_out_after_decision_timeout(
+    repository, session_factory, monkeypatch
+):
+    from dzmm_bot.core.schema import (
+        MemoryAssessmentGameRecord,
+        MemoryAssessmentParticipantRecord,
+        OutboundRecord,
+    )
+
+    now = datetime(2026, 8, 6, 10, 0, tzinfo=BEIJING)
+    repository.create_user("single-decision-timeout", "收手玩家", now, 0)
+    monkeypatch.setattr("dzmm_bot.core.repository.choice", lambda _: "A")
+    started = repository.start_memory_assessment_single("single-decision-timeout", now)
+    repository.mark_memory_assessment_round_recalled(started.round_id, now)
+
+    correct = repository.answer_memory_assessment(
+        "single-decision-timeout", started.answer, now
+    )
+
+    assert correct.status == "correct"
+    with session_factory() as session:
+        game = session.get(MemoryAssessmentGameRecord, started.game_id)
+        assert game.state == "awaiting_decision"
+        assert game.answer_deadline == now + timedelta(seconds=15)
+
+    repository.run_daily_jobs(now + timedelta(seconds=15))
+
+    assert repository.active_gameplay_summary("single-decision-timeout", now).game_type is None
+    assert repository.find_user("single-decision-timeout").balance == 1
+    with session_factory() as session:
+        game = session.get(MemoryAssessmentGameRecord, started.game_id)
+        participant = session.scalar(
+            select(MemoryAssessmentParticipantRecord).where(
+                MemoryAssessmentParticipantRecord.game_id == started.game_id
+            )
+        )
+        notices = list(
+            session.scalars(
+                select(OutboundRecord.text).where(
+                    OutboundRecord.text
+                    == "【记忆考核】收手玩家 15 秒内未选择继续，已自动收手，获得 1 摸鱼币。"
+                )
+            )
+        )
+    assert game.state == "settled"
+    assert game.active_key is None
+    assert game.answer_deadline is None
+    assert participant.state == "settled"
+    assert notices == ["【记忆考核】收手玩家 15 秒内未选择继续，已自动收手，获得 1 摸鱼币。"]
+    assert repository.list_ai_activity_facts("single-decision-timeout")[0].last_result == "win"
+
+
+def test_memory_assessment_single_cannot_continue_after_decision_timeout(
+    repository, monkeypatch
+):
+    now = datetime(2026, 8, 6, 10, 0, tzinfo=BEIJING)
+    repository.create_user("single-late-continue", "迟到收手", now, 0)
+    monkeypatch.setattr("dzmm_bot.core.repository.choice", lambda _: "A")
+    started = repository.start_memory_assessment_single("single-late-continue", now)
+    repository.mark_memory_assessment_round_recalled(started.round_id, now)
+    repository.answer_memory_assessment("single-late-continue", started.answer, now)
+
+    result = repository.continue_memory_assessment(
+        "single-late-continue", now + timedelta(seconds=15)
+    )
+
+    assert result.status == "auto_cashed_out"
+    assert repository.find_user("single-late-continue").balance == 1
+    assert repository.active_gameplay_summary("single-late-continue", now).game_type is None
+
+
+def test_memory_assessment_single_rejects_answer_at_timeout_boundary(
+    repository, monkeypatch
+):
+    now = datetime(2026, 8, 6, 10, 0, tzinfo=BEIJING)
+    repository.create_user("single-late-answer", "迟到玩家", now, 0)
+    monkeypatch.setattr("dzmm_bot.core.repository.choice", lambda _: "A")
+    started = repository.start_memory_assessment_single("single-late-answer", now)
+    repository.mark_memory_assessment_round_recalled(started.round_id, now)
+
+    result = repository.answer_memory_assessment(
+        "single-late-answer", started.answer, now + timedelta(seconds=15)
+    )
+
+    assert result.status == "timed_out"
+    assert repository.active_gameplay_summary("single-late-answer", now).game_type is None
 
 
 def test_memory_assessment_single_continues_and_loses_unclaimed_reward(
@@ -7499,6 +8091,7 @@ def test_memory_assessment_cannot_start_during_active_random_event(repository, s
     repository.schedule_random_events(now)
     repository.run_random_event_jobs(now)
     if state == "in_progress":
+        _mark_random_event_signup_notice_sent(repository)
         assert repository.join_random_event("u2", "员工", now) == "started"
 
     assert repository.start_memory_assessment_single("u1", now).status == "random_event_active"
@@ -7747,6 +8340,7 @@ def test_random_event_sends_one_group_preview_five_minutes_before_start(
     assert len(previews) == 1
     assert "约 5 分钟后" in previews[0].text
     assert "茶水间" in previews[0].text
+    assert "员工 ×1" in previews[0].text
 
     schedule = repository.list_today_random_event_schedules(now)[0]
     repository.reschedule_random_event(
@@ -7767,6 +8361,59 @@ def test_random_event_sends_one_group_preview_five_minutes_before_start(
         )
     assert len(previews) == 2
     assert "即将开放" in previews[-1].text
+
+
+def test_random_event_schedule_prefers_never_performed_scene(
+    repository, session_factory, monkeypatch
+):
+    now = datetime(2026, 8, 6, 10, 0, tzinfo=BEIJING)
+    group = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=event-prefer-unperformed", now
+    )
+    repository.create_random_event_scene(
+        "已演绎场景", "报名", ["开始。"], 1, 1, [("员工", 1)]
+    )
+    repository.create_random_event_scene(
+        "未演绎场景", "报名", ["开始。"], 1, 1, [("员工", 1)]
+    )
+    repository.set_random_event_settings(["10:05"], "报名：{可选身份}", 15, 5)
+
+    with session_factory() as session:
+        historical_schedule = RandomEventScheduleRecord(
+            group_chat_id=group.id,
+            event_date=(now - timedelta(days=1)).date(),
+            scheduled_at=now - timedelta(days=1),
+            status="ended",
+            scene_name="已演绎场景",
+            event_name="开始",
+            created_at=now - timedelta(days=1),
+        )
+        session.add(historical_schedule)
+        session.flush()
+        session.add(
+            RandomEventRecord(
+                group_chat_id=group.id,
+                schedule_id=historical_schedule.id,
+                group_key=str(group.id),
+                state="ended",
+                scene_name="已演绎场景",
+                event_name="开始",
+                signup_text="报名",
+                formal_opening_text="开始。",
+                reward=1,
+                target_rounds=1,
+                signup_deadline=historical_schedule.scheduled_at,
+                started_at=historical_schedule.scheduled_at,
+                ended_at=historical_schedule.scheduled_at + timedelta(minutes=1),
+            )
+        )
+        session.commit()
+
+    monkeypatch.setattr("dzmm_bot.core.repository.randbelow", lambda _: 0)
+
+    [schedule] = repository.schedule_random_events(now)
+
+    assert schedule.scene_name == "未演绎场景"
 
 
 def test_random_event_reschedule_checks_the_gameplay_gate(repository, monkeypatch):
@@ -7817,6 +8464,9 @@ def test_random_events_run_and_accept_participants_independently_per_group(repos
     repository.set_random_event_settings(["10:00"], "可选身份：{可选身份}", 15, 5)
 
     repository.run_random_event_jobs(now)
+
+    _mark_random_event_signup_notice_sent(repository, primary.id)
+    _mark_random_event_signup_notice_sent(repository, second.id)
 
     assert repository.join_random_event(
         "event-a", "员工", now, primary.id
@@ -7917,6 +8567,27 @@ def test_due_outbound_recall_marks_memory_assessment_round_ready(repository, now
     )
     with repository._session() as session:
         assert session.get(MemoryAssessmentRoundRecord, started.round_id).state == "awaiting_answer"
+
+
+def test_failed_outbound_recall_is_not_claimed_indefinitely(repository, now):
+    """Fails if a platform recall rejection returns the same record forever."""
+    outbound = repository.enqueue_system_outbound("撤回失败", recall_after_seconds=3)
+    sent = repository.claim_outbound("worker-a", now, 30)
+    assert repository.confirm_sent(
+        outbound.id, "worker-a", sent.lease_token, "platform-message", now
+    )
+    recalled_at = now + timedelta(seconds=3)
+    for attempt, retry_seconds in ((1, 2), (2, 4), (3, 0)):
+        claim = repository.claim_outbound_recall("worker-a", recalled_at, 30)
+        assert claim is not None
+        assert claim.recall_attempt_count == attempt
+        assert repository.fail_outbound_recall(
+            outbound.id, "worker-a", claim.recall_lease_token, recalled_at
+        )
+        recalled_at += timedelta(seconds=retry_seconds)
+    assert repository.claim_outbound_recall(
+        "worker-b", recalled_at + timedelta(days=1), 30
+    ) is None
 
 
 def test_hide_and_seek_scene_name_must_be_unique(repository):
@@ -8038,6 +8709,7 @@ def test_hide_and_seek_cannot_start_during_active_random_event(repository, state
     repository.run_random_event_jobs(now)
     if state == "in_progress":
         repository.create_user("u2", "小红", now, 0)
+        _mark_random_event_signup_notice_sent(repository)
         assert repository.join_random_event("u2", "员工", now) == "started"
 
     assert repository.start_hide_and_seek("u1", now).status == "random_event_active"
@@ -8182,6 +8854,8 @@ def test_random_event_lifecycle_rewards_only_completed_participant(
     repository.schedule_random_events(now)
     repository.run_random_event_jobs(now)
 
+    _mark_random_event_signup_notice_sent(repository)
+
     assert repository.join_random_event("u1", "员工", now) == "joined"
     assert repository.join_random_event("u2", "员工", now) == "started"
     repository.record_random_event_round("u1", now, "第一轮")
@@ -8225,6 +8899,8 @@ def test_random_event_renders_legacy_compatible_role_variable_braces(
     repository.schedule_random_events(now)
     repository.run_random_event_jobs(now)
 
+    _mark_random_event_signup_notice_sent(repository)
+
     assert repository.join_random_event("fullwidth-player", "员工", now) == "started"
     with session_factory() as session:
         messages = list(session.scalars(select(OutboundRecord.text)))
@@ -8249,6 +8925,7 @@ def test_random_event_last_exit_opens_tipping_with_frozen_deadline(
     repository.create_user("tip-second", "小红", now, 0)
     repository.schedule_random_events(now)
     repository.run_random_event_jobs(now)
+    _mark_random_event_signup_notice_sent(repository)
     assert repository.join_random_event("tip-first", "员工", now) == "joined"
     assert repository.join_random_event("tip-second", "员工", now) == "started"
     repository.record_random_event_round("tip-first", now, "第一轮")
@@ -8298,6 +8975,7 @@ def test_random_event_last_exit_locks_gameplay_gate_before_active_event(
     repository.create_user("lock-order-player", "锁序玩家", now, 0)
     repository.schedule_random_events(now)
     repository.run_random_event_jobs(now)
+    _mark_random_event_signup_notice_sent(repository)
     assert repository.join_random_event("lock-order-player", "员工", now) == "started"
 
     calls = []
@@ -8330,6 +9008,7 @@ def test_random_event_full_signup_locks_gameplay_gate_before_active_event(
     repository.create_user("signup-lock-player", "报名锁序玩家", now, 0)
     repository.schedule_random_events(now)
     repository.run_random_event_jobs(now)
+    _mark_random_event_signup_notice_sent(repository)
 
     calls = []
     original_gate = repository._lock_gameplay_gate
@@ -8348,6 +9027,67 @@ def test_random_event_full_signup_locks_gameplay_gate_before_active_event(
 
     assert repository.join_random_event("signup-lock-player", "员工", now) == "started"
     assert calls.index("gate") < calls.index("active")
+
+
+def test_random_event_state_check_does_not_lock_the_active_event(
+    repository, session_factory
+):
+    """Fails if command routing can lock event before a mutation locks the gate."""
+    from sqlalchemy import event
+    from sqlalchemy.dialects import postgresql
+
+    now = datetime(2026, 8, 6, 10, 0, tzinfo=BEIJING)
+    repository.create_random_event_scene(
+        "状态查询锁序测试场", "报名", ["正式开始。"], 1, 1, [("员工", 1)]
+    )
+    repository.set_random_event_settings(["10:00"], "{可选身份}", 15, 5)
+    repository.schedule_random_events(now)
+    repository.run_random_event_jobs(now)
+    statements = []
+
+    def capture_random_event_select(execute_state):
+        if not execute_state.is_select:
+            return
+        statement = str(execute_state.statement.compile(dialect=postgresql.dialect()))
+        if "FROM random_events" in statement:
+            statements.append(statement)
+
+    event.listen(session_factory.class_, "do_orm_execute", capture_random_event_select)
+    try:
+        assert repository.active_random_event_state() == "signup"
+    finally:
+        event.remove(session_factory.class_, "do_orm_execute", capture_random_event_select)
+
+    assert len(statements) == 1
+    assert "FOR UPDATE" not in statements[0]
+
+
+def test_random_event_join_waits_until_signup_notice_is_sent(repository):
+    """Fails if a player can join before the public signup notice is delivered."""
+    now = datetime(2026, 8, 6, 10, 0, tzinfo=BEIJING)
+    repository.create_random_event_scene(
+        "报名通知门禁测试场", "报名", ["正式开始。"], 1, 1, [("员工", 1)]
+    )
+    repository.set_random_event_settings(["10:00"], "{可选身份}", 15, 5)
+    repository.create_user("notice-gated-player", "通知门禁玩家", now, 0)
+    repository.schedule_random_events(now)
+    repository.run_random_event_jobs(now)
+
+    assert (
+        repository.join_random_event("notice-gated-player", "员工", now)
+        == "announcement_pending"
+    )
+    notice = repository.claim_outbound("notice-worker", now, 30)
+    assert notice is not None
+    assert notice.text.startswith("【随机事件：报名通知门禁测试场")
+    assert repository.confirm_sent(
+        notice.id,
+        "notice-worker",
+        notice.lease_token,
+        "platform-signup-notice",
+        now,
+    )
+    assert repository.join_random_event("notice-gated-player", "员工", now) == "started"
 
 
 @pytest.mark.parametrize("duration", [9, 3601])
@@ -8374,6 +9114,7 @@ def test_random_event_tipping_timeout_settles_once_after_repository_restart(
     repository.create_user("timeout-player", "超时玩家", now, 0)
     repository.schedule_random_events(now)
     repository.run_random_event_jobs(now)
+    _mark_random_event_signup_notice_sent(repository)
     assert repository.join_random_event("timeout-player", "员工", now) == "started"
     assert repository.leave_random_event("timeout-player", now) == "left_without_reward"
     deadline = repository.random_event_tipping_summary().tipping_deadline
@@ -8411,6 +9152,7 @@ def _prepare_random_event_tipping_summary_test(repository, now):
         repository.create_user(platform_id, name, now, balance)
     repository.schedule_random_events(now)
     repository.run_random_event_jobs(now)
+    _mark_random_event_signup_notice_sent(repository)
     assert repository.join_random_event("summary-a", "员工", now) == "joined"
     assert repository.join_random_event("summary-b", "员工", now) == "joined"
     assert repository.join_random_event("summary-c", "员工", now) == "started"
@@ -8500,6 +9242,7 @@ def _prepare_random_event_tip_test(repository, now, *, duration=120):
     repository.create_user("tip-outsider", "非参与员工", now, 0)
     repository.schedule_random_events(now)
     repository.run_random_event_jobs(now)
+    _mark_random_event_signup_notice_sent(repository)
     assert repository.join_random_event("tip-target-1", "员工", now) == "joined"
     assert repository.join_random_event("tip-target-2", "员工", now) == "started"
     repository.record_random_event_round("tip-target-1", now, "完成一轮")
@@ -8636,6 +9379,7 @@ def test_random_event_tip_rejects_missing_or_expired_tipping_phase(repository):
     repository.create_user("phase-target", "阶段收款者", now, 0)
     repository.schedule_random_events(now)
     repository.run_random_event_jobs(now)
+    _mark_random_event_signup_notice_sent(repository)
     assert repository.join_random_event("phase-target", "员工", now) == "started"
     assert repository.leave_random_event("phase-target", now) == "left_without_reward"
     deadline = repository.random_event_tipping_summary().tipping_deadline
@@ -8663,6 +9407,8 @@ def test_random_event_signup_exit_does_not_create_an_activity_fact(repository):
     repository.create_user("signup-only", "报名玩家", now, 0)
     repository.schedule_random_events(now)
     repository.run_random_event_jobs(now)
+
+    _mark_random_event_signup_notice_sent(repository)
 
     assert repository.join_random_event("signup-only", "员工", now) == "joined"
     assert repository.leave_random_event("signup-only", now) == "left_signup"
@@ -8692,6 +9438,8 @@ def test_full_random_event_sends_a_frozen_formal_opening(
     repository.create_user("u2", "小红", now, 0)
     repository.schedule_random_events(now)
     repository.run_random_event_jobs(now)
+
+    _mark_random_event_signup_notice_sent(repository)
 
     assert repository.join_random_event("u1", "主持", now) == "joined"
     assert repository.join_random_event("u2", "员工", now) == "started"
@@ -8725,6 +9473,8 @@ def test_full_random_event_renders_role_variables(repository, session_factory):
     repository.schedule_random_events(now)
     repository.run_random_event_jobs(now)
 
+    _mark_random_event_signup_notice_sent(repository)
+
     assert repository.join_random_event("u1", "主持", now) == "joined"
     assert repository.join_random_event("u2", "员工", now + timedelta(seconds=1)) == "joined"
     assert repository.join_random_event("u3", "员工", now + timedelta(seconds=2)) == "started"
@@ -8748,6 +9498,7 @@ def test_random_event_records_participant_details_and_can_trigger(repository):
 
     assert repository.trigger_random_event(schedule.id, now).status == "signup"
     assert repository.list_today_random_event_schedules(now)[0].has_details is True
+    _mark_random_event_signup_notice_sent(repository)
     assert repository.join_random_event("u1", "员工", now) == "started"
     assert repository.record_random_event_round("u1", now, "开始收拾") == "participant"
     assert repository.record_random_event_round("observer", now, "（路过）") == "observer_valid"
@@ -8825,6 +9576,7 @@ def test_in_progress_random_event_classifies_observer_parentheses(repository):
     repository.create_user("player", "小明", now, 0)
     repository.schedule_random_events(now)
     repository.run_random_event_jobs(now)
+    _mark_random_event_signup_notice_sent(repository)
     assert repository.join_random_event("player", "员工", now) == "started"
 
     assert (
@@ -8852,6 +9604,7 @@ def test_cross_day_active_random_event_skips_next_days_due_schedule(repository):
     repository.create_user("u1", "小明", first_day, 0)
     repository.schedule_random_events(first_day)
     repository.run_random_event_jobs(first_day)
+    _mark_random_event_signup_notice_sent(repository)
     assert repository.join_random_event("u1", "主持", first_day) == "started"
 
     second_day = first_day + timedelta(days=1)

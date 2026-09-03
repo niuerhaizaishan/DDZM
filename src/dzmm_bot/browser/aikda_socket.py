@@ -314,11 +314,14 @@ class AikdaSocketGateway:
             {"chatroomId": chatroom_id, "botId": bot_id},
         )
 
-    def retract(self, message_id: str) -> None:
+    def retract(self, message_id: str, *, chatroom_id: str | None = None) -> None:
         self._ensure_connected()
         acknowledgement = self._call(
             "message:recall",
-            {"chatroomId": self.chatroom_id, "messageId": message_id},
+            {
+                "chatroomId": chatroom_id or self.chatroom_id,
+                "messageId": message_id,
+            },
             timeout=10,
         )
         if not acknowledgement or acknowledgement.get("success") is not True:

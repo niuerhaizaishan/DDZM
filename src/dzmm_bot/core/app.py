@@ -83,6 +83,8 @@ from .api_models import (
     OutboundClaimResponse,
     OutboundRecallClaimResponse,
     NumberBombSettingsResponse,
+    NeverHaveIEverSettingsResponse,
+    KingGameSettingsResponse,
     TexasHoldemSettingsResponse,
     DarkMarketSettingsResponse,
     DarkMarketRankLimitResponse,
@@ -106,6 +108,8 @@ from .api_models import (
     SetCommandTemplateRequest,
     SetActivitySettingsRequest,
     SetNumberBombSettingsRequest,
+    SetNeverHaveIEverSettingsRequest,
+    SetKingGameSettingsRequest,
     SetTexasHoldemSettingsRequest,
     SetRedPacketSettingsRequest,
     SetAIAssistantSettingsRequest,
@@ -901,6 +905,7 @@ def create_app(
             lease_token=record.recall_lease_token,
             lease_expires_at=record.recall_lease_expires_at,
             attempt_count=record.recall_attempt_count,
+            destination_chatroom_id=record.destination_chatroom_id,
         )
 
     @app.post(
@@ -912,6 +917,20 @@ def create_app(
         _: Annotated[None, Depends(authorize)],
     ) -> AcceptedResponse:
         accepted = repository.confirm_outbound_recalled(
+            message_id, request.worker_id, request.lease_token, request.now
+        )
+        return AcceptedResponse(accepted=accepted)
+
+    @app.post(
+        "/internal/outbound/{message_id}/recall-failed",
+        response_model=AcceptedResponse,
+    )
+    def fail_outbound_recall(
+        message_id: UUID,
+        request: RecalledRequest,
+        _: Annotated[None, Depends(authorize)],
+    ) -> AcceptedResponse:
+        accepted = repository.fail_outbound_recall(
             message_id, request.worker_id, request.lease_token, request.now
         )
         return AcceptedResponse(accepted=accepted)
@@ -1874,6 +1893,57 @@ def create_app(
         )
 
     @app.get(
+        "/internal/game/never-have-i-ever/settings",
+        response_model=NeverHaveIEverSettingsResponse,
+    )
+    def never_have_i_ever_settings(
+        _: Annotated[None, Depends(authorize)],
+    ) -> NeverHaveIEverSettingsResponse:
+        return NeverHaveIEverSettingsResponse(
+            **repository.get_never_have_i_ever_settings().__dict__
+        )
+
+    @app.get(
+        "/internal/game/king-game/settings",
+        response_model=KingGameSettingsResponse,
+    )
+    def king_game_settings(
+        _: Annotated[None, Depends(authorize)],
+    ) -> KingGameSettingsResponse:
+        return KingGameSettingsResponse(**repository.get_king_game_settings().__dict__)
+
+    @app.get("/internal/game/never-have-i-ever/history")
+    def never_have_i_ever_history(
+        _: Annotated[None, Depends(authorize)],
+        page: int = Query(default=1, ge=1),
+        page_size: int = Query(default=20, ge=1, le=100),
+    ) -> dict:
+        items, total = repository.list_never_have_i_ever_history(page, page_size)
+        return {
+            "items": [
+                {
+                    **item.__dict__,
+                    "players": [player.__dict__ for player in item.players],
+                    "rounds": [
+                        {
+                            **round_record.__dict__,
+                            "responses": [
+                                response.__dict__
+                                for response in round_record.responses
+                            ],
+                        }
+                        for round_record in item.rounds
+                    ],
+                }
+                for item in items
+            ],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "pages": max(1, (total + page_size - 1) // page_size),
+        }
+
+    @app.get(
         "/internal/game/texas-holdem/settings",
         response_model=TexasHoldemSettingsResponse,
     )
@@ -2074,6 +2144,35 @@ def create_app(
             reminder_interval_seconds=settings.reminder_interval_seconds,
         )
 
+    @app.patch(
+        "/internal/game/never-have-i-ever/settings",
+        response_model=NeverHaveIEverSettingsResponse,
+    )
+    def set_never_have_i_ever_settings(
+        request: SetNeverHaveIEverSettingsRequest,
+        _: Annotated[None, Depends(authorize)],
+    ) -> NeverHaveIEverSettingsResponse:
+        return NeverHaveIEverSettingsResponse(
+            **repository.set_never_have_i_ever_settings(
+                enabled=request.enabled,
+                signup_timeout_minutes=request.signup_timeout_minutes,
+                statement_timeout_seconds=request.statement_timeout_seconds,
+                response_timeout_seconds=request.response_timeout_seconds,
+            ).__dict__
+        )
+
+    @app.patch(
+        "/internal/game/king-game/settings",
+        response_model=KingGameSettingsResponse,
+    )
+    def set_king_game_settings(
+        request: SetKingGameSettingsRequest,
+        _: Annotated[None, Depends(authorize)],
+    ) -> KingGameSettingsResponse:
+        return KingGameSettingsResponse(
+            **repository.set_king_game_settings(**request.model_dump()).__dict__
+        )
+
     @app.get(
         "/internal/game/red-packet/settings",
         response_model=RedPacketSettingsResponse,
@@ -2136,6 +2235,11 @@ def create_app(
                         total_points=participant.total_points,
                         retired_at_round=participant.retired_at_round,
                     )
+                elif summary.game_type == "never_have_i_ever":
+                    participant_values.update(
+                        state=participant.state,
+                        hearts=participant.hearts,
+                    )
                 participants.append(GameplayParticipantResponse(**participant_values))
             values = {
                 "group_chat_id": summary.group_chat_id,
@@ -2162,6 +2266,12 @@ def create_app(
                     action_deadline=summary.action_deadline,
                     to_call=summary.to_call,
                     legal_actions=list(summary.legal_actions),
+                )
+            elif summary.game_type in {
+                "memory_duel", "memory_single", "never_have_i_ever", "king_game"
+            }:
+                values.update(
+                    action_deadline=summary.action_deadline,
                 )
             items.append(GameplaySummaryResponse(**values))
         return GameplaySummariesResponse(items=items)
@@ -2387,6 +2497,8 @@ def create_app(
                 enabled=request.enabled,
                 single_daily_limit=request.single_daily_limit,
                 single_recall_seconds=request.single_recall_seconds,
+                single_answer_timeout_seconds=request.single_answer_timeout_seconds,
+                single_decision_timeout_seconds=request.single_decision_timeout_seconds,
                 duel_recall_seconds=request.duel_recall_seconds,
                 duel_difficulty_level=request.duel_difficulty_level,
                 duel_base_pool=request.duel_base_pool,
@@ -3407,6 +3519,8 @@ def _memory_assessment_settings_response(
         enabled=settings.enabled,
         single_daily_limit=settings.single_daily_limit,
         single_recall_seconds=settings.single_recall_seconds,
+        single_answer_timeout_seconds=settings.single_answer_timeout_seconds,
+        single_decision_timeout_seconds=settings.single_decision_timeout_seconds,
         duel_recall_seconds=settings.duel_recall_seconds,
         duel_difficulty_level=settings.duel_difficulty_level,
         duel_base_pool=settings.duel_base_pool,

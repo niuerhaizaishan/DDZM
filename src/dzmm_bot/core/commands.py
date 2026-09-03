@@ -21,6 +21,9 @@ from .repository import (
     EmployeeNameTakenError,
     blame_settlement_template_values,
     format_employee_number,
+    render_never_have_i_ever_hearts,
+    render_never_have_i_ever_player_lines,
+    render_never_have_i_ever_round_settlement,
     undercover_settlement_template_values,
 )
 from .service import CommandReply
@@ -28,7 +31,7 @@ from .service import CommandReply
 
 _BEIJING = ZoneInfo("Asia/Shanghai")
 _COMMANDS = {
-    "/入职", "/我的物品", "/购买", "/使用", "/邀请参与", "/取消使用", "/同意使用", "/拒绝使用", "/打卡", "/余额", "/修改名称", "/编辑档案", "/编辑档案形象", "/我的档案", "/发奖金", "/发红包", "/抢红包", "/打赏", "/我", "/商店", "/帮助", "/当前游戏", "/加入", "/退出", "/开始", "/摸鱼躲猫猫", "/记忆考核", "/答案", "/继续", "/收手", "/投降", "/队伍1", "/队伍2", "/队伍1人员", "/队伍2人员", "/公会赛场次", "/开始对战", "/上场", "/部门", "/部门人数", "/我的部门人数", "/加入部门", "/切换部门", "/部门申请列表", "/同意部门", "/全部同意部门", "/拒绝部门", "/全部拒绝部门", "/职位", "/晋升", "/晋升申请列表", "/同意", "/全部同意", "/拒绝", "/全部拒绝", "/谁是卧底", "/开始投票", "/投票", "/退出谁是卧底", "/结束游戏", "/甩锅游戏", "/甩锅", "/退出甩锅", "/蹦蹦数字炸弹", "/报数", "/跳过", "/德州扑克", "/看牌", "/过牌", "/跟注", "/加注", "/全下", "/弃牌", "/上架暗网", "/取消上架", "/确认", "/报价", "/公开", "/不公开", "/查看暗网", "/确认收货", "/投诉", "/预约公演", "/我的公演预约", "/取消公演预约", "/公演日程", "/延期", "/end",
+    "/入职", "/我的物品", "/购买", "/使用", "/邀请参与", "/取消使用", "/同意使用", "/拒绝使用", "/打卡", "/余额", "/修改名称", "/编辑档案", "/编辑档案形象", "/我的档案", "/发奖金", "/发红包", "/抢红包", "/打赏", "/我", "/商店", "/帮助", "/当前游戏", "/加入", "/退出", "/开始", "/摸鱼躲猫猫", "/记忆考核", "/答案", "/继续", "/收手", "/投降", "/队伍1", "/队伍2", "/队伍1人员", "/队伍2人员", "/公会赛场次", "/开始对战", "/上场", "/部门", "/部门人数", "/我的部门人数", "/加入部门", "/切换部门", "/部门申请列表", "/同意部门", "/全部同意部门", "/拒绝部门", "/全部拒绝部门", "/职位", "/晋升", "/晋升申请列表", "/同意", "/全部同意", "/拒绝", "/全部拒绝", "/谁是卧底", "/开始投票", "/投票", "/退出谁是卧底", "/结束游戏", "/甩锅游戏", "/甩锅", "/退出甩锅", "/我有你没有", "/发言", "/扣", "/不扣", "/国王游戏", "/蹦蹦数字炸弹", "/报数", "/跳过", "/德州扑克", "/看牌", "/过牌", "/跟注", "/加注", "/全下", "/弃牌", "/上架暗网", "/取消上架", "/确认", "/报价", "/公开", "/不公开", "/查看暗网", "/确认收货", "/投诉", "/预约公演", "/我的公演预约", "/取消公演预约", "/公演日程", "/延期", "/end",
 }
 
 _DARK_MARKET_QUERY_ALIASES = {
@@ -222,6 +225,14 @@ class GroupCommandHandler:
             return self._dark_market_confirm(message, received_at)
         if command == "/报价":
             return self._dark_market_bid(message, content, received_at)
+        if command == "/公开" and group_chat_id is not None:
+            summary = self._repository.active_gameplay_summary(
+                message.sender_platform_id, received_at, group_chat_id
+            )
+            if summary.game_type == "king_game":
+                return self._king_game_reveal(
+                    message, content, received_at, group_chat_id
+                )
         if command in {"/公开", "/不公开"}:
             return self._dark_market_disclose(
                 message, command, content, received_at
@@ -246,6 +257,7 @@ class GroupCommandHandler:
                 "/甩锅游戏",
                 "/蹦蹦数字炸弹",
                 "/德州扑克",
+                "/国王游戏",
             }
             and self._repository.performance_blocks_new_game(group_chat_id)
         ):
@@ -255,7 +267,7 @@ class GroupCommandHandler:
             and not group.games_enabled
             and command in {
                 "/发红包", "/摸鱼躲猫猫", "/记忆考核", "/谁是卧底",
-                "/甩锅游戏", "/蹦蹦数字炸弹", "/德州扑克",
+                "/甩锅游戏", "/蹦蹦数字炸弹", "/德州扑克", "/国王游戏",
             }
         ):
             return self._reply(command, "disabled", received_at)
@@ -297,6 +309,8 @@ class GroupCommandHandler:
             return self._texas_holdem_start(
                 message.sender_platform_id, content, received_at, group_chat_id
             )
+        if command == "/国王游戏":
+            return self._king_game_start(message, received_at, group_chat_id)
         if command == "/看牌":
             if message.source_type != "direct":
                 return self._reply("/看牌", "group_only", received_at)
@@ -350,6 +364,18 @@ class GroupCommandHandler:
                 received_at,
                 group_chat_id,
             )
+        if command == "/我有你没有":
+            return self._never_have_i_ever_start(
+                message, received_at, group_chat_id
+            )
+        if command == "/发言":
+            return self._never_have_i_ever_statement(
+                message, content, received_at, group_chat_id
+            )
+        if command in {"/扣", "/不扣"}:
+            return self._never_have_i_ever_response(
+                message, command, received_at, group_chat_id
+            )
         if command == "/开始":
             summary = self._repository.active_gameplay_summary(
                 message.sender_platform_id,
@@ -364,6 +390,12 @@ class GroupCommandHandler:
                 return self._texas_holdem_manual_start(
                     message.sender_platform_id, received_at, group_chat_id
                 )
+            if summary.game_type == "never_have_i_ever":
+                return self._never_have_i_ever_begin(
+                    message, received_at, group_chat_id
+                )
+            if summary.game_type == "king_game":
+                return self._king_game_begin(message, received_at, group_chat_id)
             return self._reply("/开始", "no_current_game", received_at)
         if command == "/报数":
             if message.source_type != "direct":
@@ -474,6 +506,12 @@ class GroupCommandHandler:
                 if result.status == "host_only":
                     return "只有本场主持人可以结束记忆考核公会赛。"
                 return "当前没有可结束的记忆考核公会赛。"
+            if summary.game_type == "never_have_i_ever":
+                return self._never_have_i_ever_end(
+                    message, received_at, group_chat_id
+                )
+            if summary.game_type == "king_game":
+                return self._king_game_end(message, received_at, group_chat_id)
             if summary.game_type == "conflict":
                 return self._reply("/当前游戏", "conflict", received_at)
             return self._reply("/结束游戏", "no_current_game", received_at)
@@ -567,6 +605,12 @@ class GroupCommandHandler:
                 return self._undercover_join(
                     message.sender_platform_id, received_at, group_chat_id
                 )
+            if summary.game_type == "never_have_i_ever":
+                return self._never_have_i_ever_join(
+                    message, received_at, group_chat_id
+                )
+            if summary.game_type == "king_game":
+                return self._king_game_join(message, received_at, group_chat_id)
             if summary.game_type == "conflict":
                 return self._reply("/当前游戏", "conflict", received_at)
             return self._event_join(
@@ -607,6 +651,12 @@ class GroupCommandHandler:
                 )
             if summary.game_type == "memory_guild":
                 return "记忆考核公会赛不支持退出或投降；仅主持人可发送 /结束游戏。"
+            if summary.game_type == "never_have_i_ever":
+                return self._never_have_i_ever_leave(
+                    message, received_at, group_chat_id
+                )
+            if summary.game_type == "king_game":
+                return self._king_game_leave(message, received_at, group_chat_id)
             if summary.game_type == "conflict":
                 return self._reply("/当前游戏", "conflict", received_at)
             return self._event_leave(
@@ -633,6 +683,10 @@ class GroupCommandHandler:
             if summary.game_type == "undercover":
                 return self._undercover_continue(
                     message.sender_platform_id, received_at, group_chat_id
+                )
+            if summary.game_type == "king_game":
+                return self._king_game_continue(
+                    message, received_at, group_chat_id
                 )
             if summary.game_type == "conflict":
                 return self._reply("/当前游戏", "conflict", received_at)
@@ -964,6 +1018,8 @@ class GroupCommandHandler:
         if summary.game_type == "conflict":
             return self._reply("/当前游戏", "conflict", received_at)
         game_name = {
+            "king_game": "国王游戏",
+            "never_have_i_ever": "我有你没有",
             "texas_holdem": "德州扑克",
             "number_bomb": "蹦蹦数字炸弹",
             "blame_bomb": "甩锅游戏",
@@ -998,6 +1054,11 @@ class GroupCommandHandler:
             "flop": "翻牌圈",
             "turn": "转牌圈",
             "river": "河牌圈",
+            "awaiting_statement": "等待发言",
+            "awaiting_responses": "等待回应",
+            "free_punishment": "自由惩罚",
+            "awaiting_reveal": "等待国王公开",
+            "revealed": "等待下一轮",
         }.get(summary.state, "进行中")
         if (
             summary.game_type == "number_bomb"
@@ -1007,9 +1068,34 @@ class GroupCommandHandler:
                 f"{state_name}（第 {summary.round_number}/{summary.maximum_rounds} 轮；"
                 f"你的积分：{summary.actor_total_points or 0} 分）"
             )
+        if summary.game_type == "never_have_i_ever":
+            details = []
+            if summary.actor_number is not None and summary.actor_hearts is not None:
+                heart_display = self._never_have_i_ever_hearts(
+                    summary.actor_hearts, len(summary.participant_names) + 2
+                )
+                details.append(
+                    f"你的编号：{summary.actor_number}号，心数："
+                    f"{heart_display}"
+                )
+            if summary.current_speaker_name is not None:
+                details.append(f"当前发言者：{summary.current_speaker_name}")
+            if summary.state == "awaiting_responses":
+                details.append(
+                    f"回应：{summary.responded_count}/"
+                    f"{summary.expected_response_count}"
+                )
+            if summary.phase_deadline is not None:
+                details.append(
+                    f"截止：{summary.phase_deadline.strftime('%H:%M:%S')}"
+                )
+            if details:
+                state_name = f"{state_name}（{'；'.join(details)}）"
         role_name = {
             "participant": "参与者",
             "candidate": "下一轮候选",
+            "host": "发起者",
+            "eliminated": "已出局",
             "nonparticipant": "未参与",
         }.get(summary.actor_role, summary.actor_role)
         return self._reply(
@@ -1023,6 +1109,302 @@ class GroupCommandHandler:
                 "{参与者}": "、".join(summary.participant_names) or "暂无",
                 "{可用指令}": "、".join(summary.available_commands) or "暂无",
             },
+        )
+
+    @staticmethod
+    def _never_have_i_ever_hearts(hearts: int, maximum_hearts: int) -> str:
+        return render_never_have_i_ever_hearts(hearts, maximum_hearts)
+
+    def _never_have_i_ever_player_lines(self, players) -> str:
+        return render_never_have_i_ever_player_lines(players)
+
+    def _never_have_i_ever_start(self, message, received_at, group_chat_id):
+        if message.source_type != "group" or group_chat_id is None:
+            return "请在已启用的群聊中发送 /我有你没有。"
+        result = self._repository.start_never_have_i_ever(
+            message.sender_platform_id, received_at, group_chat_id
+        )
+        errors = {
+            "not_joined": "请先用 /入职 名字 加入摸鱼公司。",
+            "disabled": "我有你没有当前未开放。",
+            "daily_limit": "你今天可发起的多人小游戏次数已用完。",
+            "multiplayer_active": "当前已有游戏或随机事件进行中。",
+            "already_active": "当前已有我有你没有对局。",
+        }
+        if result.status in errors:
+            return errors[result.status]
+        return (
+            f"【我有你没有】{result.display_name} 发起了报名，当前 "
+            f"{len(result.players)} 人。请发送 /加入 报名；至少 3 人后由发起者发送 /开始。"
+        )
+
+    def _never_have_i_ever_join(self, message, received_at, group_chat_id):
+        if message.source_type != "group" or group_chat_id is None:
+            return "请在已启用的群聊中发送 /加入。"
+        result = self._repository.join_never_have_i_ever(
+            message.sender_platform_id, received_at, group_chat_id
+        )
+        if result.status == "joined":
+            return (
+                f"{result.display_name} 已加入我有你没有，当前 "
+                f"{len(result.players)} 人。"
+            )
+        return {
+            "no_game": "当前没有可加入的我有你没有报名局。",
+            "already_started": "本局我有你没有已经开始，不能再加入。",
+            "already_joined": "你已经在当前我有你没有对局中。",
+            "not_joined": "请先用 /入职 名字 加入摸鱼公司。",
+        }.get(result.status, "当前不能加入我有你没有。")
+
+    def _never_have_i_ever_begin(self, message, received_at, group_chat_id):
+        if message.source_type != "group" or group_chat_id is None:
+            return "请在已启用的群聊中发送 /开始。"
+        result = self._repository.begin_never_have_i_ever(
+            message.sender_platform_id, received_at, group_chat_id
+        )
+        if result.status == "started":
+            speaker = next(
+                player
+                for player in result.players
+                if player.number == result.current_speaker_number
+            )
+            timeout_seconds = (
+                self._repository.get_never_have_i_ever_settings()
+                .statement_timeout_seconds
+            )
+            return (
+                "【我有你没有】游戏开始！\n"
+                f"{self._never_have_i_ever_player_lines(result.players)}\n"
+                f"请 {speaker.number}号 {speaker.display_name} 在 {timeout_seconds} 秒内发送 /发言 内容。"
+            )
+        return {
+            "no_game": "当前没有可开始的我有你没有报名局。",
+            "not_joined": "请先用 /入职 名字 加入摸鱼公司。",
+            "host_only": "只有发起者可以开始我有你没有。",
+            "not_enough_players": "当前人数不足，至少 3 人才能开始。",
+            "already_started": "本局我有你没有已经开始。",
+        }.get(result.status, "当前不能开始我有你没有。")
+
+    def _never_have_i_ever_statement(
+        self, message, content, received_at, group_chat_id
+    ):
+        if message.source_type != "group" or group_chat_id is None:
+            return "请在已启用的群聊中发送 /发言 内容。"
+        payload = content[len("/发言"):].strip()
+        result = self._repository.submit_never_have_i_ever_statement(
+            message.sender_platform_id, payload, received_at, group_chat_id
+        )
+        if result.status == "statement_recorded":
+            timeout_seconds = (
+                self._repository.get_never_have_i_ever_settings()
+                .response_timeout_seconds
+            )
+            return (
+                f"【我有你没有】{result.display_name} 发言：{payload}\n"
+                f"其余存活玩家请在 {timeout_seconds} 秒内发送 /扣（没有这项经历）或 /不扣（也有这项经历）。"
+            )
+        return {
+            "empty_statement": "请发送 /发言 内容，内容不能为空。",
+            "no_game": "当前没有我有你没有对局。",
+            "not_joined": "请先用 /入职 名字 加入摸鱼公司。",
+            "wrong_phase": "当前不是发言阶段。",
+            "not_current_speaker": "还没有轮到你发言。",
+        }.get(result.status, "当前不能发言。")
+
+    def _never_have_i_ever_response(
+        self, message, command, received_at, group_chat_id
+    ):
+        if message.source_type != "group" or group_chat_id is None:
+            return "请在已启用的群聊中发送 /扣 或 /不扣。"
+        result = self._repository.respond_never_have_i_ever(
+            message.sender_platform_id,
+            command == "/扣",
+            received_at,
+            group_chat_id,
+        )
+        if result.status == "response_recorded":
+            return (
+                f"{result.display_name} 已选择（{result.responded_count}/"
+                f"{result.expected_response_count}）。"
+            )
+        if result.status in {"round_settled", "free_punishment"}:
+            return render_never_have_i_ever_round_settlement(result)
+        return {
+            "no_game": "当前没有我有你没有对局。",
+            "not_joined": "请先用 /入职 名字 加入摸鱼公司。",
+            "wrong_phase": "当前不是回应阶段。",
+            "not_participant": "你不是本局参与者。",
+            "speaker_cannot_respond": "发言者本人不需要回应。",
+            "not_active": "你已出局，不能回应。",
+            "already_responded": "你本轮已经选择，不能修改。",
+        }.get(result.status, "当前不能回应。")
+
+    def _never_have_i_ever_leave(self, message, received_at, group_chat_id):
+        if message.source_type != "group" or group_chat_id is None:
+            return "请在已启用的群聊中发送 /退出。"
+        result = self._repository.leave_never_have_i_ever(
+            message.sender_platform_id, received_at, group_chat_id
+        )
+        if result.status == "signup_cancelled":
+            return "【我有你没有】发起者已退出，报名局已取消。"
+        if result.status == "signup_left":
+            return "你已退出我有你没有报名。"
+        if result.status == "left_game":
+            return "你已退出本局，心数归零并视为出局。"
+        if result.status == "free_punishment":
+            return "【我有你没有】已达到出局阈值，进入自由惩罚阶段。"
+        return {
+            "no_game": "当前没有我有你没有对局。",
+            "not_joined": "请先用 /入职 名字 加入摸鱼公司。",
+            "not_participant": "你没有参与当前我有你没有对局。",
+        }.get(result.status, "当前不能退出我有你没有。")
+
+    def _never_have_i_ever_end(self, message, received_at, group_chat_id):
+        if message.source_type != "group" or group_chat_id is None:
+            return "请在已启用的群聊中发送 /结束游戏。"
+        result = self._repository.end_never_have_i_ever(
+            message.sender_platform_id, received_at, group_chat_id
+        )
+        if result.status == "completed":
+            return (
+                "【我有你没有】本局结束，最终心数排名：\n"
+                f"{self._never_have_i_ever_player_lines(result.players)}"
+            )
+        return {
+            "no_game": "当前没有可结束的我有你没有对局。",
+            "not_joined": "请先用 /入职 名字 加入摸鱼公司。",
+            "not_participant": "你没有参与当前我有你没有对局。",
+            "not_active": "你已出局，不能结束本局。",
+            "cannot_end": "尚未进入自由惩罚阶段，不能结束本局。",
+        }.get(result.status, "当前不能结束我有你没有。")
+
+    def _king_game_start(self, message, received_at, group_chat_id):
+        if message.source_type != "group" or group_chat_id is None:
+            return "请在已启用的群聊中发送 /国王游戏。"
+        result = self._repository.start_king_game(
+            message.sender_platform_id, received_at, group_chat_id
+        )
+        messages = {
+            "not_joined": "请先用 /入职 名字 加入摸鱼公司。",
+            "disabled": "国王游戏当前未开放。",
+            "multiplayer_active": "当前已有游戏或随机事件进行中。",
+            "already_active": "当前已有国王游戏对局。",
+        }
+        if result.status in messages:
+            return messages[result.status]
+        return (
+            "【国王游戏】报名已开启。请发送 /加入 报名；至少 3 人后，"
+            "发起者发送 /开始 抽取本轮国王。"
+        )
+
+    def _king_game_join(self, message, received_at, group_chat_id):
+        if message.source_type != "group" or group_chat_id is None:
+            return "请在已启用的群聊中发送 /加入。"
+        result = self._repository.join_king_game(
+            message.sender_platform_id, received_at, group_chat_id
+        )
+        if result.status == "joined":
+            return f"已加入国王游戏，当前 {len(result.players)} 人。"
+        return {
+            "no_game": "当前没有可加入的国王游戏报名局。",
+            "already_started": "本局国王游戏已经开始，不能再加入。",
+            "already_joined": "你已经在当前国王游戏中。",
+            "not_joined": "请先用 /入职 名字 加入摸鱼公司。",
+        }.get(result.status, "当前不能加入国王游戏。")
+
+    def _king_game_begin(self, message, received_at, group_chat_id):
+        if message.source_type != "group" or group_chat_id is None:
+            return "请在已启用的群聊中发送 /开始。"
+        result = self._repository.begin_king_game(
+            message.sender_platform_id, received_at, group_chat_id
+        )
+        if result.status == "started":
+            return self._king_game_turn_message(result)
+        return {
+            "no_game": "当前没有可开始的国王游戏报名局。",
+            "not_joined": "请先用 /入职 名字 加入摸鱼公司。",
+            "host_only": "只有发起者可以开始国王游戏。",
+            "not_enough_players": "当前人数不足，至少 3 人才能开始。",
+            "already_started": "本局国王游戏已经开始。",
+        }.get(result.status, "当前不能开始国王游戏。")
+
+    def _king_game_reveal(self, message, content, received_at, group_chat_id):
+        if message.source_type != "group" or group_chat_id is None:
+            return "请在国王游戏所在群发送 /公开 编号。"
+        payload = content[len("/公开"):].strip()
+        result = self._repository.reveal_king_game_numbers(
+            message.sender_platform_id, payload, received_at, group_chat_id
+        )
+        if result.status == "revealed":
+            mapping = "、".join(
+                f"{number}号：{name}" for number, name in result.number_map
+            )
+            return (
+                f"【国王游戏】第 {result.round_number} 轮公开！\n{mapping}\n"
+                "本轮命令已生效。任一参与者发送 /继续 开启下一轮。"
+            )
+        return {
+            "no_game": "当前没有国王游戏对局。",
+            "king_only": "只有本轮国王可以公开编号。",
+            "invalid_numbers": "格式应为 /公开 2 5；编号不可重复，且必须在本轮人数范围内。",
+            "wrong_state": "当前不是公开编号阶段。",
+        }.get(result.status, "当前不能公开编号。")
+
+    def _king_game_continue(self, message, received_at, group_chat_id):
+        if message.source_type != "group" or group_chat_id is None:
+            return "请在国王游戏所在群发送 /继续。"
+        result = self._repository.continue_king_game(
+            message.sender_platform_id, received_at, group_chat_id
+        )
+        if result.status == "next_round":
+            return self._king_game_turn_message(result)
+        if result.status == "completed":
+            return "【国王游戏】剩余人数不足 3 人，本局结束。"
+        return {
+            "no_game": "当前没有国王游戏对局。",
+            "not_participant": "只有本局参与者可以继续。",
+            "wrong_state": "请等待国王先发送 /公开 编号。",
+        }.get(result.status, "当前不能继续国王游戏。")
+
+    def _king_game_leave(self, message, received_at, group_chat_id):
+        if message.source_type != "group" or group_chat_id is None:
+            return "请在国王游戏所在群发送 /退出。"
+        result = self._repository.leave_king_game(
+            message.sender_platform_id, received_at, group_chat_id
+        )
+        if result.status == "signup_cancelled":
+            return "【国王游戏】发起者退出，报名局已取消。"
+        if result.status == "left_game":
+            suffix = "本轮公开后将自动结束。" if result.end_after_round else ""
+            return f"你已退出本局国王游戏。{suffix}"
+        if result.status == "completed":
+            return "【国王游戏】关键玩家退出或人数不足，本局已结束。"
+        return {
+            "no_game": "当前没有国王游戏对局。",
+            "not_joined": "请先用 /入职 名字 加入摸鱼公司。",
+            "not_participant": "你没有参与当前国王游戏。",
+        }.get(result.status, "当前不能退出国王游戏。")
+
+    def _king_game_end(self, message, received_at, group_chat_id):
+        if message.source_type != "group" or group_chat_id is None:
+            return "请在国王游戏所在群发送 /结束游戏。"
+        result = self._repository.end_king_game(
+            message.sender_platform_id, received_at, group_chat_id
+        )
+        if result.status == "completed":
+            return "【国王游戏】参与者已结束本局游戏。"
+        return {
+            "no_game": "当前没有可结束的国王游戏。",
+            "not_participant": "只有本局参与者可以结束游戏。",
+        }.get(result.status, "当前不能结束国王游戏。")
+
+    def _king_game_turn_message(self, result) -> str:
+        timeout = self._repository.get_king_game_settings().king_phase_timeout_seconds
+        return (
+            f"【国王游戏】第 {result.round_number} 轮\n"
+            f"本轮国王：{result.king_name}。请国王先在群内发布命令，"
+            f"再于 {timeout} 秒内发送 /公开 编号（例如 /公开 2 5）。\n"
+            "号码在公开前仅国王可知；系统不会判断命令内容。"
         )
 
     def _join(self, platform_id: str, content: str, received_at) -> str:
@@ -2777,6 +3159,8 @@ class GroupCommandHandler:
             return self._reply("/加入", status, received_at)
         if status == "no_event":
             return self._reply("/加入", status, received_at)
+        if status == "announcement_pending":
+            return self._reply("/加入", status, received_at)
         if status == "joined":
             return self._reply(
                 "/加入", status, received_at,
@@ -3341,6 +3725,8 @@ class GroupCommandHandler:
             )
         if result.status == "failed":
             return self._reply("/记忆考核", "failed", received_at)
+        if result.status == "timed_out":
+            return self._reply("/记忆考核", "timed_out", received_at)
         if result.status == "duel_won":
             return self._reply(
                 "/记忆考核",
@@ -3373,6 +3759,18 @@ class GroupCommandHandler:
         )
         if result.status == "continued":
             return self._memory_assessment_round_reply("/继续", "continued", result, received_at)
+        if result.status == "auto_cashed_out":
+            return self._reply(
+                "/继续",
+                "auto_cashed_out",
+                received_at,
+                {
+                    "{昵称}": result.display_name,
+                    "{奖励}": result.reward,
+                    "{余额}": result.balance,
+                    "{超时秒数}": result.display_seconds,
+                },
+            )
         return self._reply("/继续", "cannot_continue", received_at)
 
     def _memory_assessment_cash_out(
@@ -3454,6 +3852,8 @@ class GroupCommandHandler:
             "躲猫猫": "摸鱼躲藏",
             "摸鱼躲猫猫": "摸鱼躲藏",
             "卧底": "谁是卧底",
+            "公演预约": "公演",
+            "演出": "公演",
         }.get(topic, topic)
 
         guides = {
@@ -3576,6 +3976,19 @@ class GroupCommandHandler:
                     ("/退出", "/退出：开局前退出退款；开局后立即弃牌"),
                 ),
             ),
+            "我有你没有": (
+                "【我有你没有】",
+                (
+                    ("/我有你没有", "/我有你没有：创建报名局"),
+                    ("/加入", "/加入：加入报名；至少 3 人后由发起者发送 /开始"),
+                    ("/开始", "/开始：仅发起者开始本局"),
+                    ("/发言", "轮到自己时 /发言 内容：说出一项自己有、别人可能没有的经历"),
+                    ("/扣", "其余存活玩家 /扣：没有该经历，扣一颗心"),
+                    ("/不扣", "其余存活玩家 /不扣：自己也有该经历，保留心数"),
+                    ("/退出", "/退出：退出当前对局"),
+                    ("/结束游戏", "/结束游戏：仅发起者可结束本局"),
+                ),
+            ),
             "暗网交易所": (
                 "【暗网交易所】",
                 (
@@ -3642,6 +4055,7 @@ class GroupCommandHandler:
                         "甩锅游戏",
                         "蹦蹦数字炸弹",
                         "德州扑克",
+                        "我有你没有",
                         "暗网交易所",
                         "公演",
                     )
@@ -3654,7 +4068,7 @@ class GroupCommandHandler:
                 ("商店", "/帮助 商店：购买、使用、赠送与授权"),
                 (
                     "游戏",
-                    "/帮助 游戏：玩法总览；/帮助 摸鱼躲藏、/帮助 记忆考核、/帮助 谁是卧底、/帮助 甩锅游戏、/帮助 蹦蹦数字炸弹、/帮助 德州扑克、/帮助 暗网交易所、/帮助 公演",
+                    "/帮助 游戏：玩法总览；/帮助 摸鱼躲藏、/帮助 记忆考核、/帮助 谁是卧底、/帮助 甩锅游戏、/帮助 蹦蹦数字炸弹、/帮助 德州扑克、/帮助 我有你没有、/帮助 暗网交易所、/帮助 公演预约",
                 ),
                 ("随机事件", "/帮助 随机事件：报名与退出"),
                 ("部门", "/帮助 部门：部门申请与审批"),
@@ -3675,13 +4089,15 @@ class GroupCommandHandler:
                     "甩锅游戏",
                     "蹦蹦数字炸弹",
                     "德州扑克",
+                    "我有你没有",
                     "暗网交易所",
                     "公演",
                 )
                 if any(command in commands for command, _ in guides[name][1])
             ]
             guide = "【游戏玩法】\n" + "\n".join(
-                f"/帮助 {name}：查看{name}玩法" for name in game_topics
+                f"/帮助 {'公演预约' if name == '公演' else name}：查看{name}玩法"
+                for name in game_topics
             )
             if "蹦蹦数字炸弹" in game_topics:
                 guide += (

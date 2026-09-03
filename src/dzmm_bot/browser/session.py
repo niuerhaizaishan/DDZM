@@ -64,7 +64,7 @@ class ChatGateway(Protocol):
 
     def add_bot_to_chatroom(self, chatroom_id: str, bot_id: str) -> None: ...
 
-    def retract(self, message_id: str) -> None: ...
+    def retract(self, message_id: str, *, chatroom_id: str | None = None) -> None: ...
 
     def is_authenticated(self) -> bool: ...
 
@@ -355,7 +355,7 @@ class _PlaywrightGateway:
     def upload_image(self, path: Path, mime_type: str) -> dict:
         raise NotImplementedError("image upload requires the Aikda socket gateway")
 
-    def retract(self, message_id: str) -> None:
+    def retract(self, message_id: str, *, chatroom_id: str | None = None) -> None:
         raise NotImplementedError("message retraction requires the Aikda socket gateway")
 
     def _active_page(self):

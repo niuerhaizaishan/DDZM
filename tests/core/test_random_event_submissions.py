@@ -12,7 +12,12 @@ from dzmm_bot.core.repository import (
 from dzmm_bot.core.random_event_submissions import RandomEventSubmissionHandler
 from dzmm_bot.core.commands import GroupCommandHandler
 from dzmm_bot.core.service import CoreService
-from dzmm_bot.core.schema import InboundRecord, OutboundRecord
+from dzmm_bot.core.schema import (
+    InboundRecord,
+    OutboundRecord,
+    RandomEventRecord,
+    RandomEventScheduleRecord,
+)
 from dzmm_bot.runtime.contracts import InboundMessage
 from sqlalchemy import select
 from dzmm_bot.core.schema import Base
@@ -556,6 +561,49 @@ def test_my_submissions_shows_submission_and_review_times(repository):
 
     assert "提交于 2026-08-15 20:00" in reply.text
     assert "审核于 2026-08-15 21:00" in reply.text
+
+
+def test_my_submissions_shows_completed_performance_count(repository):
+    pending = _pending_submission(repository)
+    approved = repository.approve_random_event_submission(pending.id, "管理员甲", NOW)
+    group = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=submission-performance-count", NOW
+    )
+
+    with repository._session_factory() as session:
+        schedule = RandomEventScheduleRecord(
+            group_chat_id=group.id,
+            event_date=NOW.date(),
+            scheduled_at=NOW,
+            status="ended",
+            scene_name=approved.content["scene_name"],
+            event_name="现场",
+            created_at=NOW,
+        )
+        session.add(schedule)
+        session.flush()
+        session.add(
+            RandomEventRecord(
+                group_chat_id=group.id,
+                schedule_id=schedule.id,
+                group_key=str(group.id),
+                state="ended",
+                scene_name=approved.content["scene_name"],
+                event_name="现场",
+                signup_text="报名",
+                formal_opening_text="开始",
+                reward=6,
+                target_rounds=10,
+                signup_deadline=NOW,
+                started_at=NOW,
+                ended_at=NOW + timedelta(minutes=10),
+            )
+        )
+        session.commit()
+
+    reply = RandomEventSubmissionHandler(repository).handle(_direct("/我的投稿"))
+
+    assert "演绎次数：1" in reply.text
 
 
 def test_group_submission_entry_enqueues_group_notice_and_private_prompt(repository):

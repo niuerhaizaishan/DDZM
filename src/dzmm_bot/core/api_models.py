@@ -296,6 +296,7 @@ class OutboundRecallClaimResponse(ApiModel):
     lease_token: UUID
     lease_expires_at: datetime
     attempt_count: int
+    destination_chatroom_id: str | None = None
 
 
 class RecalledRequest(ApiModel):
@@ -989,6 +990,30 @@ class SetNumberBombSettingsRequest(ApiModel):
     reminder_interval_seconds: int = Field(ge=5, le=300)
 
 
+class NeverHaveIEverSettingsResponse(ApiModel):
+    enabled: bool
+    signup_timeout_minutes: int
+    statement_timeout_seconds: int
+    response_timeout_seconds: int
+
+
+class SetNeverHaveIEverSettingsRequest(ApiModel):
+    enabled: bool
+    signup_timeout_minutes: int = Field(ge=1, le=60)
+    statement_timeout_seconds: int = Field(ge=1, le=600)
+    response_timeout_seconds: int = Field(ge=1, le=600)
+
+
+class KingGameSettingsResponse(ApiModel):
+    enabled: bool
+    king_phase_timeout_seconds: int
+
+
+class SetKingGameSettingsRequest(ApiModel):
+    enabled: bool
+    king_phase_timeout_seconds: int = Field(ge=1, le=3600)
+
+
 class TexasHoldemSettingsResponse(ApiModel):
     enabled: bool
     minimum_players: int
@@ -1174,6 +1199,7 @@ class GameplayParticipantResponse(ApiModel):
     total_contribution: int | None = None
     total_points: int | None = None
     retired_at_round: int | None = None
+    hearts: int | None = None
 
 
 class GameplaySummaryResponse(ApiModel):
@@ -1253,6 +1279,8 @@ class MemoryAssessmentSettingsResponse(ApiModel):
     enabled: bool
     single_daily_limit: int = Field(ge=1, le=99)
     single_recall_seconds: int = Field(ge=1, le=60)
+    single_answer_timeout_seconds: int = Field(ge=1, le=600)
+    single_decision_timeout_seconds: int = Field(ge=1, le=600)
     duel_recall_seconds: int = Field(ge=1, le=60)
     duel_difficulty_level: int = Field(ge=1, le=20)
     duel_base_pool: int = Field(ge=1, le=999)

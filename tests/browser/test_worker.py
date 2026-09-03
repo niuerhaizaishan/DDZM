@@ -39,6 +39,8 @@ class FakeGateway:
     uploaded_images: list[tuple[str, str]] = field(default_factory=list)
     upload_error: Exception | None = None
     retracted: list[str] = field(default_factory=list)
+    retracted_to: list[tuple[str, str | None]] = field(default_factory=list)
+    retract_error: Exception | None = None
     send_error: Exception | None = None
     read_error: Exception | None = None
     read_targets: list[tuple[str, ...]] = field(default_factory=list)
@@ -132,8 +134,11 @@ class FakeGateway:
             raise self.authentication_error
         return self.authenticated
 
-    def retract(self, message_id):
+    def retract(self, message_id, *, chatroom_id=None):
         self.retracted.append(message_id)
+        self.retracted_to.append((message_id, chatroom_id))
+        if self.retract_error is not None:
+            raise self.retract_error
 
     def close(self):
         self.close_count += 1
@@ -200,6 +205,7 @@ class FakeCore:
     confirmed: list[tuple] = field(default_factory=list)
     failed: list[tuple] = field(default_factory=list)
     recalls_confirmed: list[tuple] = field(default_factory=list)
+    recalls_failed: list[tuple] = field(default_factory=list)
     heartbeats: list[tuple] = field(default_factory=list)
     bot_delivery_heartbeats: list[tuple] = field(default_factory=list)
     completions: list[tuple] = field(default_factory=list)
@@ -271,6 +277,9 @@ class FakeCore:
 
     def confirm_outbound_recalled(self, message_id, worker_id, lease_token, now):
         self.recalls_confirmed.append((message_id, worker_id, lease_token, now))
+
+    def fail_outbound_recall(self, message_id, worker_id, lease_token, now):
+        self.recalls_failed.append((message_id, worker_id, lease_token, now))
 
     def heartbeat(
         self,
@@ -1088,6 +1097,37 @@ def test_worker_falls_back_to_browser_chunks_when_bot_requires_captcha(context):
     assert worker.login_state is LoginState.READY
 
 
+def test_worker_skips_bot_after_captcha_until_the_status_is_rechecked(context):
+    """Fails if every long message retries a Bot sender already marked CAPTCHA-blocked."""
+    _, gateway, session, desktop, core, _ = context
+    bot_sender = FakeBotSender(send_error=DzmmBotSendError("captcha_required"))
+    worker = BrowserWorker(
+        worker_id="worker-a",
+        core=core,
+        session=session,
+        desktop=desktop,
+        clock=lambda: NOW,
+        bot_sender=bot_sender,
+    )
+    first = OutboundClaim(
+        OUTBOUND_ID, "in-1", "字" * 1001, LEASE,
+        group_chat_id=GROUP_ID, destination_chatroom_id="group-2",
+    )
+    second = OutboundClaim(
+        UUID("00000000-0000-0000-0000-000000000004"), "in-2", "字" * 1001,
+        LEASE, group_chat_id=GROUP_ID, destination_chatroom_id="group-2",
+    )
+
+    worker._send_outbound(gateway, first)
+    worker._send_outbound(gateway, second)
+
+    assert bot_sender.sent_to == [("group-2", "字" * 1001)]
+    assert gateway.sent_to == [
+        ("group-2", "字" * 1000), ("group-2", "字"),
+        ("group-2", "字" * 1000), ("group-2", "字"),
+    ]
+
+
 def test_worker_keeps_group_replies_within_platform_limits_on_the_browser_gateway(context):
     _, gateway, session, desktop, core, _ = context
     bot_sender = FakeBotSender()
@@ -1248,13 +1288,29 @@ def test_worker_sends_targeted_claims_without_scanning_historical_direct_rooms(c
 def test_worker_retracts_a_due_outbound_with_current_fencing_values(context):
     worker, gateway, _, _, core, _ = context
     core.pending_recalls = [
-        OutboundRecallClaim(OUTBOUND_ID, "platform-message", LEASE)
+        OutboundRecallClaim(
+            OUTBOUND_ID, "platform-message", LEASE,
+            destination_chatroom_id="group-2",
+        )
     ]
 
     worker.run_once()
 
     assert gateway.retracted == ["platform-message"]
+    assert gateway.retracted_to == [("platform-message", "group-2")]
     assert core.recalls_confirmed == [(OUTBOUND_ID, "worker-a", LEASE, NOW)]
+
+
+def test_worker_stops_retrying_a_recall_when_the_gateway_rejects_it(context):
+    """Fails if a rejected recall lease is left claimable forever."""
+    worker, gateway, _, _, core, _ = context
+    gateway.retract_error = RuntimeError("服务器内部错误")
+    core.pending_recalls = [OutboundRecallClaim(OUTBOUND_ID, "platform-message", LEASE)]
+
+    worker.run_once()
+
+    assert core.recalls_failed == [(OUTBOUND_ID, "worker-a", LEASE, NOW)]
+    assert core.recalls_confirmed == []
 
 
 def test_paused_worker_still_heartbeats_and_polls_commands(context):

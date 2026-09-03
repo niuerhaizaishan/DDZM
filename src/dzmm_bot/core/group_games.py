@@ -10,6 +10,8 @@ GroupGameType: TypeAlias = Literal[
     "blame_bomb",
     "number_bomb",
     "texas_holdem",
+    "never_have_i_ever",
+    "king_game",
 ]
 
 GROUP_GAME_TYPES: tuple[GroupGameType, ...] = (
@@ -20,6 +22,8 @@ GROUP_GAME_TYPES: tuple[GroupGameType, ...] = (
     "blame_bomb",
     "number_bomb",
     "texas_holdem",
+    "never_have_i_ever",
+    "king_game",
 )
 
 GROUP_GAME_LABELS: dict[GroupGameType, str] = {
@@ -30,6 +34,8 @@ GROUP_GAME_LABELS: dict[GroupGameType, str] = {
     "blame_bomb": "甩锅游戏",
     "number_bomb": "蹦蹦数字炸弹",
     "texas_holdem": "德州扑克",
+    "never_have_i_ever": "我有你没有",
+    "king_game": "国王游戏",
 }
 
 GROUP_GAME_COMMANDS: dict[str, GroupGameType] = {
@@ -55,6 +61,12 @@ GROUP_GAME_COMMANDS: dict[str, GroupGameType] = {
     "/加注": "texas_holdem",
     "/全下": "texas_holdem",
     "/弃牌": "texas_holdem",
+    "/我有你没有": "never_have_i_ever",
+    "/发言": "never_have_i_ever",
+    "/扣": "never_have_i_ever",
+    "/不扣": "never_have_i_ever",
+    "/国王游戏": "king_game",
+    "/公开": "king_game",
 }
 
 

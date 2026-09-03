@@ -184,6 +184,15 @@ from .schema import (
     NumberBombRoundPlayerRecord,
     NumberBombRoundRecord,
     NumberBombSettingsRecord,
+    KingGameRecord,
+    KingGamePlayerRecord,
+    KingGameRoundRecord,
+    KingGameSettingsRecord,
+    NeverHaveIEverGameRecord,
+    NeverHaveIEverPlayerRecord,
+    NeverHaveIEverResponseRecord,
+    NeverHaveIEverRoundRecord,
+    NeverHaveIEverSettingsRecord,
     TexasHoldemActionRecord,
     TexasHoldemDailyStartRecord,
     TexasHoldemGameRecord,
@@ -769,6 +778,7 @@ class RandomEventSubmission:
     reviewed_at: datetime | None
     scene_id: UUID | None
     reward_granted_at: datetime | None
+    performed_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -942,6 +952,146 @@ class NumberBombGameResult:
     public_message: str | None = None
     mode: str | None = None
     maximum_rounds: int = 0
+
+
+@dataclass(frozen=True)
+class NeverHaveIEverSettings:
+    enabled: bool
+    signup_timeout_minutes: int
+    statement_timeout_seconds: int
+    response_timeout_seconds: int
+
+
+@dataclass(frozen=True)
+class KingGameSettings:
+    enabled: bool
+    king_phase_timeout_seconds: int
+
+
+@dataclass(frozen=True)
+class KingGamePlayerView:
+    platform_id: str
+    display_name: str
+    roster_order: int
+    state: str
+
+
+@dataclass(frozen=True)
+class KingGameResult:
+    status: str
+    game_id: UUID | None = None
+    group_chat_id: UUID | None = None
+    round_number: int = 0
+    king_name: str | None = None
+    king_platform_id: str | None = None
+    players: tuple[KingGamePlayerView, ...] = ()
+    number_map: tuple[tuple[int, str], ...] = ()
+    deadline: datetime | None = None
+    end_after_round: bool = False
+
+
+@dataclass(frozen=True)
+class NeverHaveIEverPlayerView:
+    platform_id: str
+    display_name: str
+    number: int
+    hearts: int
+    state: str
+
+
+@dataclass(frozen=True)
+class NeverHaveIEverResult:
+    status: str
+    game_id: UUID | None = None
+    group_chat_id: UUID | None = None
+    display_name: str | None = None
+    players: tuple[NeverHaveIEverPlayerView, ...] = ()
+    current_speaker_number: int | None = None
+    responded_count: int = 0
+    expected_response_count: int = 0
+    public_message: str | None = None
+    statement: str | None = None
+    deducted_player_names: tuple[str, ...] = ()
+    kept_player_names: tuple[str, ...] = ()
+    timeout_deducted_player_names: tuple[str, ...] = ()
+
+
+def render_never_have_i_ever_hearts(hearts: int, maximum_hearts: int) -> str:
+    return "❤️" * hearts + "🖤" * max(0, maximum_hearts - hearts)
+
+
+def render_never_have_i_ever_player_lines(
+    players: tuple[NeverHaveIEverPlayerView, ...],
+) -> str:
+    maximum_hearts = len(players) + 2
+    return "\n".join(
+        f"{player.number}. {player.display_name}："
+        f"{render_never_have_i_ever_hearts(player.hearts, maximum_hearts)}"
+        for player in players
+    )
+
+
+def render_never_have_i_ever_round_settlement(
+    result: NeverHaveIEverResult,
+) -> str:
+    deducted = "、".join(result.deducted_player_names) or "无"
+    kept = "、".join(result.kept_player_names) or "无"
+    timed_out = "、".join(result.timeout_deducted_player_names) or "无"
+    next_action = (
+        "已达到出局阈值，进入自由惩罚阶段；任意仍在场玩家可发送 /结束游戏。"
+        if result.status == "free_punishment"
+        else f"下一位：{result.current_speaker_number}号，请发送 /发言 内容。"
+    )
+    return (
+        f"【我有你没有】本轮结算\n发言：{result.statement}\n"
+        f"/扣：{deducted}\n/不扣：{kept}\n超时自动扣心：{timed_out}\n"
+        f"{render_never_have_i_ever_player_lines(result.players)}\n{next_action}"
+    )
+
+
+def render_never_have_i_ever_statement_timeout(
+    result: NeverHaveIEverResult,
+) -> str:
+    return (
+        "【我有你没有】当前发言者超时，已扣除 1 颗心。\n"
+        f"{render_never_have_i_ever_player_lines(result.players)}\n"
+        f"下一位：{result.current_speaker_number}号，请发送 /发言 内容。"
+    )
+
+
+@dataclass(frozen=True)
+class NeverHaveIEverHistory:
+    game_id: UUID
+    group_chat_id: UUID
+    group_name: str
+    host_display_name: str
+    state: str
+    initial_player_count: int
+    round_number: int
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+    finish_reason: str | None
+    players: tuple[NeverHaveIEverPlayerView, ...]
+    rounds: tuple["NeverHaveIEverRoundHistory", ...]
+
+
+@dataclass(frozen=True)
+class NeverHaveIEverResponseHistory:
+    player_number: int
+    display_name: str
+    choice: str
+
+
+@dataclass(frozen=True)
+class NeverHaveIEverRoundHistory:
+    sequence: int
+    speaker_number: int
+    speaker_display_name: str
+    statement: str | None
+    state: str
+    statement_timed_out: bool
+    responses: tuple[NeverHaveIEverResponseHistory, ...]
 
 
 @dataclass(frozen=True)
@@ -1163,6 +1313,12 @@ class ActiveGameplaySummary:
     round_number: int = 0
     maximum_rounds: int = 0
     actor_total_points: int | None = None
+    actor_number: int | None = None
+    actor_hearts: int | None = None
+    current_speaker_name: str | None = None
+    responded_count: int = 0
+    expected_response_count: int = 0
+    phase_deadline: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -1176,6 +1332,7 @@ class GameplayAdminParticipant:
     total_contribution: int | None = None
     total_points: int | None = None
     retired_at_round: int | None = None
+    hearts: int | None = None
 
 
 @dataclass(frozen=True)
@@ -1219,6 +1376,8 @@ class MemoryAssessmentSettings:
     enabled: bool
     single_daily_limit: int
     single_recall_seconds: int
+    single_answer_timeout_seconds: int
+    single_decision_timeout_seconds: int
     duel_recall_seconds: int
     duel_difficulty_level: int
     duel_base_pool: int
@@ -1831,6 +1990,12 @@ _COMMAND_DEFINITIONS = (
     ("/甩锅游戏", "/甩锅游戏 人数", "创建 2 至 10 人甩锅炸弹报名局"),
     ("/甩锅", "/甩锅 玩家编号 甩锅理由", "按玩家编号和理由转移甩锅炸弹"),
     ("/退出甩锅", "/退出甩锅", "退出当前甩锅游戏"),
+    ("/我有你没有", "/我有你没有", "创建我有你没有报名局"),
+    ("/发言", "/发言 内容", "在我有你没有中提交自己的经历"),
+    ("/扣", "/扣", "在我有你没有中选择扣除一颗心"),
+    ("/不扣", "/不扣", "在我有你没有中选择保留心数"),
+    ("/国王游戏", "/国王游戏", "创建国王游戏报名局"),
+    ("/公开", "/公开 编号 [编号...]", "国王游戏中公开本轮编号；暗网成交后也可私聊用于公开身份"),
     ("/蹦蹦数字炸弹", "/蹦蹦数字炸弹；/蹦蹦数字炸弹 积分赛", "创建普通报名局，或创建固定8人、12轮积分赛"),
     ("/报数", "/报数 数字（仅私聊）", "提交蹦蹦数字炸弹本轮 1–100 整数"),
     ("/跳过", "/跳过 编号 [编号...]", "排除蹦蹦数字炸弹中尚未报数的参与者"),
@@ -2393,6 +2558,14 @@ class CoreRepository:
             "texas_holdem": select(TexasHoldemGameRecord.id).where(
                 TexasHoldemGameRecord.group_chat_id == group_id,
                 TexasHoldemGameRecord.active_key.is_not(None),
+            ),
+            "never_have_i_ever": select(NeverHaveIEverGameRecord.id).where(
+                NeverHaveIEverGameRecord.group_chat_id == group_id,
+                NeverHaveIEverGameRecord.active_key.is_not(None),
+            ),
+            "king_game": select(KingGameRecord.id).where(
+                KingGameRecord.group_chat_id == group_id,
+                KingGameRecord.active_key.is_not(None),
             ),
         }
         check = checks.get(game_type)
@@ -3092,7 +3265,37 @@ class CoreRepository:
                     .limit(limit)
                 )
             )
-            return [_random_event_submission(record) for record in records]
+            approved_scene_ids = {
+                record.scene_id
+                for record in records
+                if record.status == "approved" and record.scene_id is not None
+            }
+            scene_names = dict(
+                session.execute(
+                    select(RandomEventSceneRecord.id, RandomEventSceneRecord.name).where(
+                        RandomEventSceneRecord.id.in_(approved_scene_ids)
+                    )
+                ).all()
+            )
+            performed_counts = dict(
+                session.execute(
+                    select(RandomEventRecord.scene_name, func.count(RandomEventRecord.id))
+                    .where(
+                        RandomEventRecord.ended_at.is_not(None),
+                        RandomEventRecord.scene_name.in_(scene_names.values()),
+                    )
+                    .group_by(RandomEventRecord.scene_name)
+                ).all()
+            )
+            return [
+                replace(
+                    _random_event_submission(record),
+                    performed_count=performed_counts.get(
+                        scene_names.get(record.scene_id), 0
+                    ),
+                )
+                for record in records
+            ]
 
     def withdraw_random_event_submission(
         self, platform_id: str, number: int, now: datetime
@@ -3368,6 +3571,8 @@ class CoreRepository:
                     enabled=True,
                     single_daily_limit=1,
                     single_recall_seconds=3,
+                    single_answer_timeout_seconds=15,
+                    single_decision_timeout_seconds=15,
                     duel_recall_seconds=3,
                     duel_difficulty_level=5,
                     duel_base_pool=5,
@@ -3419,10 +3624,14 @@ class CoreRepository:
         character_set: str,
         levels: list[MemoryAssessmentLevelRule],
         duel_signup_timeout_minutes: int = 2,
+        single_answer_timeout_seconds: int = 15,
+        single_decision_timeout_seconds: int = 15,
     ) -> MemoryAssessmentSettings:
         _validate_memory_assessment_settings(
             single_daily_limit=single_daily_limit,
             single_recall_seconds=single_recall_seconds,
+            single_answer_timeout_seconds=single_answer_timeout_seconds,
+            single_decision_timeout_seconds=single_decision_timeout_seconds,
             duel_recall_seconds=duel_recall_seconds,
             duel_difficulty_level=duel_difficulty_level,
             duel_base_pool=duel_base_pool,
@@ -3444,6 +3653,8 @@ class CoreRepository:
             record.enabled = enabled
             record.single_daily_limit = single_daily_limit
             record.single_recall_seconds = single_recall_seconds
+            record.single_answer_timeout_seconds = single_answer_timeout_seconds
+            record.single_decision_timeout_seconds = single_decision_timeout_seconds
             record.duel_recall_seconds = duel_recall_seconds
             record.duel_difficulty_level = duel_difficulty_level
             record.duel_base_pool = duel_base_pool
@@ -10482,6 +10693,175 @@ class CoreRepository:
         with self._session() as session:
             active: list[ActiveGameplaySummary] = []
 
+            king_game = session.scalar(
+                select(KingGameRecord).where(
+                    KingGameRecord.active_key == "global",
+                    KingGameRecord.group_chat_id == group_chat_id,
+                )
+            )
+            if king_game is not None:
+                rows = self._active_king_game_players(
+                    session,
+                    king_game.id,
+                    "signup" if king_game.state == "signup" else "active",
+                )
+                actor = next(
+                    (player for player, user in rows if user.platform_id == platform_id),
+                    None,
+                )
+                if actor is None:
+                    role = "nonparticipant"
+                    commands = ("/加入",) if king_game.state == "signup" else ()
+                elif king_game.state == "signup":
+                    role = "host" if actor.user_id == king_game.host_user_id else "participant"
+                    commands = (
+                        ("/开始", "/退出")
+                        if actor.user_id == king_game.host_user_id
+                        else ("/退出",)
+                    )
+                elif king_game.state == "awaiting_reveal":
+                    role = "king" if actor.user_id == king_game.current_king_user_id else "participant"
+                    commands = (
+                        ("/公开 编号…", "/退出", "/结束游戏")
+                        if actor.user_id == king_game.current_king_user_id
+                        else ("/退出", "/结束游戏")
+                    )
+                else:
+                    role = "participant"
+                    commands = ("/继续", "/退出", "/结束游戏")
+                active.append(
+                    ActiveGameplaySummary(
+                        "king_game",
+                        king_game.id,
+                        king_game.state,
+                        role,
+                        tuple(user.display_name for _, user in rows),
+                        commands,
+                        king_game.signup_deadline,
+                        phase_deadline=king_game.king_phase_deadline,
+                        round_number=king_game.round_number,
+                    )
+                )
+
+            never_have_i_ever = session.scalar(
+                select(NeverHaveIEverGameRecord).where(
+                    NeverHaveIEverGameRecord.active_key == "global",
+                    NeverHaveIEverGameRecord.group_chat_id == group_chat_id,
+                )
+            )
+            if never_have_i_ever is not None:
+                rows = list(
+                    session.execute(
+                        select(NeverHaveIEverPlayerRecord, UserRecord)
+                        .join(
+                            UserRecord,
+                            UserRecord.id == NeverHaveIEverPlayerRecord.user_id,
+                        )
+                        .where(
+                            NeverHaveIEverPlayerRecord.game_id == never_have_i_ever.id
+                        )
+                        .order_by(NeverHaveIEverPlayerRecord.roster_order)
+                    )
+                )
+                actor = next(
+                    (player for player, user in rows if user.platform_id == platform_id),
+                    None,
+                )
+                speaker = next(
+                    (
+                        user
+                        for player, user in rows
+                        if player.roster_order
+                        == never_have_i_ever.current_speaker_order
+                    ),
+                    None,
+                )
+                round_record = session.scalar(
+                    select(NeverHaveIEverRoundRecord).where(
+                        NeverHaveIEverRoundRecord.game_id == never_have_i_ever.id,
+                        NeverHaveIEverRoundRecord.sequence
+                        == never_have_i_ever.round_number,
+                    )
+                )
+                responded_count = (
+                    0
+                    if round_record is None
+                    else self._never_have_i_ever_response_count(
+                        session, never_have_i_ever, round_record
+                    )
+                )
+                expected_response_count = (
+                    0
+                    if round_record is None
+                    else self._never_have_i_ever_expected_responses(
+                        session, never_have_i_ever, round_record
+                    )
+                )
+                if actor is None:
+                    role = "nonparticipant"
+                    commands = (
+                        ("/加入",)
+                        if never_have_i_ever.state == "signup"
+                        else ()
+                    )
+                elif actor.state in {"eliminated", "withdrawn"}:
+                    role = "eliminated"
+                    commands = ()
+                elif never_have_i_ever.state == "signup":
+                    role = "host" if actor.user_id == never_have_i_ever.host_user_id else "participant"
+                    commands = (
+                        ("/开始", "/退出")
+                        if actor.user_id == never_have_i_ever.host_user_id
+                        else ("/退出",)
+                    )
+                elif never_have_i_ever.state == "awaiting_statement":
+                    role = "participant"
+                    commands = (
+                        ("/发言 内容", "/退出")
+                        if actor.roster_order
+                        == never_have_i_ever.current_speaker_order
+                        else ("/退出",)
+                    )
+                elif never_have_i_ever.state == "awaiting_responses":
+                    role = "participant"
+                    commands = (
+                        ("/扣", "/不扣", "/退出")
+                        if actor.roster_order
+                        != never_have_i_ever.current_speaker_order
+                        else ("/退出",)
+                    )
+                else:
+                    role = "host" if actor.user_id == never_have_i_ever.host_user_id else "participant"
+                    commands = (
+                        ("/结束游戏",)
+                        if actor.user_id == never_have_i_ever.host_user_id
+                        else ()
+                    )
+                active.append(
+                    ActiveGameplaySummary(
+                        "never_have_i_ever",
+                        never_have_i_ever.id,
+                        never_have_i_ever.state,
+                        role,
+                        tuple(user.display_name for _, user in rows),
+                        commands,
+                        never_have_i_ever.signup_deadline,
+                        round_number=never_have_i_ever.round_number,
+                        actor_number=None if actor is None else actor.roster_order,
+                        actor_hearts=None if actor is None else actor.hearts,
+                        current_speaker_name=None if speaker is None else speaker.display_name,
+                        responded_count=responded_count,
+                        expected_response_count=expected_response_count,
+                        phase_deadline=(
+                            never_have_i_ever.statement_deadline
+                            if never_have_i_ever.state == "awaiting_statement"
+                            else never_have_i_ever.response_deadline
+                            if never_have_i_ever.state == "awaiting_responses"
+                            else None
+                        ),
+                    )
+                )
+
             texas_game = session.scalar(
                 select(TexasHoldemGameRecord).where(
                     TexasHoldemGameRecord.active_key == "global",
@@ -10761,7 +11141,8 @@ class CoreRepository:
                         "participant" if participant else "nonparticipant",
                         tuple(user.display_name for _, user in rows),
                         commands,
-                        memory.signup_deadline,
+                        signup_deadline=memory.signup_deadline,
+                        phase_deadline=memory.answer_deadline,
                     )
                 )
 
@@ -10940,6 +11321,35 @@ class CoreRepository:
                 to_call=texas.to_call,
                 legal_actions=texas.legal_actions,
             )
+        if summary.game_type == "never_have_i_ever":
+            with self._session() as session:
+                rows = list(
+                    session.execute(
+                        select(NeverHaveIEverPlayerRecord, UserRecord)
+                        .join(UserRecord, UserRecord.id == NeverHaveIEverPlayerRecord.user_id)
+                        .where(NeverHaveIEverPlayerRecord.game_id == summary.game_id)
+                        .order_by(NeverHaveIEverPlayerRecord.roster_order)
+                    )
+                )
+            return GameplayAdminSummary(
+                group_chat_id=group_chat_id,
+                group_name=group_name,
+                game_type="never_have_i_ever",
+                game_id=summary.game_id,
+                state=summary.state,
+                participants=tuple(
+                    GameplayAdminParticipant(
+                        player.roster_order,
+                        user.display_name,
+                        state=player.state,
+                        hearts=player.hearts,
+                    )
+                    for player, user in rows
+                ),
+                signup_deadline=summary.signup_deadline,
+                action_deadline=summary.phase_deadline,
+                round_number=summary.round_number,
+            )
         if summary.game_type != "number_bomb":
             return GameplayAdminSummary(
                 group_chat_id=group_chat_id,
@@ -10955,6 +11365,11 @@ class CoreRepository:
                 next_reminder_at=summary.next_reminder_at,
                 tipping_deadline=summary.tipping_deadline,
                 tip_total=summary.tip_total,
+                action_deadline=(
+                    summary.phase_deadline
+                    if summary.game_type in {"memory_duel", "memory_single"}
+                    else None
+                ),
             )
         with self._session() as session:
             game = session.get(NumberBombGameRecord, summary.game_id)
@@ -11049,6 +11464,8 @@ class CoreRepository:
         if group_chat_id is None:
             group_chat_id = PRIMARY_GROUP_CHAT_ID
         game_names = {
+            "king_game": "国王游戏",
+            "never_have_i_ever": "我有你没有",
             "texas_holdem": "德州扑克",
             "number_bomb": "蹦蹦数字炸弹",
             "blame_bomb": "甩锅游戏",
@@ -11065,7 +11482,31 @@ class CoreRepository:
                 self._lock_gameplay_gate(session)
                 ended = False
                 ended_random_event = False
-                if game_type == "texas_holdem":
+                if game_type == "king_game":
+                    game = session.get(KingGameRecord, game_id, with_for_update=True)
+                    if (
+                        game is not None
+                        and game.active_key == "global"
+                        and game.group_chat_id == group_chat_id
+                    ):
+                        self._finish_king_game_locked(
+                            game, "forced_ended", "admin_forced", now
+                        )
+                        ended = True
+                elif game_type == "never_have_i_ever":
+                    game = session.get(
+                        NeverHaveIEverGameRecord, game_id, with_for_update=True
+                    )
+                    if (
+                        game is not None
+                        and game.active_key == "global"
+                        and game.group_chat_id == group_chat_id
+                    ):
+                        self._finish_never_have_i_ever_locked(
+                            session, game, "forced_ended", "admin_forced", now
+                        )
+                        ended = True
+                elif game_type == "texas_holdem":
                     ended = self.abort_texas_holdem(
                         game_id, now, group_chat_id
                     )
@@ -11193,6 +11634,1652 @@ class CoreRepository:
                         session, group_chat_id
                     )
                 return True
+
+    def get_king_game_settings(self) -> KingGameSettings:
+        with self._session() as session:
+            record = session.get(KingGameSettingsRecord, 1)
+            if record is None:
+                record = KingGameSettingsRecord(
+                    id=1,
+                    enabled=True,
+                    king_phase_timeout_seconds=500,
+                    updated_at=datetime.now(BEIJING),
+                )
+                session.add(record)
+                session.flush()
+            return KingGameSettings(
+                enabled=record.enabled,
+                king_phase_timeout_seconds=record.king_phase_timeout_seconds,
+            )
+
+    def set_king_game_settings(
+        self, *, enabled: bool, king_phase_timeout_seconds: int
+    ) -> KingGameSettings:
+        if not isinstance(enabled, bool):
+            raise ValueError("启用状态必须是布尔值")
+        if (
+            not isinstance(king_phase_timeout_seconds, int)
+            or king_phase_timeout_seconds < 1
+        ):
+            raise ValueError("国王阶段时长必须是正整数")
+        self.get_king_game_settings()
+        with self._session() as session:
+            record = session.get(KingGameSettingsRecord, 1, with_for_update=True)
+            if record is None:
+                raise RuntimeError("国王游戏设置消失")
+            record.enabled = enabled
+            record.king_phase_timeout_seconds = king_phase_timeout_seconds
+            record.updated_at = datetime.now(BEIJING)
+            session.flush()
+            return KingGameSettings(
+                enabled=record.enabled,
+                king_phase_timeout_seconds=record.king_phase_timeout_seconds,
+            )
+
+    def start_king_game(
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> KingGameResult:
+        now = now.astimezone(BEIJING)
+        settings = self.get_king_game_settings()
+        with self.transaction():
+            with self._session() as session:
+                self._lock_gameplay_gate(session)
+                user = self._king_game_user(session, platform_id)
+                if user is None:
+                    return KingGameResult("not_joined")
+                group = session.get(GroupChatRecord, group_chat_id)
+                if (
+                    not settings.enabled
+                    or group is None
+                    or group.deleted_at is not None
+                    or not group.games_enabled
+                    or "king_game" not in group.enabled_game_types
+                ):
+                    return KingGameResult("disabled")
+                active = self._active_king_game(session, group_chat_id)
+                if active is not None:
+                    return self._king_game_result_locked(
+                        session, active, "already_active"
+                    )
+                if self._group_has_active_gameplay(session, group_chat_id):
+                    return KingGameResult("multiplayer_active")
+                game = KingGameRecord(
+                    group_chat_id=group_chat_id,
+                    host_user_id=user.id,
+                    active_key="global",
+                    state="signup",
+                    round_number=0,
+                    signup_deadline=now + timedelta(minutes=10),
+                    created_at=now,
+                )
+                session.add(game)
+                session.flush()
+                session.add(
+                    KingGamePlayerRecord(
+                        game_id=game.id,
+                        user_id=user.id,
+                        roster_order=1,
+                        state="signup",
+                        joined_at=now,
+                    )
+                )
+                session.flush()
+                return self._king_game_result_locked(session, game, "signup_started")
+
+    def join_king_game(
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> KingGameResult:
+        now = now.astimezone(BEIJING)
+        with self.transaction():
+            with self._session() as session:
+                self._lock_gameplay_gate(session)
+                game = self._active_king_game(session, group_chat_id)
+                if game is None:
+                    return KingGameResult("no_game")
+                if game.state != "signup":
+                    return self._king_game_result_locked(session, game, "already_started")
+                user = self._king_game_user(session, platform_id)
+                if user is None:
+                    return self._king_game_result_locked(session, game, "not_joined")
+                player = session.scalar(
+                    select(KingGamePlayerRecord)
+                    .where(
+                        KingGamePlayerRecord.game_id == game.id,
+                        KingGamePlayerRecord.user_id == user.id,
+                    )
+                    .with_for_update()
+                )
+                if player is not None and player.state != "withdrawn":
+                    return self._king_game_result_locked(session, game, "already_joined")
+                if player is None:
+                    player = KingGamePlayerRecord(
+                        game_id=game.id,
+                        user_id=user.id,
+                        roster_order=self._next_king_game_roster_order(session, game.id),
+                        state="signup",
+                        joined_at=now,
+                    )
+                    session.add(player)
+                else:
+                    player.state = "signup"
+                    player.joined_at = now
+                    player.left_at = None
+                session.flush()
+                return self._king_game_result_locked(session, game, "joined")
+
+    def begin_king_game(
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> KingGameResult:
+        now = now.astimezone(BEIJING)
+        settings = self.get_king_game_settings()
+        with self.transaction():
+            with self._session() as session:
+                self._lock_gameplay_gate(session)
+                game = self._active_king_game(session, group_chat_id)
+                if game is None:
+                    return KingGameResult("no_game")
+                actor = self._king_game_user(session, platform_id)
+                if actor is None:
+                    return self._king_game_result_locked(session, game, "not_joined")
+                if game.state != "signup":
+                    return self._king_game_result_locked(session, game, "already_started")
+                if actor.id != game.host_user_id:
+                    return self._king_game_result_locked(session, game, "host_only")
+                players = self._active_king_game_players(session, game.id, "signup")
+                if len(players) < 3:
+                    return self._king_game_result_locked(session, game, "not_enough_players")
+                for player, _ in players:
+                    player.state = "active"
+                game.state = "awaiting_reveal"
+                game.signup_deadline = None
+                game.started_at = now
+                self._start_king_game_round_locked(session, game, now, settings)
+                return self._king_game_result_locked(session, game, "started")
+
+    def reveal_king_game_numbers(
+        self,
+        platform_id: str,
+        raw_numbers: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> KingGameResult:
+        selected = self._parse_king_game_numbers(raw_numbers)
+        if selected is None:
+            return KingGameResult("invalid_numbers")
+        now = now.astimezone(BEIJING)
+        with self.transaction():
+            with self._session() as session:
+                self._lock_gameplay_gate(session)
+                game = self._active_king_game(session, group_chat_id)
+                if game is None:
+                    return KingGameResult("no_game")
+                if game.state != "awaiting_reveal":
+                    return self._king_game_result_locked(session, game, "wrong_state")
+                actor = self._king_game_user(session, platform_id)
+                if actor is None or actor.id != game.current_king_user_id:
+                    return self._king_game_result_locked(session, game, "king_only")
+                round_record = self._current_king_game_round(session, game)
+                if round_record is None:
+                    raise RuntimeError("国王游戏当前回合不存在")
+                max_number = len(self._active_king_game_players(session, game.id))
+                if not selected or any(number > max_number for number in selected):
+                    return self._king_game_result_locked(session, game, "invalid_numbers")
+                round_record.revealed_numbers = selected
+                round_record.state = "revealed"
+                round_record.revealed_at = now
+                game.state = "revealed"
+                game.king_phase_deadline = None
+                return self._king_game_result_locked(session, game, "revealed")
+
+    def continue_king_game(
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> KingGameResult:
+        now = now.astimezone(BEIJING)
+        settings = self.get_king_game_settings()
+        with self.transaction():
+            with self._session() as session:
+                self._lock_gameplay_gate(session)
+                game = self._active_king_game(session, group_chat_id)
+                if game is None:
+                    return KingGameResult("no_game")
+                actor = self._king_game_user(session, platform_id)
+                if actor is None or not self._is_active_king_game_player(session, game.id, actor.id):
+                    return self._king_game_result_locked(session, game, "not_participant")
+                if game.state != "revealed":
+                    return self._king_game_result_locked(session, game, "wrong_state")
+                if game.end_after_round or len(self._active_king_game_players(session, game.id)) < 3:
+                    self._finish_king_game_locked(game, "completed", "not_enough_players", now)
+                    return self._king_game_result_locked(session, game, "completed")
+                game.state = "awaiting_reveal"
+                self._start_king_game_round_locked(session, game, now, settings)
+                return self._king_game_result_locked(session, game, "next_round")
+
+    def leave_king_game(
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> KingGameResult:
+        now = now.astimezone(BEIJING)
+        with self.transaction():
+            with self._session() as session:
+                self._lock_gameplay_gate(session)
+                game = self._active_king_game(session, group_chat_id)
+                if game is None:
+                    return KingGameResult("no_game")
+                actor = self._king_game_user(session, platform_id)
+                if actor is None:
+                    return self._king_game_result_locked(session, game, "not_joined")
+                player = session.scalar(
+                    select(KingGamePlayerRecord)
+                    .where(
+                        KingGamePlayerRecord.game_id == game.id,
+                        KingGamePlayerRecord.user_id == actor.id,
+                        KingGamePlayerRecord.state.in_(("signup", "active")),
+                    )
+                    .with_for_update()
+                )
+                if player is None:
+                    return self._king_game_result_locked(session, game, "not_participant")
+                player.state = "withdrawn"
+                player.left_at = now
+                if game.state == "signup" and actor.id == game.host_user_id:
+                    self._finish_king_game_locked(game, "cancelled", "host_cancelled", now)
+                    return self._king_game_result_locked(session, game, "signup_cancelled")
+                if actor.id == game.current_king_user_id or game.state == "revealed":
+                    self._finish_king_game_locked(game, "completed", "participant_left", now)
+                    return self._king_game_result_locked(session, game, "completed")
+                if len(self._active_king_game_players(session, game.id)) < 3:
+                    game.end_after_round = True
+                return self._king_game_result_locked(session, game, "left_game")
+
+    def end_king_game(
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> KingGameResult:
+        now = now.astimezone(BEIJING)
+        with self.transaction():
+            with self._session() as session:
+                self._lock_gameplay_gate(session)
+                game = self._active_king_game(session, group_chat_id)
+                if game is None:
+                    return KingGameResult("no_game")
+                actor = self._user_for_platform(session, platform_id)
+                if actor is None or not self._is_active_king_game_player(session, game.id, actor.id):
+                    return self._king_game_result_locked(session, game, "not_participant")
+                self._finish_king_game_locked(game, "completed", "participant_ended", now)
+                return self._king_game_result_locked(session, game, "completed")
+
+    def run_king_game_jobs(self, now: datetime) -> tuple[KingGameResult, ...]:
+        now = now.astimezone(BEIJING)
+        settings = self.get_king_game_settings()
+        with self.transaction():
+            with self._session() as session:
+                self._lock_gameplay_gate(session)
+                games = list(
+                    session.scalars(
+                        select(KingGameRecord)
+                        .where(
+                            ((KingGameRecord.state == "signup") & (KingGameRecord.signup_deadline <= now))
+                            | ((KingGameRecord.state == "awaiting_reveal") & (KingGameRecord.king_phase_deadline <= now))
+                        )
+                        .with_for_update()
+                    )
+                )
+                results: list[KingGameResult] = []
+                for game in games:
+                    if game.state == "signup":
+                        self._finish_king_game_locked(game, "expired", "signup_timeout", now)
+                        results.append(self._king_game_result_locked(session, game, "signup_expired"))
+                    elif game.state == "awaiting_reveal":
+                        round_record = self._current_king_game_round(session, game)
+                        if round_record is not None:
+                            round_record.state = "timed_out"
+                        self._start_king_game_round_locked(session, game, now, settings)
+                        results.append(self._king_game_result_locked(session, game, "king_timed_out"))
+                return tuple(results)
+
+    @staticmethod
+    def _parse_king_game_numbers(value: str) -> list[int] | None:
+        pieces = [piece for piece in re.split(r"[\s,，]+", value.strip()) if piece]
+        if not pieces:
+            return None
+        try:
+            numbers = [int(piece) for piece in pieces]
+        except ValueError:
+            return None
+        if any(number < 1 for number in numbers) or len(set(numbers)) != len(numbers):
+            return None
+        return numbers
+
+    @staticmethod
+    def _active_king_game(session: Session, group_chat_id: UUID) -> KingGameRecord | None:
+        return session.scalar(
+            select(KingGameRecord)
+            .where(KingGameRecord.group_chat_id == group_chat_id, KingGameRecord.active_key == "global")
+            .with_for_update()
+        )
+
+    @staticmethod
+    def _king_game_user(session: Session, platform_id: str) -> UserRecord | None:
+        return session.scalar(
+            select(UserRecord)
+            .where(UserRecord.platform_id == platform_id)
+            .with_for_update()
+        )
+
+    @staticmethod
+    def _next_king_game_roster_order(session: Session, game_id: UUID) -> int:
+        return int(
+            session.scalar(
+                select(func.coalesce(func.max(KingGamePlayerRecord.roster_order), 0)).where(
+                    KingGamePlayerRecord.game_id == game_id
+                )
+            )
+            or 0
+        ) + 1
+
+    @staticmethod
+    def _active_king_game_players(
+        session: Session, game_id: UUID, state: str = "active"
+    ) -> list[tuple[KingGamePlayerRecord, UserRecord]]:
+        return list(
+            session.execute(
+                select(KingGamePlayerRecord, UserRecord)
+                .join(UserRecord, UserRecord.id == KingGamePlayerRecord.user_id)
+                .where(KingGamePlayerRecord.game_id == game_id, KingGamePlayerRecord.state == state)
+                .order_by(KingGamePlayerRecord.roster_order)
+                .with_for_update()
+            )
+        )
+
+    @staticmethod
+    def _is_active_king_game_player(session: Session, game_id: UUID, user_id: UUID) -> bool:
+        return session.scalar(
+            select(KingGamePlayerRecord.id).where(
+                KingGamePlayerRecord.game_id == game_id,
+                KingGamePlayerRecord.user_id == user_id,
+                KingGamePlayerRecord.state == "active",
+            )
+        ) is not None
+
+    @staticmethod
+    def _current_king_game_round(session: Session, game: KingGameRecord) -> KingGameRoundRecord | None:
+        return session.scalar(
+            select(KingGameRoundRecord)
+            .where(KingGameRoundRecord.game_id == game.id, KingGameRoundRecord.sequence == game.round_number)
+            .with_for_update()
+        )
+
+    def _start_king_game_round_locked(
+        self, session: Session, game: KingGameRecord, now: datetime, settings: KingGameSettings
+    ) -> None:
+        players = self._active_king_game_players(session, game.id)
+        if len(players) < 3:
+            self._finish_king_game_locked(game, "completed", "not_enough_players", now)
+            return
+        king_player, _ = SystemRandom().choice(players)
+        shuffled = SystemRandom().sample(players, len(players))
+        game.round_number += 1
+        game.current_king_user_id = king_player.user_id
+        game.king_phase_deadline = now + timedelta(seconds=settings.king_phase_timeout_seconds)
+        session.add(
+            KingGameRoundRecord(
+                game_id=game.id,
+                sequence=game.round_number,
+                king_user_id=king_player.user_id,
+                number_map={str(player.user_id): index for index, (player, _) in enumerate(shuffled, 1)},
+                state="awaiting_reveal",
+                started_at=now,
+            )
+        )
+
+    @staticmethod
+    def _finish_king_game_locked(game: KingGameRecord, state: str, reason: str, now: datetime) -> None:
+        game.state = state
+        game.active_key = None
+        game.signup_deadline = None
+        game.king_phase_deadline = None
+        game.finished_at = now
+        game.finish_reason = reason
+
+    def _king_game_result_locked(
+        self, session: Session, game: KingGameRecord, status: str
+    ) -> KingGameResult:
+        players = self._active_king_game_players(
+            session, game.id, "signup" if game.state == "signup" else "active"
+        )
+        king = None if game.current_king_user_id is None else session.get(UserRecord, game.current_king_user_id)
+        round_record = self._current_king_game_round(session, game)
+        number_map: tuple[tuple[int, str], ...] = ()
+        if round_record is not None and round_record.state == "revealed":
+            names = {str(player.user_id): user.display_name for player, user in players}
+            number_map = tuple(
+                sorted(
+                    (number, names[user_id])
+                    for user_id, number in round_record.number_map.items()
+                    if user_id in names
+                )
+            )
+        return KingGameResult(
+            status=status,
+            game_id=game.id,
+            group_chat_id=game.group_chat_id,
+            round_number=game.round_number,
+            king_name=None if king is None else king.display_name,
+            king_platform_id=None if king is None else king.platform_id,
+            players=tuple(
+                KingGamePlayerView(user.platform_id, user.display_name, player.roster_order, player.state)
+                for player, user in players
+            ),
+            number_map=number_map,
+            deadline=game.signup_deadline if game.state == "signup" else game.king_phase_deadline,
+            end_after_round=game.end_after_round,
+        )
+
+    def get_never_have_i_ever_settings(self) -> NeverHaveIEverSettings:
+        with self._session() as session:
+            record = session.get(NeverHaveIEverSettingsRecord, 1)
+            if record is None:
+                record = NeverHaveIEverSettingsRecord(
+                    id=1,
+                    enabled=True,
+                    signup_timeout_minutes=10,
+                    statement_timeout_seconds=60,
+                    response_timeout_seconds=60,
+                    updated_at=datetime.now(BEIJING),
+                )
+                session.add(record)
+                session.flush()
+            return NeverHaveIEverSettings(
+                enabled=record.enabled,
+                signup_timeout_minutes=record.signup_timeout_minutes,
+                statement_timeout_seconds=record.statement_timeout_seconds,
+                response_timeout_seconds=record.response_timeout_seconds,
+            )
+
+    def list_never_have_i_ever_history(
+        self, page: int, page_size: int
+    ) -> tuple[tuple[NeverHaveIEverHistory, ...], int]:
+        if page < 1 or page_size < 1:
+            raise ValueError("分页参数无效")
+        with self._session() as session:
+            total = int(
+                session.scalar(
+                    select(func.count())
+                    .select_from(NeverHaveIEverGameRecord)
+                    .where(NeverHaveIEverGameRecord.active_key.is_(None))
+                )
+                or 0
+            )
+            rows = list(
+                session.execute(
+                    select(NeverHaveIEverGameRecord, GroupChatRecord, UserRecord)
+                    .join(
+                        GroupChatRecord,
+                        GroupChatRecord.id == NeverHaveIEverGameRecord.group_chat_id,
+                    )
+                    .join(
+                        UserRecord,
+                        UserRecord.id == NeverHaveIEverGameRecord.host_user_id,
+                    )
+                    .where(NeverHaveIEverGameRecord.active_key.is_(None))
+                    .order_by(
+                        NeverHaveIEverGameRecord.finished_at.desc(),
+                        NeverHaveIEverGameRecord.created_at.desc(),
+                    )
+                    .offset((page - 1) * page_size)
+                    .limit(page_size)
+                )
+            )
+            return (
+                tuple(
+                    NeverHaveIEverHistory(
+                        game_id=game.id,
+                        group_chat_id=group.id,
+                        group_name=group.name,
+                        host_display_name=host.display_name,
+                        state=game.state,
+                        initial_player_count=game.initial_player_count,
+                        round_number=game.round_number,
+                        created_at=game.created_at,
+                        started_at=game.started_at,
+                        finished_at=game.finished_at,
+                        finish_reason=game.finish_reason,
+                        players=self._never_have_i_ever_players(session, game.id),
+                        rounds=self._never_have_i_ever_history_rounds(session, game.id),
+                    )
+                    for game, group, host in rows
+                ),
+                total,
+            )
+
+    @staticmethod
+    def _never_have_i_ever_history_rounds(
+        session: Session, game_id: UUID
+    ) -> tuple[NeverHaveIEverRoundHistory, ...]:
+        player_rows = session.execute(
+            select(NeverHaveIEverPlayerRecord, UserRecord)
+            .join(UserRecord, UserRecord.id == NeverHaveIEverPlayerRecord.user_id)
+            .where(NeverHaveIEverPlayerRecord.game_id == game_id)
+        ).all()
+        players = {
+            player.user_id: (player.roster_order, user.display_name)
+            for player, user in player_rows
+        }
+        rounds = session.scalars(
+            select(NeverHaveIEverRoundRecord)
+            .where(NeverHaveIEverRoundRecord.game_id == game_id)
+            .order_by(NeverHaveIEverRoundRecord.sequence)
+        ).all()
+        responses_by_round: dict[UUID, list[NeverHaveIEverResponseHistory]] = {
+            round_record.id: [] for round_record in rounds
+        }
+        if rounds:
+            for response, player in session.execute(
+                select(NeverHaveIEverResponseRecord, NeverHaveIEverPlayerRecord)
+                .join(
+                    NeverHaveIEverPlayerRecord,
+                    NeverHaveIEverPlayerRecord.user_id
+                    == NeverHaveIEverResponseRecord.user_id,
+                )
+                .where(
+                    NeverHaveIEverResponseRecord.round_id.in_(
+                        tuple(round_record.id for round_record in rounds)
+                    ),
+                    NeverHaveIEverPlayerRecord.game_id == game_id,
+                )
+                .order_by(
+                    NeverHaveIEverResponseRecord.round_id,
+                    NeverHaveIEverPlayerRecord.roster_order,
+                )
+            ):
+                number, display_name = players[response.user_id]
+                responses_by_round[response.round_id].append(
+                    NeverHaveIEverResponseHistory(
+                        player_number=number,
+                        display_name=display_name,
+                        choice=response.choice,
+                    )
+                )
+        return tuple(
+            NeverHaveIEverRoundHistory(
+                sequence=round_record.sequence,
+                speaker_number=players[round_record.speaker_user_id][0],
+                speaker_display_name=players[round_record.speaker_user_id][1],
+                statement=round_record.statement,
+                state=round_record.state,
+                statement_timed_out=round_record.statement_timed_out,
+                responses=tuple(responses_by_round[round_record.id]),
+            )
+            for round_record in rounds
+        )
+
+    def set_never_have_i_ever_settings(
+        self,
+        *,
+        enabled: bool,
+        signup_timeout_minutes: int,
+        statement_timeout_seconds: int,
+        response_timeout_seconds: int,
+    ) -> NeverHaveIEverSettings:
+        if not isinstance(enabled, bool):
+            raise ValueError("启用状态必须是布尔值")
+        values = (
+            signup_timeout_minutes,
+            statement_timeout_seconds,
+            response_timeout_seconds,
+        )
+        if any(not isinstance(value, int) or value < 1 for value in values):
+            raise ValueError("超时时间必须是正整数")
+        self.get_never_have_i_ever_settings()
+        with self._session() as session:
+            record = session.get(
+                NeverHaveIEverSettingsRecord, 1, with_for_update=True
+            )
+            if record is None:
+                raise RuntimeError("我有你没有设置消失")
+            record.enabled = enabled
+            record.signup_timeout_minutes = signup_timeout_minutes
+            record.statement_timeout_seconds = statement_timeout_seconds
+            record.response_timeout_seconds = response_timeout_seconds
+            record.updated_at = datetime.now(BEIJING)
+            session.flush()
+            return NeverHaveIEverSettings(
+                enabled=record.enabled,
+                signup_timeout_minutes=record.signup_timeout_minutes,
+                statement_timeout_seconds=record.statement_timeout_seconds,
+                response_timeout_seconds=record.response_timeout_seconds,
+            )
+
+    def start_never_have_i_ever(
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> NeverHaveIEverResult:
+        now = now.astimezone(BEIJING)
+        settings = self.get_never_have_i_ever_settings()
+        with self.transaction():
+            with self._session() as session:
+                self._lock_gameplay_gate(session)
+                user = session.scalar(
+                    select(UserRecord)
+                    .where(UserRecord.platform_id == platform_id)
+                    .with_for_update()
+                )
+                if user is None:
+                    return NeverHaveIEverResult("not_joined")
+                group = session.get(GroupChatRecord, group_chat_id)
+                if (
+                    not settings.enabled
+                    or group is None
+                    or group.deleted_at is not None
+                    or not group.games_enabled
+                    or "never_have_i_ever" not in group.enabled_game_types
+                ):
+                    return NeverHaveIEverResult(
+                        "disabled", display_name=user.display_name
+                    )
+                active = self._active_never_have_i_ever_game(
+                    session, group_chat_id
+                )
+                if active is not None:
+                    return NeverHaveIEverResult(
+                        "already_active",
+                        game_id=active.id,
+                        group_chat_id=group_chat_id,
+                        display_name=user.display_name,
+                    )
+                if self._group_has_active_gameplay(session, group_chat_id):
+                    return NeverHaveIEverResult(
+                        "multiplayer_active", display_name=user.display_name
+                    )
+                if self._claim_rank_multiplayer_start(
+                    session, user, "never_have_i_ever", now.date()
+                ) is None:
+                    return NeverHaveIEverResult(
+                        "daily_limit", display_name=user.display_name
+                    )
+                game = NeverHaveIEverGameRecord(
+                    group_chat_id=group_chat_id,
+                    host_user_id=user.id,
+                    active_key="global",
+                    state="signup",
+                    initial_player_count=0,
+                    current_speaker_order=None,
+                    round_number=0,
+                    signup_deadline=now
+                    + timedelta(minutes=settings.signup_timeout_minutes),
+                    created_at=now,
+                )
+                session.add(game)
+                session.flush()
+                session.add(
+                    NeverHaveIEverPlayerRecord(
+                        game_id=game.id,
+                        user_id=user.id,
+                        roster_order=1,
+                        hearts=5,
+                        state="signup",
+                        joined_at=now,
+                    )
+                )
+                session.flush()
+                return NeverHaveIEverResult(
+                    "signup_started",
+                    game_id=game.id,
+                    group_chat_id=group_chat_id,
+                    display_name=user.display_name,
+                    players=self._never_have_i_ever_players(session, game.id),
+                )
+
+    def join_never_have_i_ever(
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> NeverHaveIEverResult:
+        now = now.astimezone(BEIJING)
+        with self.transaction():
+            with self._session() as session:
+                self._lock_gameplay_gate(session)
+                game = self._active_never_have_i_ever_game(
+                    session, group_chat_id
+                )
+                if game is None:
+                    return NeverHaveIEverResult("no_game")
+                if game.state != "signup":
+                    return NeverHaveIEverResult(
+                        "already_started", game_id=game.id
+                    )
+                user = session.scalar(
+                    select(UserRecord)
+                    .where(UserRecord.platform_id == platform_id)
+                    .with_for_update()
+                )
+                if user is None:
+                    return NeverHaveIEverResult("not_joined", game_id=game.id)
+                player = session.scalar(
+                    select(NeverHaveIEverPlayerRecord)
+                    .where(
+                        NeverHaveIEverPlayerRecord.game_id == game.id,
+                        NeverHaveIEverPlayerRecord.user_id == user.id,
+                    )
+                    .with_for_update()
+                )
+                if player is not None and player.state != "withdrawn":
+                    return NeverHaveIEverResult(
+                        "already_joined",
+                        game_id=game.id,
+                        display_name=user.display_name,
+                    )
+                if player is None:
+                    roster_order = int(
+                        session.scalar(
+                            select(
+                                func.coalesce(
+                                    func.max(
+                                        NeverHaveIEverPlayerRecord.roster_order
+                                    ),
+                                    0,
+                                )
+                            ).where(
+                                NeverHaveIEverPlayerRecord.game_id == game.id
+                            )
+                        )
+                        or 0
+                    ) + 1
+                    player = NeverHaveIEverPlayerRecord(
+                        game_id=game.id,
+                        user_id=user.id,
+                        roster_order=roster_order,
+                        hearts=5,
+                        state="signup",
+                        joined_at=now,
+                    )
+                    session.add(player)
+                else:
+                    player.state = "signup"
+                    player.hearts = 5
+                    player.joined_at = now
+                    player.eliminated_at = None
+                    player.elimination_reason = None
+                session.flush()
+                return NeverHaveIEverResult(
+                    "joined",
+                    game_id=game.id,
+                    group_chat_id=group_chat_id,
+                    display_name=user.display_name,
+                    players=self._never_have_i_ever_players(session, game.id),
+                )
+
+    def leave_never_have_i_ever(
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> NeverHaveIEverResult:
+        now = now.astimezone(BEIJING)
+        with self.transaction():
+            with self._session() as session:
+                self._lock_gameplay_gate(session)
+                game = self._active_never_have_i_ever_game(
+                    session, group_chat_id
+                )
+                if game is None:
+                    return NeverHaveIEverResult("no_game")
+                if game.state == "free_punishment":
+                    return NeverHaveIEverResult("cannot_leave", game_id=game.id)
+                user = session.scalar(
+                    select(UserRecord)
+                    .where(UserRecord.platform_id == platform_id)
+                    .with_for_update()
+                )
+                if user is None:
+                    return NeverHaveIEverResult("not_joined", game_id=game.id)
+                player = session.scalar(
+                    select(NeverHaveIEverPlayerRecord)
+                    .where(
+                        NeverHaveIEverPlayerRecord.game_id == game.id,
+                        NeverHaveIEverPlayerRecord.user_id == user.id,
+                        NeverHaveIEverPlayerRecord.state != "withdrawn",
+                    )
+                    .with_for_update()
+                )
+                if player is None:
+                    return NeverHaveIEverResult(
+                        "not_participant", game_id=game.id
+                    )
+                if game.state == "signup" and game.host_user_id == user.id:
+                    game.state = "cancelled"
+                    game.active_key = None
+                    game.signup_deadline = None
+                    game.finished_at = now
+                    game.finish_reason = "host_cancelled"
+                    for member in session.scalars(
+                        select(NeverHaveIEverPlayerRecord)
+                        .where(NeverHaveIEverPlayerRecord.game_id == game.id)
+                        .with_for_update()
+                    ):
+                        member.state = "withdrawn"
+                        member.eliminated_at = now
+                        member.elimination_reason = "host_cancelled"
+                    return NeverHaveIEverResult(
+                        "signup_cancelled",
+                        game_id=game.id,
+                        group_chat_id=group_chat_id,
+                        display_name=user.display_name,
+                    )
+                if player.state != "signup" and player.state != "active":
+                    return NeverHaveIEverResult(
+                        "not_active", game_id=game.id
+                    )
+                player.state = "withdrawn"
+                player.hearts = 0
+                player.eliminated_at = now
+                player.elimination_reason = (
+                    "signup_left" if game.state == "signup" else "left_game"
+                )
+                if game.state == "signup":
+                    return NeverHaveIEverResult(
+                        "signup_left",
+                        game_id=game.id,
+                        group_chat_id=group_chat_id,
+                        display_name=user.display_name,
+                        players=self._never_have_i_ever_players(session, game.id),
+                    )
+                if self._never_have_i_ever_reached_threshold(session, game):
+                    self._enter_never_have_i_ever_free_punishment_locked(
+                        game, now
+                    )
+                    return NeverHaveIEverResult(
+                        "free_punishment",
+                        game_id=game.id,
+                        group_chat_id=group_chat_id,
+                        display_name=user.display_name,
+                        players=self._never_have_i_ever_players(session, game.id),
+                    )
+                if (
+                    game.state == "awaiting_statement"
+                    and game.current_speaker_order == player.roster_order
+                ):
+                    round_record = session.scalar(
+                        select(NeverHaveIEverRoundRecord)
+                        .where(
+                            NeverHaveIEverRoundRecord.game_id == game.id,
+                            NeverHaveIEverRoundRecord.sequence == game.round_number,
+                        )
+                        .with_for_update()
+                    )
+                    if round_record is not None:
+                        round_record.state = "settled"
+                        round_record.settled_at = now
+                    self._advance_never_have_i_ever_locked(session, game, now)
+                elif game.state == "awaiting_responses":
+                    round_record = session.scalar(
+                        select(NeverHaveIEverRoundRecord)
+                        .where(
+                            NeverHaveIEverRoundRecord.game_id == game.id,
+                            NeverHaveIEverRoundRecord.sequence == game.round_number,
+                        )
+                        .with_for_update()
+                    )
+                    if round_record is not None and self._never_have_i_ever_all_responded(
+                        session, game, round_record
+                    ):
+                        self._settle_never_have_i_ever_round_locked(
+                            session, game, round_record, now
+                        )
+                return NeverHaveIEverResult(
+                    "left_game",
+                    game_id=game.id,
+                    group_chat_id=group_chat_id,
+                    display_name=user.display_name,
+                    players=self._never_have_i_ever_players(session, game.id),
+                )
+
+    def submit_never_have_i_ever_statement(
+        self,
+        platform_id: str,
+        statement: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> NeverHaveIEverResult:
+        normalized_statement = statement.strip()
+        if not normalized_statement:
+            return NeverHaveIEverResult("empty_statement")
+        now = now.astimezone(BEIJING)
+        settings = self.get_never_have_i_ever_settings()
+        with self.transaction():
+            with self._session() as session:
+                self._lock_gameplay_gate(session)
+                game = self._active_never_have_i_ever_game(session, group_chat_id)
+                if game is None:
+                    return NeverHaveIEverResult("no_game")
+                user = session.scalar(
+                    select(UserRecord)
+                    .where(UserRecord.platform_id == platform_id)
+                    .with_for_update()
+                )
+                if user is None:
+                    return NeverHaveIEverResult("not_joined", game_id=game.id)
+                if game.state != "awaiting_statement":
+                    return NeverHaveIEverResult("wrong_phase", game_id=game.id)
+                speaker = session.scalar(
+                    select(NeverHaveIEverPlayerRecord)
+                    .where(
+                        NeverHaveIEverPlayerRecord.game_id == game.id,
+                        NeverHaveIEverPlayerRecord.roster_order
+                        == game.current_speaker_order,
+                    )
+                    .with_for_update()
+                )
+                if speaker is None or speaker.user_id != user.id:
+                    return NeverHaveIEverResult(
+                        "not_current_speaker", game_id=game.id
+                    )
+                round_record = session.scalar(
+                    select(NeverHaveIEverRoundRecord)
+                    .where(
+                        NeverHaveIEverRoundRecord.game_id == game.id,
+                        NeverHaveIEverRoundRecord.sequence == game.round_number,
+                    )
+                    .with_for_update()
+                )
+                if round_record is None:
+                    raise RuntimeError("我有你没有当前回合不存在")
+                round_record.statement = normalized_statement
+                round_record.state = "awaiting_responses"
+                round_record.statement_at = now
+                round_record.response_deadline = now + timedelta(
+                    seconds=settings.response_timeout_seconds
+                )
+                game.state = "awaiting_responses"
+                game.statement_deadline = None
+                game.response_deadline = round_record.response_deadline
+                return NeverHaveIEverResult(
+                    "statement_recorded",
+                    game_id=game.id,
+                    group_chat_id=group_chat_id,
+                    display_name=user.display_name,
+                    players=self._never_have_i_ever_players(session, game.id),
+                    current_speaker_number=game.current_speaker_order,
+                    expected_response_count=self._never_have_i_ever_expected_responses(
+                        session, game, round_record
+                    ),
+                )
+
+    def respond_never_have_i_ever(
+        self,
+        platform_id: str,
+        deduct: bool,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> NeverHaveIEverResult:
+        now = now.astimezone(BEIJING)
+        with self.transaction():
+            with self._session() as session:
+                self._lock_gameplay_gate(session)
+                game = self._active_never_have_i_ever_game(session, group_chat_id)
+                if game is None:
+                    return NeverHaveIEverResult("no_game")
+                user = session.scalar(
+                    select(UserRecord)
+                    .where(UserRecord.platform_id == platform_id)
+                    .with_for_update()
+                )
+                if user is None:
+                    return NeverHaveIEverResult("not_joined", game_id=game.id)
+                if game.state != "awaiting_responses":
+                    return NeverHaveIEverResult("wrong_phase", game_id=game.id)
+                player = session.scalar(
+                    select(NeverHaveIEverPlayerRecord)
+                    .where(
+                        NeverHaveIEverPlayerRecord.game_id == game.id,
+                        NeverHaveIEverPlayerRecord.user_id == user.id,
+                    )
+                    .with_for_update()
+                )
+                if player is None:
+                    return NeverHaveIEverResult("not_participant", game_id=game.id)
+                if player.roster_order == game.current_speaker_order:
+                    return NeverHaveIEverResult(
+                        "speaker_cannot_respond", game_id=game.id
+                    )
+                if player.state != "active":
+                    return NeverHaveIEverResult("not_active", game_id=game.id)
+                round_record = session.scalar(
+                    select(NeverHaveIEverRoundRecord)
+                    .where(
+                        NeverHaveIEverRoundRecord.game_id == game.id,
+                        NeverHaveIEverRoundRecord.sequence == game.round_number,
+                    )
+                    .with_for_update()
+                )
+                if round_record is None:
+                    raise RuntimeError("我有你没有当前回合不存在")
+                response = session.scalar(
+                    select(NeverHaveIEverResponseRecord)
+                    .where(
+                        NeverHaveIEverResponseRecord.round_id == round_record.id,
+                        NeverHaveIEverResponseRecord.user_id == user.id,
+                    )
+                    .with_for_update()
+                )
+                if response is not None:
+                    return NeverHaveIEverResult(
+                        "already_responded", game_id=game.id
+                    )
+                session.add(
+                    NeverHaveIEverResponseRecord(
+                        round_id=round_record.id,
+                        user_id=user.id,
+                        choice="deduct" if deduct else "keep",
+                        submitted_at=now,
+                    )
+                )
+                session.flush()
+                if self._never_have_i_ever_all_responded(
+                    session, game, round_record
+                ):
+                    self._settle_never_have_i_ever_round_locked(
+                        session, game, round_record, now
+                    )
+                    details = self._never_have_i_ever_round_details(
+                        session, round_record
+                    )
+                    return NeverHaveIEverResult(
+                        (
+                            "free_punishment"
+                            if game.state == "free_punishment"
+                            else "round_settled"
+                        ),
+                        game_id=game.id,
+                        group_chat_id=group_chat_id,
+                        players=self._never_have_i_ever_players(session, game.id),
+                        current_speaker_number=game.current_speaker_order,
+                        **details,
+                    )
+                return NeverHaveIEverResult(
+                    "response_recorded",
+                    game_id=game.id,
+                    group_chat_id=group_chat_id,
+                    display_name=user.display_name,
+                    responded_count=self._never_have_i_ever_response_count(
+                        session, game, round_record
+                    ),
+                    expected_response_count=self._never_have_i_ever_expected_responses(
+                        session, game, round_record
+                    ),
+                )
+
+    @staticmethod
+    def _never_have_i_ever_expected_responses(
+        session: Session,
+        game: NeverHaveIEverGameRecord,
+        round_record: NeverHaveIEverRoundRecord,
+    ) -> int:
+        del round_record
+        return int(
+            session.scalar(
+                select(func.count())
+                .select_from(NeverHaveIEverPlayerRecord)
+                .where(
+                    NeverHaveIEverPlayerRecord.game_id == game.id,
+                    NeverHaveIEverPlayerRecord.state == "active",
+                    NeverHaveIEverPlayerRecord.roster_order
+                    != game.current_speaker_order,
+                )
+            )
+            or 0
+        )
+
+    @staticmethod
+    def _never_have_i_ever_response_count(
+        session: Session,
+        game: NeverHaveIEverGameRecord,
+        round_record: NeverHaveIEverRoundRecord,
+    ) -> int:
+        return int(
+            session.scalar(
+                select(func.count())
+                .select_from(NeverHaveIEverResponseRecord)
+                .join(
+                    NeverHaveIEverPlayerRecord,
+                    NeverHaveIEverPlayerRecord.user_id
+                    == NeverHaveIEverResponseRecord.user_id,
+                )
+                .where(
+                    NeverHaveIEverResponseRecord.round_id == round_record.id,
+                    NeverHaveIEverPlayerRecord.game_id == game.id,
+                    NeverHaveIEverPlayerRecord.state == "active",
+                    NeverHaveIEverPlayerRecord.roster_order
+                    != game.current_speaker_order,
+                )
+            )
+            or 0
+        )
+
+    def _never_have_i_ever_all_responded(
+        self,
+        session: Session,
+        game: NeverHaveIEverGameRecord,
+        round_record: NeverHaveIEverRoundRecord,
+    ) -> bool:
+        return self._never_have_i_ever_response_count(
+            session, game, round_record
+        ) == self._never_have_i_ever_expected_responses(session, game, round_record)
+
+    @staticmethod
+    def _never_have_i_ever_round_details(
+        session: Session, round_record: NeverHaveIEverRoundRecord
+    ) -> dict[str, object]:
+        choices: dict[str, list[str]] = {
+            "deduct": [],
+            "keep": [],
+            "timeout_deduct": [],
+        }
+        for response, user in session.execute(
+            select(NeverHaveIEverResponseRecord, UserRecord)
+            .join(UserRecord, UserRecord.id == NeverHaveIEverResponseRecord.user_id)
+            .join(
+                NeverHaveIEverRoundRecord,
+                NeverHaveIEverRoundRecord.id
+                == NeverHaveIEverResponseRecord.round_id,
+            )
+            .join(
+                NeverHaveIEverPlayerRecord,
+                and_(
+                    NeverHaveIEverPlayerRecord.game_id
+                    == NeverHaveIEverRoundRecord.game_id,
+                    NeverHaveIEverPlayerRecord.user_id
+                    == NeverHaveIEverResponseRecord.user_id,
+                ),
+            )
+            .where(NeverHaveIEverResponseRecord.round_id == round_record.id)
+            .order_by(NeverHaveIEverPlayerRecord.roster_order)
+        ):
+            choices[response.choice].append(user.display_name)
+        return {
+            "statement": round_record.statement,
+            "deducted_player_names": tuple(choices["deduct"]),
+            "kept_player_names": tuple(choices["keep"]),
+            "timeout_deducted_player_names": tuple(choices["timeout_deduct"]),
+        }
+
+    @staticmethod
+    def _never_have_i_ever_reached_threshold(
+        session: Session, game: NeverHaveIEverGameRecord
+    ) -> bool:
+        out_count = int(
+            session.scalar(
+                select(func.count())
+                .select_from(NeverHaveIEverPlayerRecord)
+                .where(
+                    NeverHaveIEverPlayerRecord.game_id == game.id,
+                    NeverHaveIEverPlayerRecord.state.in_(("eliminated", "withdrawn")),
+                )
+            )
+            or 0
+        )
+        return out_count >= (game.initial_player_count + 1) // 2
+
+    @staticmethod
+    def _enter_never_have_i_ever_free_punishment_locked(
+        game: NeverHaveIEverGameRecord, now: datetime
+    ) -> None:
+        game.state = "free_punishment"
+        game.current_speaker_order = None
+        game.statement_deadline = None
+        game.response_deadline = None
+        game.free_punishment_started_at = now
+
+    def _settle_never_have_i_ever_round_locked(
+        self,
+        session: Session,
+        game: NeverHaveIEverGameRecord,
+        round_record: NeverHaveIEverRoundRecord,
+        now: datetime,
+    ) -> None:
+        if round_record.state != "awaiting_responses":
+            return
+        players = list(
+            session.scalars(
+                select(NeverHaveIEverPlayerRecord)
+                .where(NeverHaveIEverPlayerRecord.game_id == game.id)
+                .order_by(NeverHaveIEverPlayerRecord.roster_order)
+                .with_for_update()
+            )
+        )
+        by_user_id = {player.user_id: player for player in players}
+        responses = {
+            response.user_id: response
+            for response in session.scalars(
+                select(NeverHaveIEverResponseRecord)
+                .where(NeverHaveIEverResponseRecord.round_id == round_record.id)
+                .with_for_update()
+            )
+        }
+        for player in players:
+            if (
+                player.state != "active"
+                or player.roster_order == game.current_speaker_order
+                or player.user_id in responses
+            ):
+                continue
+            response = NeverHaveIEverResponseRecord(
+                round_id=round_record.id,
+                user_id=player.user_id,
+                choice="timeout_deduct",
+                submitted_at=now,
+            )
+            session.add(response)
+            responses[player.user_id] = response
+        for user_id, response in responses.items():
+            player = by_user_id.get(user_id)
+            if player is None or player.state != "active":
+                continue
+            if response.choice not in {"deduct", "timeout_deduct"}:
+                continue
+            player.hearts = max(0, player.hearts - 1)
+            if player.hearts == 0:
+                player.state = "eliminated"
+                player.eliminated_at = now
+                player.elimination_reason = "response_deduct"
+        round_record.state = "settled"
+        round_record.settled_at = now
+        game.response_deadline = None
+        if self._never_have_i_ever_reached_threshold(session, game):
+            self._enter_never_have_i_ever_free_punishment_locked(game, now)
+            return
+        self._advance_never_have_i_ever_locked(session, game, now)
+
+    def _advance_never_have_i_ever_locked(
+        self,
+        session: Session,
+        game: NeverHaveIEverGameRecord,
+        now: datetime,
+    ) -> None:
+        settings = self.get_never_have_i_ever_settings()
+        active_players = list(
+            session.scalars(
+                select(NeverHaveIEverPlayerRecord)
+                .where(
+                    NeverHaveIEverPlayerRecord.game_id == game.id,
+                    NeverHaveIEverPlayerRecord.state == "active",
+                )
+                .order_by(NeverHaveIEverPlayerRecord.roster_order)
+            )
+        )
+        if not active_players:
+            self._enter_never_have_i_ever_free_punishment_locked(game, now)
+            return
+        previous_order = game.current_speaker_order or 0
+        next_player = next(
+            (player for player in active_players if player.roster_order > previous_order),
+            active_players[0],
+        )
+        game.round_number += 1
+        game.current_speaker_order = next_player.roster_order
+        game.state = "awaiting_statement"
+        game.statement_deadline = now + timedelta(
+            seconds=settings.statement_timeout_seconds
+        )
+        session.add(
+            NeverHaveIEverRoundRecord(
+                game_id=game.id,
+                sequence=game.round_number,
+                speaker_user_id=next_player.user_id,
+                state="awaiting_statement",
+                statement_timed_out=False,
+            )
+        )
+
+    def run_never_have_i_ever_jobs(
+        self, now: datetime
+    ) -> tuple[NeverHaveIEverResult, ...]:
+        now = now.astimezone(BEIJING)
+        with self.transaction():
+            with self._session() as session:
+                self._lock_gameplay_gate(session)
+                games = list(
+                    session.scalars(
+                        select(NeverHaveIEverGameRecord)
+                        .where(
+                            (NeverHaveIEverGameRecord.state == "signup")
+                            & (NeverHaveIEverGameRecord.signup_deadline <= now)
+                            | (
+                                NeverHaveIEverGameRecord.state
+                                == "awaiting_statement"
+                            )
+                            & (NeverHaveIEverGameRecord.statement_deadline <= now)
+                            | (
+                                NeverHaveIEverGameRecord.state
+                                == "awaiting_responses"
+                            )
+                            & (NeverHaveIEverGameRecord.response_deadline <= now)
+                        )
+                        .with_for_update()
+                    )
+                )
+                results: list[NeverHaveIEverResult] = []
+                for game in games:
+                    if game.state == "signup" and (
+                        game.signup_deadline is not None
+                        and now >= game.signup_deadline
+                    ):
+                        game.state = "expired"
+                        game.active_key = None
+                        game.signup_deadline = None
+                        game.finished_at = now
+                        game.finish_reason = "signup_timeout"
+                        results.append(
+                            NeverHaveIEverResult(
+                                "signup_expired",
+                                game_id=game.id,
+                                group_chat_id=game.group_chat_id,
+                                players=self._never_have_i_ever_players(
+                                    session, game.id
+                                ),
+                            )
+                        )
+                        continue
+                    if game.state == "awaiting_statement" and (
+                        game.statement_deadline is not None
+                        and now >= game.statement_deadline
+                    ):
+                        speaker = session.scalar(
+                            select(NeverHaveIEverPlayerRecord)
+                            .where(
+                                NeverHaveIEverPlayerRecord.game_id == game.id,
+                                NeverHaveIEverPlayerRecord.roster_order
+                                == game.current_speaker_order,
+                            )
+                            .with_for_update()
+                        )
+                        round_record = session.scalar(
+                            select(NeverHaveIEverRoundRecord)
+                            .where(
+                                NeverHaveIEverRoundRecord.game_id == game.id,
+                                NeverHaveIEverRoundRecord.sequence
+                                == game.round_number,
+                            )
+                            .with_for_update()
+                        )
+                        if speaker is not None and speaker.state == "active":
+                            speaker.hearts = max(0, speaker.hearts - 1)
+                            if speaker.hearts == 0:
+                                speaker.state = "eliminated"
+                                speaker.eliminated_at = now
+                                speaker.elimination_reason = "statement_timeout"
+                        if round_record is not None:
+                            round_record.state = "statement_timeout"
+                            round_record.statement_timed_out = True
+                            round_record.settled_at = now
+                        game.statement_deadline = None
+                        if self._never_have_i_ever_reached_threshold(session, game):
+                            self._enter_never_have_i_ever_free_punishment_locked(
+                                game, now
+                            )
+                        else:
+                            self._advance_never_have_i_ever_locked(
+                                session, game, now
+                            )
+                        results.append(
+                            NeverHaveIEverResult(
+                                "statement_timed_out",
+                                game_id=game.id,
+                                group_chat_id=game.group_chat_id,
+                                players=self._never_have_i_ever_players(
+                                    session, game.id
+                                ),
+                                current_speaker_number=game.current_speaker_order,
+                            )
+                        )
+                        continue
+                    if game.state == "awaiting_responses" and (
+                        game.response_deadline is not None
+                        and now >= game.response_deadline
+                    ):
+                        round_record = session.scalar(
+                            select(NeverHaveIEverRoundRecord)
+                            .where(
+                                NeverHaveIEverRoundRecord.game_id == game.id,
+                                NeverHaveIEverRoundRecord.sequence
+                                == game.round_number,
+                            )
+                            .with_for_update()
+                        )
+                        if round_record is None:
+                            raise RuntimeError("我有你没有当前回合不存在")
+                        self._settle_never_have_i_ever_round_locked(
+                            session, game, round_record, now
+                        )
+                        details = self._never_have_i_ever_round_details(
+                            session, round_record
+                        )
+                        results.append(
+                            NeverHaveIEverResult(
+                                (
+                                    "free_punishment"
+                                    if game.state == "free_punishment"
+                                    else "round_timed_out"
+                                ),
+                                game_id=game.id,
+                                group_chat_id=game.group_chat_id,
+                                players=self._never_have_i_ever_players(
+                                    session, game.id
+                                ),
+                                current_speaker_number=game.current_speaker_order,
+                                **details,
+                            )
+                        )
+                return tuple(results)
+
+    def end_never_have_i_ever(
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> NeverHaveIEverResult:
+        now = now.astimezone(BEIJING)
+        with self.transaction():
+            with self._session() as session:
+                self._lock_gameplay_gate(session)
+                game = self._active_never_have_i_ever_game(session, group_chat_id)
+                if game is None:
+                    return NeverHaveIEverResult("no_game")
+                user = session.scalar(
+                    select(UserRecord)
+                    .where(UserRecord.platform_id == platform_id)
+                    .with_for_update()
+                )
+                if user is None:
+                    return NeverHaveIEverResult("not_joined", game_id=game.id)
+                if game.state != "free_punishment":
+                    return NeverHaveIEverResult("cannot_end", game_id=game.id)
+                player = session.scalar(
+                    select(NeverHaveIEverPlayerRecord)
+                    .where(
+                        NeverHaveIEverPlayerRecord.game_id == game.id,
+                        NeverHaveIEverPlayerRecord.user_id == user.id,
+                    )
+                    .with_for_update()
+                )
+                if player is None:
+                    return NeverHaveIEverResult("not_participant", game_id=game.id)
+                if player.state != "active":
+                    return NeverHaveIEverResult("not_active", game_id=game.id)
+                self._finish_never_have_i_ever_locked(
+                    session, game, "completed", "participant_ended", now
+                )
+                return NeverHaveIEverResult(
+                    "completed",
+                    game_id=game.id,
+                    group_chat_id=group_chat_id,
+                    players=tuple(
+                        sorted(
+                            self._never_have_i_ever_players(session, game.id),
+                            key=lambda player: (-player.hearts, player.number),
+                        )
+                    ),
+                )
+
+    def _finish_never_have_i_ever_locked(
+        self,
+        session: Session,
+        game: NeverHaveIEverGameRecord,
+        state: str,
+        reason: str,
+        now: datetime,
+    ) -> None:
+        game.state = state
+        game.active_key = None
+        game.signup_deadline = None
+        game.statement_deadline = None
+        game.response_deadline = None
+        game.finished_at = now
+        game.finish_reason = reason
+        for player in session.scalars(
+            select(NeverHaveIEverPlayerRecord).where(
+                NeverHaveIEverPlayerRecord.game_id == game.id
+            )
+        ):
+            self._record_ai_activity_fact(
+                session,
+                event_key=f"never_have_i_ever:{game.id}:{player.user_id}",
+                user_id=player.user_id,
+                activity_type="never_have_i_ever",
+                result="ended",
+                occurred_at=now,
+            )
+
+    def begin_never_have_i_ever(
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
+    ) -> NeverHaveIEverResult:
+        now = now.astimezone(BEIJING)
+        settings = self.get_never_have_i_ever_settings()
+        with self.transaction():
+            with self._session() as session:
+                self._lock_gameplay_gate(session)
+                game = self._active_never_have_i_ever_game(
+                    session, group_chat_id
+                )
+                if game is None:
+                    return NeverHaveIEverResult("no_game")
+                user = session.scalar(
+                    select(UserRecord)
+                    .where(UserRecord.platform_id == platform_id)
+                    .with_for_update()
+                )
+                if user is None:
+                    return NeverHaveIEverResult("not_joined", game_id=game.id)
+                if game.state != "signup":
+                    return NeverHaveIEverResult(
+                        "already_started", game_id=game.id
+                    )
+                if game.host_user_id != user.id:
+                    return NeverHaveIEverResult("host_only", game_id=game.id)
+                players = list(
+                    session.scalars(
+                        select(NeverHaveIEverPlayerRecord)
+                        .where(
+                            NeverHaveIEverPlayerRecord.game_id == game.id,
+                            NeverHaveIEverPlayerRecord.state == "signup",
+                        )
+                        .order_by(NeverHaveIEverPlayerRecord.roster_order)
+                        .with_for_update()
+                    )
+                )
+                if len(players) < 3:
+                    return NeverHaveIEverResult(
+                        "not_enough_players", game_id=game.id
+                    )
+                maximum_hearts = len(players) + 2
+                for player in players:
+                    player.state = "active"
+                    player.hearts = maximum_hearts
+                first = players[0]
+                game.state = "awaiting_statement"
+                game.initial_player_count = len(players)
+                game.current_speaker_order = first.roster_order
+                game.round_number = 1
+                game.signup_deadline = None
+                game.statement_deadline = now + timedelta(
+                    seconds=settings.statement_timeout_seconds
+                )
+                game.started_at = now
+                round_record = NeverHaveIEverRoundRecord(
+                    game_id=game.id,
+                    sequence=1,
+                    speaker_user_id=first.user_id,
+                    state="awaiting_statement",
+                    statement_timed_out=False,
+                )
+                session.add(round_record)
+                session.flush()
+                return NeverHaveIEverResult(
+                    "started",
+                    game_id=game.id,
+                    group_chat_id=group_chat_id,
+                    display_name=user.display_name,
+                    players=self._never_have_i_ever_players(session, game.id),
+                    current_speaker_number=first.roster_order,
+                )
+
+    @staticmethod
+    def _active_never_have_i_ever_game(
+        session: Session, group_chat_id: UUID
+    ) -> NeverHaveIEverGameRecord | None:
+        return session.scalar(
+            select(NeverHaveIEverGameRecord)
+            .where(
+                NeverHaveIEverGameRecord.group_chat_id == group_chat_id,
+                NeverHaveIEverGameRecord.active_key == "global",
+            )
+            .with_for_update()
+        )
+
+    @staticmethod
+    def _never_have_i_ever_players(
+        session: Session, game_id: UUID
+    ) -> tuple[NeverHaveIEverPlayerView, ...]:
+        rows = session.execute(
+            select(NeverHaveIEverPlayerRecord, UserRecord)
+            .join(UserRecord, UserRecord.id == NeverHaveIEverPlayerRecord.user_id)
+            .where(NeverHaveIEverPlayerRecord.game_id == game_id)
+            .order_by(NeverHaveIEverPlayerRecord.roster_order)
+        ).all()
+        return tuple(
+            NeverHaveIEverPlayerView(
+                platform_id=user.platform_id,
+                display_name=user.display_name,
+                number=player.roster_order,
+                hearts=player.hearts,
+                state=player.state,
+            )
+            for player, user in rows
+            if player.state != "withdrawn"
+            or player.elimination_reason not in {"signup_left", "host_cancelled"}
+        )
 
     def start_number_bomb_game(
         self,
@@ -13559,6 +15646,17 @@ class CoreRepository:
             or session.scalar(
                 select(
                     exists().where(
+                        NeverHaveIEverGameRecord.active_key == "global",
+                        *(() if group_chat_id is None else (
+                            NeverHaveIEverGameRecord.group_chat_id
+                            == group_chat_id,
+                        )),
+                    )
+                )
+            )
+            or session.scalar(
+                select(
+                    exists().where(
                         PerformanceReservationRecord.state.in_(
                             ("previewed", "waiting", "performing", "tipping")
                         ),
@@ -15763,6 +17861,11 @@ class CoreRepository:
                     raise ValueError("记忆考核轮次无法撤回")
                 round_record.state = "awaiting_answer"
                 game.state = "awaiting_answer"
+                if game.mode == "single":
+                    settings = self.get_memory_assessment_settings()
+                    game.answer_deadline = now + timedelta(
+                        seconds=settings.single_answer_timeout_seconds
+                    )
                 session.flush()
                 return _memory_assessment_round(round_record)
 
@@ -16119,6 +18222,120 @@ class CoreRepository:
                     )
         return expired
 
+    def expire_memory_assessment_singles(
+        self, now: datetime
+    ) -> list[MemoryAssessmentGameResult]:
+        now = now.astimezone(BEIJING)
+        settings = self.get_memory_assessment_settings()
+        expired = []
+        with self.transaction():
+            with self._session() as session:
+                game_ids = list(
+                    session.scalars(
+                        select(MemoryAssessmentGameRecord.id)
+                        .where(
+                            MemoryAssessmentGameRecord.mode == "single",
+                            MemoryAssessmentGameRecord.active_key == "global",
+                            MemoryAssessmentGameRecord.state.in_(
+                                ("awaiting_answer", "awaiting_decision")
+                            ),
+                            or_(
+                                MemoryAssessmentGameRecord.answer_deadline.is_(None),
+                                MemoryAssessmentGameRecord.answer_deadline <= now,
+                            ),
+                        )
+                    )
+                )
+                for game_id in game_ids:
+                    user_id = session.scalar(
+                        select(MemoryAssessmentParticipantRecord.user_id).where(
+                            MemoryAssessmentParticipantRecord.game_id == game_id
+                        )
+                    )
+                    if user_id is None:
+                        continue
+                    user = session.get(UserRecord, user_id, with_for_update=True)
+                    game = session.get(
+                        MemoryAssessmentGameRecord, game_id, with_for_update=True
+                    )
+                    if (
+                        user is None
+                        or game is None
+                        or game.active_key != "global"
+                        or game.state not in {"awaiting_answer", "awaiting_decision"}
+                    ):
+                        continue
+                    if game.answer_deadline is None:
+                        timeout_seconds = (
+                            settings.single_answer_timeout_seconds
+                            if game.state == "awaiting_answer"
+                            else settings.single_decision_timeout_seconds
+                        )
+                        game.answer_deadline = now + timedelta(seconds=timeout_seconds)
+                        continue
+                    if game.answer_deadline > now:
+                        continue
+                    participant = session.scalar(
+                        select(MemoryAssessmentParticipantRecord)
+                        .where(
+                            MemoryAssessmentParticipantRecord.game_id == game.id,
+                            MemoryAssessmentParticipantRecord.state == "active",
+                        )
+                        .with_for_update()
+                    )
+                    if participant is None:
+                        continue
+                    if game.state == "awaiting_decision":
+                        self._apply_balance_change(
+                            user, game.reward, "memory_assessment_single_reward", now
+                        )
+                        game.state = "settled"
+                        game.active_key = None
+                        game.answer_deadline = None
+                        game.finished_at = now
+                        participant.state = "settled"
+                        self._record_ai_activity_fact(
+                            session,
+                            event_key=f"memory_assessment_single:{game.id}:{user.id}",
+                            user_id=user.id,
+                            activity_type="memory_assessment_single",
+                            result="win",
+                            occurred_at=now,
+                        )
+                        expired.append(
+                            MemoryAssessmentGameResult(
+                                "auto_cashed_out",
+                                display_name=user.display_name,
+                                game_id=game.id,
+                                level=game.level,
+                                reward=game.reward,
+                                balance=user.balance,
+                                display_seconds=settings.single_decision_timeout_seconds,
+                                group_chat_id=game.group_chat_id,
+                            )
+                        )
+                        continue
+                    round_record = session.scalar(
+                        select(MemoryAssessmentRoundRecord)
+                        .where(
+                            MemoryAssessmentRoundRecord.game_id == game.id,
+                            MemoryAssessmentRoundRecord.state == "awaiting_answer",
+                        )
+                        .order_by(MemoryAssessmentRoundRecord.sequence.desc())
+                        .with_for_update()
+                    )
+                    if round_record is None:
+                        continue
+                    expired.append(
+                        replace(
+                            self._fail_memory_assessment_single_timeout(
+                                session, game, round_record, participant, user, now
+                            ),
+                            display_seconds=settings.single_answer_timeout_seconds,
+                        )
+                    )
+        return expired
+
     def answer_memory_assessment(
         self,
         platform_id: str,
@@ -16168,12 +18385,23 @@ class CoreRepository:
                         level=game.level,
                         reward=game.reward,
                     )
+                participant = self._memory_assessment_participant(
+                    session, game.id, user.id
+                )
+                if (
+                    game.answer_deadline is not None
+                    and now >= game.answer_deadline
+                ):
+                    return self._fail_memory_assessment_single_timeout(
+                        session, game, round_record, participant, user, now
+                    )
                 if answer != round_record.answer:
                     round_record.state = "failed"
                     game.state = "failed"
                     game.active_key = None
+                    game.answer_deadline = None
                     game.finished_at = now
-                    self._memory_assessment_participant(session, game.id, user.id).state = "failed"
+                    participant.state = "failed"
                     self._record_ai_activity_fact(
                         session,
                         event_key=f"memory_assessment_single:{game.id}:{user.id}",
@@ -16199,6 +18427,10 @@ class CoreRepository:
                 ) is None
                 if not is_final_level:
                     game.state = "awaiting_decision"
+                    settings = self.get_memory_assessment_settings()
+                    game.answer_deadline = now + timedelta(
+                        seconds=settings.single_decision_timeout_seconds
+                    )
                     return MemoryAssessmentGameResult(
                         "correct",
                         display_name=user.display_name,
@@ -16213,6 +18445,7 @@ class CoreRepository:
                 )
                 game.state = "settled"
                 game.active_key = None
+                game.answer_deadline = None
                 game.finished_at = now
                 self._memory_assessment_participant(session, game.id, user.id).state = "settled"
                 self._record_ai_activity_fact(
@@ -16232,6 +18465,40 @@ class CoreRepository:
                     reward=game.reward,
                     balance=user.balance,
                 )
+
+    def _fail_memory_assessment_single_timeout(
+        self,
+        session: Session,
+        game: MemoryAssessmentGameRecord,
+        round_record: MemoryAssessmentRoundRecord,
+        participant: MemoryAssessmentParticipantRecord,
+        user: UserRecord,
+        now: datetime,
+    ) -> MemoryAssessmentGameResult:
+        round_record.state = "failed"
+        game.state = "failed"
+        game.active_key = None
+        game.answer_deadline = None
+        game.finished_at = now
+        participant.state = "failed"
+        self._record_ai_activity_fact(
+            session,
+            event_key=f"memory_assessment_single:{game.id}:{user.id}",
+            user_id=user.id,
+            activity_type="memory_assessment_single",
+            result="loss",
+            occurred_at=now,
+        )
+        return MemoryAssessmentGameResult(
+            "timed_out",
+            display_name=user.display_name,
+            game_id=game.id,
+            round_id=round_record.id,
+            level=game.level,
+            reward=game.reward,
+            balance=user.balance,
+            group_chat_id=game.group_chat_id,
+        )
 
     def continue_memory_assessment(
         self,
@@ -16257,6 +18524,38 @@ class CoreRepository:
                     return MemoryAssessmentGameResult(
                         "cannot_continue", display_name=user.display_name
                     )
+                if (
+                    game.answer_deadline is not None
+                    and now >= game.answer_deadline
+                ):
+                    self._apply_balance_change(
+                        user, game.reward, "memory_assessment_single_reward", now
+                    )
+                    game.state = "settled"
+                    game.active_key = None
+                    game.answer_deadline = None
+                    game.finished_at = now
+                    self._memory_assessment_participant(
+                        session, game.id, user.id
+                    ).state = "settled"
+                    self._record_ai_activity_fact(
+                        session,
+                        event_key=f"memory_assessment_single:{game.id}:{user.id}",
+                        user_id=user.id,
+                        activity_type="memory_assessment_single",
+                        result="win",
+                        occurred_at=now,
+                    )
+                    return MemoryAssessmentGameResult(
+                        "auto_cashed_out",
+                        display_name=user.display_name,
+                        game_id=game.id,
+                        level=game.level,
+                        reward=game.reward,
+                        balance=user.balance,
+                        display_seconds=settings.single_decision_timeout_seconds,
+                        group_chat_id=game.group_chat_id,
+                    )
                 next_rule = session.get(
                     MemoryAssessmentLevelRuleRecord, int(game.level or 0) + 1
                 )
@@ -16266,6 +18565,7 @@ class CoreRepository:
                     settings.character_set, next_rule.answer_length
                 )
                 game.state = "showing_answer"
+                game.answer_deadline = None
                 game.level = next_rule.level
                 game.reward = next_rule.reward
                 round_record = MemoryAssessmentRoundRecord(
@@ -16317,6 +18617,7 @@ class CoreRepository:
                 )
                 game.state = "settled"
                 game.active_key = None
+                game.answer_deadline = None
                 game.finished_at = now
                 self._memory_assessment_participant(session, game.id, user.id).state = "settled"
                 self._record_ai_activity_fact(
@@ -18518,9 +20819,15 @@ class CoreRepository:
                                 event_label = schedule.scene_name or "随机事件"
                                 if schedule.event_name:
                                     event_label += f"－{schedule.event_name}"
+                                seats = "、".join(
+                                    f"{seat['role']} ×{seat['capacity']}"
+                                    for seat in (schedule.seats or [])
+                                )
                                 self.enqueue_system_outbound(
                                     "【随机事件预告】\n"
-                                    f"{timing}开放「{event_label}」报名，请留意群内通知。",
+                                    f"{timing}开放「{event_label}」报名"
+                                    + (f"，可选席位：{seats}" if seats else "")
+                                    + "。请留意群内通知。",
                                     group_chat_id=group_chat_id,
                                     destination_chatroom_id=group.chatroom_id,
                                 )
@@ -18588,6 +20895,14 @@ class CoreRepository:
                     return "no_event"
                 if event.state != "signup":
                     return "event_started"
+                if event.signup_notice_outbound_id is not None:
+                    notice_status = session.scalar(
+                        select(OutboundRecord.status).where(
+                            OutboundRecord.id == event.signup_notice_outbound_id
+                        )
+                    )
+                    if notice_status != "sent":
+                        return "announcement_pending"
                 participant = session.scalar(
                     select(RandomEventParticipantRecord).where(
                         RandomEventParticipantRecord.event_id == event.id,
@@ -18698,8 +21013,14 @@ class CoreRepository:
         self, group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID
     ) -> str | None:
         with self._session() as session:
-            event = self._active_random_event(session, group_chat_id)
-            return None if event is None else event.state
+            return session.scalar(
+                select(RandomEventRecord.state)
+                .where(
+                    RandomEventRecord.group_chat_id == group_chat_id,
+                    RandomEventRecord.state.in_(("signup", "in_progress", "tipping")),
+                )
+                .order_by(RandomEventRecord.started_at)
+            )
 
     def classify_random_event_message(
         self,
@@ -19185,6 +21506,14 @@ class CoreRepository:
         )
         if not scenes:
             return False
+        performed_scene_names = set(
+            session.scalars(select(RandomEventRecord.scene_name).distinct())
+        )
+        unperformed_scenes = [
+            scene for scene in scenes if scene.name not in performed_scene_names
+        ]
+        if unperformed_scenes:
+            scenes = unperformed_scenes
         scene = scenes[randbelow(len(scenes))]
         templates = list(
             session.scalars(
@@ -19266,7 +21595,7 @@ class CoreRepository:
                 for seat in schedule.seats
             ]
         )
-        self.enqueue_system_outbound(
+        notice = self.enqueue_system_outbound(
             f"【随机事件：{schedule.scene_name}－{schedule.event_name}】\n{schedule.signup_text}\n"
             + _render_random_event_signup_notice(
                 schedule.signup_notice_template or settings.signup_notice_template,
@@ -19280,6 +21609,7 @@ class CoreRepository:
                 schedule.group_chat_id
             ),
         )
+        active.signup_notice_outbound_id = notice.id
         return active
 
     def _active_random_event(
@@ -19762,6 +22092,26 @@ class CoreRepository:
                             else self.group_chat_destination(game.group_chat_id)
                         ),
                     )
+            for game in self.expire_memory_assessment_singles(now):
+                if game.status == "auto_cashed_out":
+                    message = (
+                        f"【记忆考核】{game.display_name} {game.display_seconds} 秒内未选择继续，"
+                        f"已自动收手，获得 {game.reward} 摸鱼币。"
+                    )
+                else:
+                    message = (
+                        f"【记忆考核】{game.display_name} {game.display_seconds} 秒内未作答，"
+                        "本次考核失败。"
+                    )
+                self.enqueue_system_outbound(
+                    message,
+                    group_chat_id=game.group_chat_id,
+                    destination_chatroom_id=(
+                        None
+                        if game.group_chat_id is None
+                        else self.group_chat_destination(game.group_chat_id)
+                    ),
+                )
             for result in self.run_memory_guild_jobs(now):
                 if result.public_message is None or result.match_id is None:
                     continue
@@ -19781,7 +22131,48 @@ class CoreRepository:
             group_ids = tuple(group.id for group in self.list_group_chats()) or (
                 PRIMARY_GROUP_CHAT_ID,
             )
+            king_game_results = self.run_king_game_jobs(now)
+            for result in king_game_results:
+                if result.group_chat_id is None:
+                    continue
+                message = (
+                    "【国王游戏】报名超时，本局已自动取消。"
+                    if result.status == "signup_expired"
+                    else (
+                        f"【国王游戏】上一轮国王未在时限内公开编号，"
+                        f"本轮已跳过。\n第 {result.round_number} 轮国王：{result.king_name}，"
+                        "请先发布命令，再发送 /公开 编号。"
+                    )
+                )
+                self.enqueue_system_outbound(
+                    message,
+                    group_chat_id=result.group_chat_id,
+                    destination_chatroom_id=self.group_chat_destination(
+                        result.group_chat_id
+                    ),
+                )
+            never_have_i_ever_results = self.run_never_have_i_ever_jobs(now)
             for group_chat_id in group_ids:
+                for result in never_have_i_ever_results:
+                    if result.group_chat_id != group_chat_id:
+                        continue
+                    message = (
+                        "【我有你没有】报名超时，本局已自动取消。"
+                        if result.status == "signup_expired"
+                        else render_never_have_i_ever_statement_timeout(result)
+                        if result.status == "statement_timed_out"
+                        else render_never_have_i_ever_round_settlement(result)
+                        if result.status in {"round_timed_out", "free_punishment"}
+                        else None
+                    )
+                    if message is not None:
+                        self.enqueue_system_outbound(
+                            message,
+                            group_chat_id=group_chat_id,
+                            destination_chatroom_id=self.group_chat_destination(
+                                group_chat_id
+                            ),
+                        )
                 for message in self.expire_red_packets(now, group_chat_id):
                     self.enqueue_system_outbound(
                         message,
@@ -24140,6 +26531,39 @@ class CoreRepository:
             session.flush()
             return record
 
+    def fail_outbound_recall(
+        self,
+        message_id: UUID | str,
+        worker_id: str,
+        lease_token: UUID | str,
+        now: datetime,
+    ) -> bool:
+        with self._session() as session:
+            record = session.scalar(
+                select(OutboundRecord)
+                .where(
+                    OutboundRecord.id == UUID(str(message_id)),
+                    OutboundRecord.recall_status == "leased",
+                    OutboundRecord.recall_lease_worker_id == worker_id,
+                    OutboundRecord.recall_lease_token == UUID(str(lease_token)),
+                    OutboundRecord.recall_lease_expires_at > now,
+                )
+                .with_for_update()
+            )
+            if record is None:
+                return False
+            record.recall_lease_worker_id = None
+            record.recall_lease_token = None
+            record.recall_lease_expires_at = None
+            if record.recall_attempt_count >= 3:
+                record.recall_status = "failed"
+                return True
+            record.recall_status = "pending"
+            record.recall_due_at = now + timedelta(
+                seconds=2 ** record.recall_attempt_count
+            )
+            return True
+
     def confirm_outbound_recalled(
         self,
         message_id: UUID | str,
@@ -24579,6 +27003,8 @@ def _memory_assessment_settings(
         enabled=record.enabled,
         single_daily_limit=record.single_daily_limit,
         single_recall_seconds=record.single_recall_seconds,
+        single_answer_timeout_seconds=record.single_answer_timeout_seconds,
+        single_decision_timeout_seconds=record.single_decision_timeout_seconds,
         duel_recall_seconds=record.duel_recall_seconds,
         duel_difficulty_level=record.duel_difficulty_level,
         duel_base_pool=record.duel_base_pool,
@@ -24821,6 +27247,8 @@ def _validate_memory_assessment_settings(
     *,
     single_daily_limit: int,
     single_recall_seconds: int,
+    single_answer_timeout_seconds: int,
+    single_decision_timeout_seconds: int,
     duel_recall_seconds: int,
     duel_difficulty_level: int,
     duel_base_pool: int,
@@ -24833,6 +27261,8 @@ def _validate_memory_assessment_settings(
     positive_values = {
         "每日挑战次数": single_daily_limit,
         "单人撤回秒数": single_recall_seconds,
+        "单人作答超时": single_answer_timeout_seconds,
+        "单人收手选择超时": single_decision_timeout_seconds,
         "多人撤回秒数": duel_recall_seconds,
         "基础奖池": duel_base_pool,
         "答错冻结金额": duel_wrong_freeze,

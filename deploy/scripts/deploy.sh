@@ -6,7 +6,16 @@ dzmm_release_dir=${1:-}
   exit 2
 }
 install -d -o dzmm -g dzmm /opt/dzmm/current
-rsync -a --delete --exclude .git --exclude .venv "$dzmm_release_dir/" /opt/dzmm/current/
+rsync -a --delete --delete-excluded \
+  --exclude .git \
+  --exclude .env \
+  --exclude .venv \
+  --exclude .worktrees \
+  --exclude __pycache__ \
+  --exclude '*.pyc' \
+  --exclude .DS_Store \
+  --exclude '._*' \
+  "$dzmm_release_dir/" /opt/dzmm/current/
 chown -R dzmm:dzmm /opt/dzmm/current
 python3 -m venv /opt/dzmm/venv
 /opt/dzmm/venv/bin/pip install --upgrade pip

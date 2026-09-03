@@ -39,6 +39,10 @@ def test_route_ai_topics_uses_exact_command_aliases():
     assert route_ai_topics("/全下", ()) == ("texas_holdem",)
     assert route_ai_topics("暗网交易所怎么报价", ()) == ("dark_market",)
     assert route_ai_topics("/登陆暗网", ()) == ("dark_market",)
+    assert route_ai_topics("怎么预约公演", ()) == ("performance",)
+    assert route_ai_topics("/预约公演", ()) == ("performance",)
+    assert route_ai_topics("我有你没有怎么玩", ()) == ("never_have_i_ever",)
+    assert route_ai_topics("/我有你没有", ()) == ("never_have_i_ever",)
 
 
 def test_routing_and_selection_are_normalized_bounded_and_deterministic():

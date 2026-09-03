@@ -14,8 +14,8 @@ class AdminCorePort(Protocol):
     def update_group_chat(self, group_id: str, group: dict) -> dict: ...
 
     def delete_group_chat(self, group_id: str, now: str) -> dict: ...
-    def add_bot_to_group(self, group_id: str) -> dict: ...
 
+    def add_bot_to_group(self, group_id: str) -> dict: ...
 
     def login_state(self) -> str | None: ...
 
@@ -132,6 +132,16 @@ class AdminCorePort(Protocol):
     def get_number_bomb_settings(self) -> dict: ...
 
     def set_number_bomb_settings(self, settings: dict) -> dict: ...
+
+    def get_never_have_i_ever_settings(self) -> dict: ...
+
+    def set_never_have_i_ever_settings(self, settings: dict) -> dict: ...
+
+    def get_king_game_settings(self) -> dict: ...
+
+    def set_king_game_settings(self, settings: dict) -> dict: ...
+
+    def list_never_have_i_ever_history(self, page: int, page_size: int) -> dict: ...
 
     def get_texas_holdem_settings(self) -> dict: ...
 
@@ -352,11 +362,11 @@ class CoreClient:
         )
         response.raise_for_status()
         return response.json()
+
     def add_bot_to_group(self, group_id: str) -> dict:
         response = self._client.post(f"/internal/group-chats/{group_id}/add-bot")
         response.raise_for_status()
         return response.json()
-
 
     def login_state(self) -> str | None:
         heartbeat = self._get("/internal/login-state")
@@ -574,6 +584,30 @@ class CoreClient:
         )
         response.raise_for_status()
         return response.json()
+
+    def get_never_have_i_ever_settings(self) -> dict:
+        return self._get("/internal/game/never-have-i-ever/settings")
+
+    def set_never_have_i_ever_settings(self, settings: dict) -> dict:
+        response = self._client.patch(
+            "/internal/game/never-have-i-ever/settings", json=settings
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def get_king_game_settings(self) -> dict:
+        return self._get("/internal/game/king-game/settings")
+
+    def set_king_game_settings(self, settings: dict) -> dict:
+        response = self._client.patch("/internal/game/king-game/settings", json=settings)
+        response.raise_for_status()
+        return response.json()
+
+    def list_never_have_i_ever_history(self, page: int, page_size: int) -> dict:
+        return self._get(
+            "/internal/game/never-have-i-ever/history",
+            params={"page": page, "page_size": page_size},
+        )
 
     def get_texas_holdem_settings(self) -> dict:
         return self._get("/internal/game/texas-holdem/settings")

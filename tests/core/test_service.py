@@ -32,6 +32,21 @@ def inbound():
     )
 
 
+def _mark_random_event_signup_notice_sent(repository):
+    from dzmm_bot.core.schema import OutboundRecord, RandomEventRecord
+
+    with repository._session() as session:
+        active = session.scalar(
+            select(RandomEventRecord).where(RandomEventRecord.state == "signup")
+        )
+        assert active is not None
+        assert active.signup_notice_outbound_id is not None
+        notice = session.get(OutboundRecord, active.signup_notice_outbound_id)
+        assert notice is not None
+        notice.status = "sent"
+        notice.platform_sent_id = f"test-signup-{active.id}"
+
+
 def test_noop_service_accepts_message_without_creating_reply(session_factory, inbound):
     from dzmm_bot.core.repository import CoreRepository
     from dzmm_bot.core.schema import OutboundRecord
@@ -527,6 +542,7 @@ def test_service_uses_random_event_block_message_for_unwrapped_observer(session_
     repository.create_user("player", "小明", now, 0)
     repository.schedule_random_events(now)
     repository.run_random_event_jobs(now)
+    _mark_random_event_signup_notice_sent(repository)
     assert repository.join_random_event("player", "员工", now) == "started"
     service = CoreService(repository)
 
@@ -559,6 +575,7 @@ def test_service_allows_ordinary_chat_during_random_event_tipping(session_factor
     repository.create_user("tipping-chat", "聊天玩家", now, 0)
     schedule = repository.schedule_random_events(now)[0]
     repository.run_random_event_jobs(now)
+    _mark_random_event_signup_notice_sent(repository)
     assert repository.join_random_event("tipping-chat", "员工", now) == "started"
     assert repository.leave_random_event("tipping-chat", now) == "left_without_reward"
     service = CoreService(repository)
@@ -601,6 +618,7 @@ def test_red_packet_commands_bypass_active_random_event_gate(session_factory):
     repository.create_user("event-packet", "事件玩家", now, 10)
     repository.schedule_random_events(now)
     repository.run_random_event_jobs(now)
+    _mark_random_event_signup_notice_sent(repository)
     assert repository.join_random_event("event-packet", "员工", now) == "started"
     service = CoreService(repository, GroupCommandHandler(repository))
 

@@ -560,6 +560,11 @@ class RandomEventSubmissionHandler:
                 f" · 审核于 {record.reviewed_at.strftime('%Y-%m-%d %H:%M')}"
                 if record.reviewed_at else ""
             )
+            + (
+                f" · 演绎次数：{record.performed_count}"
+                if record.status == "approved"
+                else ""
+            )
             + (f" · {record.rejection_reason}" if record.rejection_reason else "")
             for record in records
         )

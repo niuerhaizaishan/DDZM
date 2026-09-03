@@ -40,6 +40,7 @@ class OutboundRecallClaim:
     id: UUID
     platform_sent_id: str
     lease_token: UUID
+    destination_chatroom_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -146,6 +147,14 @@ class CorePort(Protocol):
     ) -> OutboundRecallClaim | None: ...
 
     def confirm_outbound_recalled(
+        self,
+        message_id: UUID,
+        worker_id: str,
+        lease_token: UUID,
+        now: datetime,
+    ) -> None: ...
+
+    def fail_outbound_recall(
         self,
         message_id: UUID,
         worker_id: str,
@@ -469,6 +478,7 @@ class CoreClient:
             id=UUID(data["id"]),
             platform_sent_id=data["platform_sent_id"],
             lease_token=UUID(data["lease_token"]),
+            destination_chatroom_id=data.get("destination_chatroom_id"),
         )
 
     def confirm_outbound_recalled(
@@ -480,6 +490,22 @@ class CoreClient:
     ) -> None:
         self._post(
             f"/internal/outbound/{message_id}/recalled",
+            {
+                "worker_id": worker_id,
+                "lease_token": str(lease_token),
+                "now": now.isoformat(),
+            },
+        )
+
+    def fail_outbound_recall(
+        self,
+        message_id: UUID,
+        worker_id: str,
+        lease_token: UUID,
+        now: datetime,
+    ) -> None:
+        self._post(
+            f"/internal/outbound/{message_id}/recall-failed",
             {
                 "worker_id": worker_id,
                 "lease_token": str(lease_token),

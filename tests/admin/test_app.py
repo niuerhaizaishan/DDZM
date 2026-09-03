@@ -291,6 +291,8 @@ class FakeCore:
             "enabled": True,
             "single_daily_limit": 1,
             "single_recall_seconds": 3,
+            "single_answer_timeout_seconds": 15,
+            "single_decision_timeout_seconds": 15,
             "duel_recall_seconds": 3,
             "duel_difficulty_level": 5,
             "duel_base_pool": 5,
@@ -2150,6 +2152,8 @@ def test_admin_proxies_memory_assessment_settings_with_versioning(client, header
         json={
             **core.memory_assessment_settings,
             "single_recall_seconds": 4,
+            "single_answer_timeout_seconds": 12,
+            "single_decision_timeout_seconds": 13,
             "duel_base_pool": 6,
         },
     )
@@ -2157,6 +2161,8 @@ def test_admin_proxies_memory_assessment_settings_with_versioning(client, header
     assert initial.status_code == 200
     assert response.status_code == 200
     assert response.json()["single_recall_seconds"] == 4
+    assert response.json()["single_answer_timeout_seconds"] == 12
+    assert response.json()["single_decision_timeout_seconds"] == 13
     assert response.json()["duel_base_pool"] == 6
     assert response.json()["version"] == 1
 
@@ -3545,6 +3551,7 @@ def test_number_bomb_settings_surface_has_new_controls_and_gameplay_card():
     assert 'id="undercover-signup-timeout"' in page
     assert "/api/game/number-bomb/settings" in script
     assert "/api/gameplay/current" in script
+    assert 'id="group-chat-game-never-have-i-ever"' in page
 
 
 def test_texas_holdem_admin_surface_has_settings_and_public_table_state():

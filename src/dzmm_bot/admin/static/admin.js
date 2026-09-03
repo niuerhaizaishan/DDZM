@@ -35,6 +35,9 @@ let randomEventSubmissionStatus = "pending";
 let randomEventSceneOpeningTarget = null;
 let randomEventAddScenes = [];
 let hideAndSeekSettings = null;
+let neverHaveIEverSettings = null;
+let kingGameSettings = null;
+let neverHaveIEverHistoryPage = 1;
 let hideAndSeekScenePage = 1;
 let memoryAssessmentSettings = null;
 let memoryGuildHistoryPage = 1;
@@ -64,6 +67,8 @@ const groupGameOptions = [
   ["undercover", "谁是卧底", "undercover"],
   ["blame_bomb", "甩锅游戏", "blame-bomb"],
   ["number_bomb", "蹦蹦数字炸弹", "number-bomb"],
+  ["never_have_i_ever", "我有你没有", "never-have-i-ever"],
+  ["king_game", "国王游戏", "king-game"],
   ["texas_holdem", "德州扑克", "texas-holdem"],
 ];
 
@@ -286,12 +291,20 @@ const activitySettingsModal = document.querySelector("#activity-settings-modal")
 const activityRuleInputs = document.querySelector("#activity-rule-inputs");
 const incomeReportTimeInputs = document.querySelector("#income-report-time-inputs");
 const numberBombSettingsModal = document.querySelector("#number-bomb-settings-modal");
+const neverHaveIEverSettingsModal = document.querySelector("#never-have-i-ever-settings-modal");
+const kingGameSettingsModal = document.querySelector("#king-game-settings-modal");
 const texasHoldemSettingsModal = document.querySelector("#texas-holdem-settings-modal");
 const darkMarketSettingsModal = document.querySelector("#dark-market-settings-modal");
 const darkMarketDetailModal = document.querySelector("#dark-market-detail-modal");
 const numberBombEnabled = document.querySelector("#number-bomb-enabled");
 const numberBombSignupMinutes = document.querySelector("#number-bomb-signup-minutes");
 const numberBombReminderSeconds = document.querySelector("#number-bomb-reminder-seconds");
+const neverHaveIEverEnabled = document.querySelector("#never-have-i-ever-enabled");
+const neverHaveIEverSignupMinutes = document.querySelector("#never-have-i-ever-signup-minutes");
+const neverHaveIEverStatementSeconds = document.querySelector("#never-have-i-ever-statement-seconds");
+const neverHaveIEverResponseSeconds = document.querySelector("#never-have-i-ever-response-seconds");
+const kingGameEnabled = document.querySelector("#king-game-enabled");
+const kingGamePhaseSeconds = document.querySelector("#king-game-phase-seconds");
 const redPacketSettingsModal = document.querySelector("#red-packet-settings-modal");
 const redPacketExpiryMinutes = document.querySelector("#red-packet-expiry-minutes");
 const redPacketEmptyProbability = document.querySelector("#red-packet-empty-probability");
@@ -450,6 +463,14 @@ function closeNumberBombSettingsModal() {
   numberBombSettingsModal.hidden = true;
 }
 
+function closeNeverHaveIEverSettingsModal() {
+  neverHaveIEverSettingsModal.hidden = true;
+}
+
+function closeKingGameSettingsModal() {
+  kingGameSettingsModal.hidden = true;
+}
+
 function closeTexasHoldemSettingsModal() {
   texasHoldemSettingsModal.hidden = true;
 }
@@ -514,6 +535,19 @@ function renderNumberBombSettings(settings) {
     <article><span>游戏状态</span><strong>${settings.enabled ? "已启用" : "已停用"}</strong><small>停用只阻止创建新对局</small></article>
     <article><span>报名超时</span><strong>${settings.signup_timeout_minutes} 分钟</strong><small>未开局报名到期自动释放</small></article>
     <article><span>未报数提醒</span><strong>${settings.reminder_interval_seconds} 秒</strong><small>首次提醒后参与者可使用 /跳过</small></article>`;
+}
+
+function renderNeverHaveIEverSettings(settings) {
+  document.querySelector("#never-have-i-ever-settings-card").innerHTML = `
+    <article><span>游戏状态</span><strong>${settings.enabled ? "已启用" : "已停用"}</strong><small>停用只阻止创建新对局</small></article>
+    <article><span>报名超时</span><strong>${settings.signup_timeout_minutes} 分钟</strong><small>未开局报名到期自动取消</small></article>
+    <article><span>发言 / 回应</span><strong>${settings.statement_timeout_seconds} / ${settings.response_timeout_seconds} 秒</strong><small>超时自动扣除一颗心</small></article>`;
+}
+
+function renderKingGameSettings(settings) {
+  document.querySelector("#king-game-settings-card").innerHTML = `
+    <article><span>游戏状态</span><strong>${settings.enabled ? "已启用" : "已停用"}</strong><small>停用只阻止创建新对局</small></article>
+    <article><span>国王公开时限</span><strong>${settings.king_phase_timeout_seconds} 秒</strong><small>超时跳过当前轮并重新抽取国王</small></article>`;
 }
 
 function renderTexasHoldemSettings(settings) {
@@ -610,22 +644,26 @@ function renderCurrentGameplay(gameplay) {
   }
   const names = {
     number_bomb: "蹦蹦数字炸弹", blame_bomb: "甩锅游戏", undercover: "谁是卧底",
-    memory_duel: "记忆考核对战", memory_guild: "记忆考核公会赛", random_event: "随机事件", texas_holdem: "德州扑克", conflict: "玩法状态冲突",
+    memory_duel: "记忆考核对战", memory_guild: "记忆考核公会赛", random_event: "随机事件", texas_holdem: "德州扑克", never_have_i_ever: "我有你没有", king_game: "国王游戏", conflict: "玩法状态冲突",
   };
   const states = {
     signup: "报名中", collecting: "报数中", waiting_continue: "等待继续",
     awaiting_continue: "等待继续", active: "进行中", in_progress: "进行中",
-    waiting_opponent: "等待对手", configuring: "配置队伍中", waiting_lineup: "等待选手", ready: "等待开题", showing: "题目展示中", answering: "作答中", waiting_round_start: "等待下一小局", waiting_series: "等待下一场", tipping: "打赏中", conflict: "状态冲突",
+    waiting_opponent: "等待对手", configuring: "配置队伍中", waiting_lineup: "等待选手", ready: "等待开题", showing: "题目展示中", awaiting_answer: "等待作答", answering: "作答中", waiting_round_start: "等待下一小局", waiting_series: "等待下一场", awaiting_statement: "等待发言", awaiting_responses: "等待回应", free_punishment: "自由惩罚", tipping: "打赏中", conflict: "状态冲突",
   };
   card.innerHTML = items.map((item) => {
+    const maximumHearts = item.game_type === "never_have_i_ever"
+      ? item.participants.length + 2
+      : 5;
     const participants = item.participants.map((participant) => {
       const number = participant.number == null ? "" : `${participant.number}号 `;
       const progress = participant.reported == null ? "" : participant.reported ? "（已报数）" : "（未报数）";
       const points = item.mode === "points_tournament" ? `（${participant.total_points ?? 0}分）` : "";
       const retired = participant.state === "retired" ? `（已退赛，自第${participant.retired_at_round ?? "?"}轮起）` : "";
-      return `${number}${participant.display_name}${progress}${points}${retired}`;
+      const hearts = participant.hearts == null ? "" : `（${"❤️".repeat(participant.hearts)}${"🖤".repeat(Math.max(0, maximumHearts - participant.hearts))}）`;
+      return `${number}${participant.display_name}${progress}${points}${retired}${hearts}`;
     }).join("、") || "暂无";
-    const deadline = item.tipping_deadline ? `打赏截止 ${formatHeartbeat(item.tipping_deadline)}` : item.signup_deadline ? `报名截止 ${formatHeartbeat(item.signup_deadline)}` : item.next_reminder_at ? `下次提醒 ${formatHeartbeat(item.next_reminder_at)}` : "当前无倒计时";
+    const deadline = item.tipping_deadline ? `打赏截止 ${formatHeartbeat(item.tipping_deadline)}` : item.signup_deadline ? `报名截止 ${formatHeartbeat(item.signup_deadline)}` : item.action_deadline ? `本阶段截止 ${formatHeartbeat(item.action_deadline)}` : item.next_reminder_at ? `下次提醒 ${formatHeartbeat(item.next_reminder_at)}` : "当前无倒计时";
     const numberBombProgress = item.game_type === "number_bomb"
       ? `${item.mode === "points_tournament" ? "积分赛" : "普通局"} · 第 ${item.round_number ?? 0}/${item.maximum_rounds || "不限"} 轮 · `
       : "";
@@ -714,7 +752,7 @@ function renderHideAndSeekScenes(scenes) {
 function renderMemoryAssessmentSettings(settings) {
   document.querySelector("#memory-assessment-settings-card").innerHTML = `
     <article><span>游戏状态</span><strong>${settings.enabled ? "已启用" : "已停用"}</strong><small>考题展示后自动撤回</small></article>
-    <article><span>单人挑战</span><strong>每日 ${settings.single_daily_limit} 次 / ${settings.single_recall_seconds} 秒</strong><small>${settings.levels.map((rule) => `LV${rule.level}: ${rule.answer_length} 字符 / ${rule.reward} 奖励`).join(" · ")}</small></article>
+    <article><span>单人挑战</span><strong>每日 ${settings.single_daily_limit} 次 / 展示 ${settings.single_recall_seconds} 秒</strong><small>作答 ${settings.single_answer_timeout_seconds} 秒，答对后选择 ${settings.single_decision_timeout_seconds} 秒；${settings.levels.map((rule) => `LV${rule.level}: ${rule.answer_length} 字符 / ${rule.reward} 奖励`).join(" · ")}</small></article>
     <article><span>双人对战</span><strong>基础奖池 ${settings.duel_base_pool} / 答错冻结 ${settings.duel_wrong_freeze}</strong><small>难度 LV${settings.duel_difficulty_level}，${settings.duel_answer_timeout_minutes} 分钟超时，答错上限 ${settings.duel_wrong_limit} 次</small></article>`;
   const duelSummary = document.querySelector("[data-memory-assessment-duel-summary]");
   if (duelSummary) {
@@ -787,6 +825,8 @@ async function openMemoryAssessmentSettingsModal() {
   document.querySelector("#memory-assessment-enabled").checked = settings.enabled;
   document.querySelector("#memory-assessment-daily-limit").value = settings.single_daily_limit;
   document.querySelector("#memory-assessment-single-seconds").value = settings.single_recall_seconds;
+  document.querySelector("#memory-assessment-single-answer-timeout").value = settings.single_answer_timeout_seconds;
+  document.querySelector("#memory-assessment-single-decision-timeout").value = settings.single_decision_timeout_seconds;
   document.querySelector("#memory-assessment-duel-seconds").value = settings.duel_recall_seconds;
   document.querySelector("#memory-assessment-duel-level").value = settings.duel_difficulty_level;
   document.querySelector("#memory-assessment-base-pool").value = settings.duel_base_pool;
@@ -1471,6 +1511,46 @@ async function loadNumberBombSettings() {
   return numberBombSettings;
 }
 
+async function loadNeverHaveIEverSettings() {
+  neverHaveIEverSettings = await requestGame("/api/game/never-have-i-ever/settings");
+  configurationVersion = neverHaveIEverSettings.version;
+  renderNeverHaveIEverSettings(neverHaveIEverSettings);
+  return neverHaveIEverSettings;
+}
+
+async function loadKingGameSettings() {
+  kingGameSettings = await requestGame("/api/game/king-game/settings");
+  configurationVersion = kingGameSettings.version;
+  renderKingGameSettings(kingGameSettings);
+  return kingGameSettings;
+}
+
+async function loadNeverHaveIEverHistory(page = neverHaveIEverHistoryPage) {
+  const history = await requestGame(
+    `/api/game/never-have-i-ever/history?page=${page}&page_size=20`
+  );
+  neverHaveIEverHistoryPage = history.page;
+  document.querySelector("#never-have-i-ever-history").innerHTML = history.items.length
+    ? history.items.map((item) => {
+      const maximumHearts = item.initial_player_count + 2;
+      const players = item.players.map((player) =>
+        `${player.number}号 ${player.display_name} ${"❤️".repeat(player.hearts)}${"🖤".repeat(Math.max(0, maximumHearts - player.hearts))}${player.state === "withdrawn" ? "（退出）" : player.state === "eliminated" ? "（出局）" : ""}`
+      ).join("、");
+      const rounds = item.rounds.map((round) => {
+        const statement = round.statement_timed_out
+          ? "发言超时"
+          : round.statement || "未提交发言";
+        const responses = round.responses.length
+          ? round.responses.map((response) => `${response.player_number}号 ${response.display_name}：${({deduct: "扣心", keep: "不扣", timeout_deduct: "超时扣心"}[response.choice] || response.choice)}`).join("；")
+          : "无回应";
+        return `<li>第${round.sequence}轮 · ${round.speaker_number}号 ${escapeHtml(round.speaker_display_name)}：${escapeHtml(statement)}<br><small>${escapeHtml(responses)}</small></li>`;
+      }).join("");
+      return `<article class="data-row"><div><b>${escapeHtml(item.group_name)} · ${escapeHtml(item.host_display_name)} 发起</b><small>${escapeHtml(item.state)} · ${item.round_number} 轮 · ${escapeHtml(formatHeartbeat(item.finished_at || item.created_at))}</small><small>${escapeHtml(players)}</small>${rounds ? `<details><summary>查看逐轮记录</summary><ol>${rounds}</ol></details>` : ""}</div></article>`;
+    }).join("")
+    : '<p class="muted">暂无历史对局。</p>';
+  return history;
+}
+
 async function loadTexasHoldemSettings() {
   texasHoldemSettings = await requestGame("/api/game/texas-holdem/settings");
   configurationVersion = texasHoldemSettings.version;
@@ -1516,6 +1596,24 @@ async function openNumberBombSettingsModal() {
   numberBombReminderSeconds.value = settings.reminder_interval_seconds;
   numberBombSettingsModal.hidden = false;
   numberBombSignupMinutes.focus();
+}
+
+async function openNeverHaveIEverSettingsModal() {
+  const settings = neverHaveIEverSettings || await loadNeverHaveIEverSettings();
+  neverHaveIEverEnabled.checked = settings.enabled;
+  neverHaveIEverSignupMinutes.value = settings.signup_timeout_minutes;
+  neverHaveIEverStatementSeconds.value = settings.statement_timeout_seconds;
+  neverHaveIEverResponseSeconds.value = settings.response_timeout_seconds;
+  neverHaveIEverSettingsModal.hidden = false;
+  neverHaveIEverSignupMinutes.focus();
+}
+
+async function openKingGameSettingsModal() {
+  const settings = kingGameSettings || await loadKingGameSettings();
+  kingGameEnabled.checked = settings.enabled;
+  kingGamePhaseSeconds.value = settings.king_phase_timeout_seconds;
+  kingGameSettingsModal.hidden = false;
+  kingGamePhaseSeconds.focus();
 }
 
 async function openTexasHoldemSettingsModal() {
@@ -2008,7 +2106,7 @@ async function loadGameView(view) {
   try {
     if (view === "overview") return refresh();
     if (view === "settings") {
-      await Promise.all([loadSettings(), loadProfileSettings(), loadActivitySettings(), loadNumberBombSettings(), loadRedPacketSettings()]);
+      await Promise.all([loadSettings(), loadProfileSettings(), loadActivitySettings(), loadNumberBombSettings(), loadNeverHaveIEverSettings(), loadNeverHaveIEverHistory(), loadKingGameSettings(), loadRedPacketSettings()]);
       return;
     }
     if (view === "events") return loadRandomEvents();
@@ -2286,6 +2384,9 @@ document.querySelector("#edit-settings").addEventListener("click", () => void op
 document.querySelector("#edit-profile-settings").addEventListener("click", () => void openProfileSettingsModal());
 document.querySelector("#edit-activity-settings").addEventListener("click", () => void openActivitySettingsModal());
 document.querySelector("#edit-number-bomb-settings").addEventListener("click", () => void openNumberBombSettingsModal());
+document.querySelector("#edit-never-have-i-ever-settings").addEventListener("click", () => void openNeverHaveIEverSettingsModal());
+document.querySelector("#edit-king-game-settings").addEventListener("click", () => void openKingGameSettingsModal());
+document.querySelector("#refresh-never-have-i-ever-history").addEventListener("click", () => void loadNeverHaveIEverHistory());
 document.querySelector("#edit-texas-holdem-settings").addEventListener("click", () => void openTexasHoldemSettingsModal());
 document.querySelector("#edit-dark-market-settings").addEventListener("click", () => void openDarkMarketSettingsModal());
 document.querySelector("#refresh-dark-market").addEventListener("click", (event) => void runMutation(event.currentTarget, "刷新中…", () => loadDarkMarketListings()));
@@ -2828,6 +2929,71 @@ numberBombSettingsModal.addEventListener("click", async (event) => {
       closeNumberBombSettingsModal();
     });
     setResult("蹦蹦数字炸弹设置已保存", "success");
+  } catch (error) {
+    setResult(`保存失败（${error.message}）`, "error");
+  }
+});
+neverHaveIEverSettingsModal.addEventListener("click", async (event) => {
+  if (event.target.closest("[data-close-never-have-i-ever-settings-modal]")) {
+    closeNeverHaveIEverSettingsModal();
+    return;
+  }
+  if (event.target.id !== "save-never-have-i-ever-settings") return;
+  const signup_timeout_minutes = Number(neverHaveIEverSignupMinutes.value);
+  const statement_timeout_seconds = Number(neverHaveIEverStatementSeconds.value);
+  const response_timeout_seconds = Number(neverHaveIEverResponseSeconds.value);
+  if (![signup_timeout_minutes, statement_timeout_seconds, response_timeout_seconds].every(Number.isInteger)
+    || signup_timeout_minutes < 1 || signup_timeout_minutes > 60
+    || statement_timeout_seconds < 1 || statement_timeout_seconds > 600
+    || response_timeout_seconds < 1 || response_timeout_seconds > 600) {
+    setResult("超时时间不在允许范围内", "error");
+    return;
+  }
+  const button = event.target;
+  try {
+    await runMutation(button, "保存中…", async () => {
+      neverHaveIEverSettings = await requestGame("/api/game/never-have-i-ever/settings", {
+        method: "PATCH",
+        headers: {"Content-Type": "application/json", ...configurationHeaders()},
+        body: JSON.stringify({
+          enabled: neverHaveIEverEnabled.checked,
+          signup_timeout_minutes,
+          statement_timeout_seconds,
+          response_timeout_seconds,
+        }),
+      });
+      configurationVersion = neverHaveIEverSettings.version;
+      renderNeverHaveIEverSettings(neverHaveIEverSettings);
+      closeNeverHaveIEverSettingsModal();
+    });
+    setResult("我有你没有设置已保存", "success");
+  } catch (error) {
+    setResult(`保存失败（${error.message}）`, "error");
+  }
+});
+kingGameSettingsModal.addEventListener("click", async (event) => {
+  if (event.target.closest("[data-close-king-game-settings-modal]")) {
+    closeKingGameSettingsModal();
+    return;
+  }
+  if (event.target.id !== "save-king-game-settings") return;
+  const king_phase_timeout_seconds = Number(kingGamePhaseSeconds.value);
+  if (!Number.isInteger(king_phase_timeout_seconds) || king_phase_timeout_seconds < 1 || king_phase_timeout_seconds > 3600) {
+    setResult("国王公开时限不在允许范围内", "error");
+    return;
+  }
+  try {
+    await runMutation(event.target, "保存中…", async () => {
+      kingGameSettings = await requestGame("/api/game/king-game/settings", {
+        method: "PATCH",
+        headers: {"Content-Type": "application/json", ...configurationHeaders()},
+        body: JSON.stringify({enabled: kingGameEnabled.checked, king_phase_timeout_seconds}),
+      });
+      configurationVersion = kingGameSettings.version;
+      renderKingGameSettings(kingGameSettings);
+      closeKingGameSettingsModal();
+    });
+    setResult("国王游戏设置已保存", "success");
   } catch (error) {
     setResult(`保存失败（${error.message}）`, "error");
   }
@@ -3455,6 +3621,8 @@ memoryAssessmentSettingsModal.addEventListener("click", async (event) => {
     enabled: document.querySelector("#memory-assessment-enabled").checked,
     single_daily_limit: Number(document.querySelector("#memory-assessment-daily-limit").value),
     single_recall_seconds: Number(document.querySelector("#memory-assessment-single-seconds").value),
+    single_answer_timeout_seconds: Number(document.querySelector("#memory-assessment-single-answer-timeout").value),
+    single_decision_timeout_seconds: Number(document.querySelector("#memory-assessment-single-decision-timeout").value),
     duel_recall_seconds: Number(document.querySelector("#memory-assessment-duel-seconds").value),
     duel_difficulty_level: Number(document.querySelector("#memory-assessment-duel-level").value),
     duel_base_pool: Number(document.querySelector("#memory-assessment-base-pool").value),
@@ -3867,6 +4035,8 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !randomEventDetailsModal.hidden) randomEventDetailsModal.hidden = true;
   if (event.key === "Escape" && !activitySettingsModal.hidden) closeActivitySettingsModal();
   if (event.key === "Escape" && !numberBombSettingsModal.hidden) closeNumberBombSettingsModal();
+  if (event.key === "Escape" && !neverHaveIEverSettingsModal.hidden) closeNeverHaveIEverSettingsModal();
+  if (event.key === "Escape" && !kingGameSettingsModal.hidden) closeKingGameSettingsModal();
   if (event.key === "Escape" && !texasHoldemSettingsModal.hidden) closeTexasHoldemSettingsModal();
   if (event.key === "Escape" && !darkMarketSettingsModal.hidden) closeDarkMarketSettingsModal();
   if (event.key === "Escape" && !darkMarketDetailModal.hidden) closeDarkMarketDetailModal();

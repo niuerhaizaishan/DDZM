@@ -192,7 +192,7 @@ join_never_have_i_ever locks gate, game and user, only accepts signup, returns a
 
 Ordinary /退出 deletes or marks the signup player withdrawn without renumbering existing players. Host /退出 closes state cancelled, clears active_key and deadline, and retains history rows.
 
-begin_never_have_i_ever verifies actor is host and active signup has at least three non-withdrawn players. It fixes initial_player_count, sets every included player to active with 5 hearts, state awaiting_statement, round_number 1, current_speaker_order to the host’s order, and statement_deadline to now plus the configured seconds.
+begin_never_have_i_ever verifies actor is host and active signup has at least three non-withdrawn players. It fixes initial_player_count, sets every included player to active with 5 hearts, state awaiting_statement, round_number 1, current_speaker_order to the host’s order, and statement_deadline to now plus the configured seconds. It also creates round 1 in awaiting_statement with the selected speaker and a null statement, so a later speaker timeout remains in history.
 
 - [ ] **Step 6: Run tests GREEN**
 
@@ -251,7 +251,7 @@ Expected: FAIL with missing methods.
 
 - [ ] **Step 3: Implement statement and response recording**
 
-submit_never_have_i_ever_statement validates nonempty trimmed content, locks gate, game, current speaker player and current round state, creates the round with response deadline, clears statement deadline and changes game to awaiting_responses.
+submit_never_have_i_ever_statement validates nonempty trimmed content, locks gate, game, current speaker player and the existing awaiting_statement round, fills that round’s statement and statement time, adds the response deadline, clears the game statement deadline and changes both records to awaiting_responses.
 
 respond_never_have_i_ever locks gate, game, round and player. It rejects speaker, nonparticipant, withdrawn or eliminated players and wrong phase. It inserts exactly one response choice. A duplicate unique key returns already_responded without changing the stored choice. Hearts are not changed until settlement.
 
@@ -272,7 +272,7 @@ def _apply_never_have_i_ever_deduction(player, now, reason):
 
 _settle_never_have_i_ever_round_locked creates timeout_deduct rows for active non-speakers without a response, applies one deduction for deduct and timeout_deduct choices, marks the round settled, and calls advance. It returns public data containing the statement, three stable response lists and current hearts.
 
-_advance_never_have_i_ever_locked compares eliminated plus withdrawn players to (initial_player_count + 1) // 2. On threshold it enters free_punishment and clears all deadlines. Otherwise it finds the next active roster order with wraparound, increments round_number, enters awaiting_statement and creates a fresh statement deadline.
+_advance_never_have_i_ever_locked compares eliminated plus withdrawn players to (initial_player_count + 1) // 2. On threshold it enters free_punishment and clears all deadlines. Otherwise it finds the next active roster order with wraparound, increments round_number, creates the next awaiting_statement round and enters awaiting_statement with a fresh statement deadline.
 
 - [ ] **Step 6: Implement active-game exit**
 
