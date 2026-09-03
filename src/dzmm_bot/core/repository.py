@@ -26502,6 +26502,7 @@ class CoreRepository:
         worker_id: str,
         lease_token: UUID | str,
         now: datetime,
+        retry_delay_seconds: int = 0,
     ) -> bool:
         with self._session() as session:
             record = session.scalar(
@@ -26520,7 +26521,7 @@ class CoreRepository:
             record.status = "pending"
             record.lease_worker_id = None
             record.lease_token = None
-            record.lease_expires_at = None
+            record.lease_expires_at = now + timedelta(seconds=retry_delay_seconds)
             return True
 
     def claim_outbound_recall(

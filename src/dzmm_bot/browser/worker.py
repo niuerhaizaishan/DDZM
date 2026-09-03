@@ -374,12 +374,20 @@ class BrowserWorker:
             _LOGGER.warning(
                 "outbound send rejected: %s: %s", outbound.id, error
             )
-            self._core.mark_outbound_failed(
-                outbound.id,
-                self._worker_id,
-                outbound.lease_token,
-                self._clock(),
-            )
+            if "请稍后再试" in str(error):
+                self._core.release_outbound(
+                    outbound.id,
+                    self._worker_id,
+                    outbound.lease_token,
+                    self._clock(),
+                )
+            else:
+                self._core.mark_outbound_failed(
+                    outbound.id,
+                    self._worker_id,
+                    outbound.lease_token,
+                    self._clock(),
+                )
             return False
         except DzmmBotSendError as error:
             _LOGGER.warning("Bot API outbound send failed: %s: %s", outbound.id, error)

@@ -9,7 +9,7 @@ from socketio.exceptions import TimeoutError as SocketTimeoutError
 
 from dzmm_bot.browser.bot_api import DzmmBotSendError
 from dzmm_bot.browser.core_client import OutboundClaim, OutboundRecallClaim, WorkerCommand
-from dzmm_bot.browser.aikda_socket import AikdaTransportError
+from dzmm_bot.browser.aikda_socket import AikdaMessageRejectedError, AikdaTransportError
 from dzmm_bot.browser.worker import BrowserWorker
 from dzmm_bot.runtime.contracts import (
     DirectChatRoom,
@@ -219,6 +219,7 @@ class FakeCore:
     confirmed_event: Event = field(default_factory=Event)
     failed_event: Event = field(default_factory=Event)
     released: list[tuple] = field(default_factory=list)
+    release_delays: list[int] = field(default_factory=list)
     released_event: Event = field(default_factory=Event)
     upload_tasks: list = field(default_factory=list)
     upload_completions: list[tuple] = field(default_factory=list)
@@ -268,8 +269,11 @@ class FakeCore:
         self.failed.append((message_id, worker_id, lease_token, now))
         self.failed_event.set()
 
-    def release_outbound(self, message_id, worker_id, lease_token, now):
+    def release_outbound(
+        self, message_id, worker_id, lease_token, now, retry_delay_seconds=5
+    ):
         self.released.append((message_id, worker_id, lease_token, now))
+        self.release_delays.append(retry_delay_seconds)
         self.released_event.set()
 
     def claim_outbound_recall(self, worker_id, now, lease_seconds):
@@ -851,6 +855,19 @@ def test_worker_retries_socket_timeout_with_the_same_platform_message_id(context
 
     assert core.confirmed_event.wait(timeout=1)
     assert gateway.sent_message_ids == [str(OUTBOUND_ID), str(OUTBOUND_ID)]
+
+
+def test_worker_retries_a_temporarily_rejected_outbound_instead_of_failing_it(context):
+    worker, gateway, _, _, core, _ = context
+    core.pending = [OutboundClaim(OUTBOUND_ID, "in-1", "reply", LEASE)]
+    gateway.send_error = AikdaMessageRejectedError("消息发送失败，请稍后再试")
+
+    worker.run_once()
+
+    assert core.released_event.wait(timeout=1)
+    assert core.released == [(OUTBOUND_ID, "worker-a", LEASE, NOW)]
+    assert core.release_delays == [5]
+    assert core.failed == []
 
 
 def test_worker_reconnects_socket_on_main_loop_after_outbound_timeout(context):

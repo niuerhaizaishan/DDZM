@@ -180,7 +180,7 @@ def test_core_client_syncs_discovered_direct_chatrooms():
     }
 
 
-def test_core_client_releases_a_timed_out_outbound_for_immediate_retry():
+def test_core_client_releases_a_timed_out_outbound_with_a_retry_delay():
     from dzmm_bot.browser.core_client import CoreClient
     from uuid import UUID
 
@@ -211,6 +211,7 @@ def test_core_client_releases_a_timed_out_outbound_for_immediate_retry():
             "worker_id": "worker-a",
             "lease_token": str(lease_token),
             "now": now.isoformat(),
+            "retry_delay_seconds": 5,
         },
     }
 

@@ -2374,7 +2374,7 @@ def test_outbound_failed_releases_the_current_lease(app_context, headers, payloa
         assert session.get(OutboundRecord, outbound.id).status == "failed"
 
 
-def test_outbound_retry_releases_the_current_lease_for_immediate_reclaim(
+def test_outbound_retry_releases_the_current_lease_after_its_delay(
     app_context, headers, payload
 ):
     inbound = app_context.client.post(
@@ -2396,13 +2396,27 @@ def test_outbound_retry_releases_the_current_lease_for_immediate_reclaim(
             "now": NOW.isoformat(),
         },
     )
+    before_due = app_context.client.post(
+        "/internal/outbound/claim",
+        headers=headers,
+        json={
+            "worker_id": "worker-b",
+            "now": (NOW + timedelta(seconds=4)).isoformat(),
+            "lease_seconds": 30,
+        },
+    )
     retried = app_context.client.post(
         "/internal/outbound/claim",
         headers=headers,
-        json={"worker_id": "worker-b", "now": NOW.isoformat(), "lease_seconds": 30},
+        json={
+            "worker_id": "worker-b",
+            "now": (NOW + timedelta(seconds=5)).isoformat(),
+            "lease_seconds": 30,
+        },
     ).json()
 
     assert response.json() == {"accepted": True}
+    assert before_due.json() is None
     assert retried["id"] == str(outbound.id)
 
 

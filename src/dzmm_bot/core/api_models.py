@@ -290,6 +290,10 @@ class FailedRequest(ApiModel):
     now: AwareDatetime
 
 
+class RetryRequest(FailedRequest):
+    retry_delay_seconds: int = Field(default=5, ge=0, le=300)
+
+
 class OutboundRecallClaimResponse(ApiModel):
     id: UUID
     platform_sent_id: str

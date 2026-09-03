@@ -70,6 +70,7 @@ from .api_models import (
     PaginatedPerformanceMessagesResponse,
     PerformanceSettingsResponse,
     PerformanceTipResponse,
+    RetryRequest,
     ReviewPerformanceExtensionRequest,
     ReviewPerformanceRequest,
     UpdatePerformanceSettingsRequest,
@@ -874,7 +875,7 @@ def create_app(
     )
     def release_outbound(
         message_id: UUID,
-        request: FailedRequest,
+        request: RetryRequest,
         _: Annotated[None, Depends(authorize)],
     ) -> AcceptedResponse:
         accepted = repository.release_outbound(
@@ -882,6 +883,7 @@ def create_app(
             request.worker_id,
             request.lease_token,
             request.now,
+            request.retry_delay_seconds,
         )
         return AcceptedResponse(accepted=accepted)
 

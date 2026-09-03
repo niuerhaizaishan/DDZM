@@ -115,7 +115,7 @@ select:hover { border-color: #bdb5ff; }
 .variable-pill { padding: 5px 8px; color: var(--accent-dark); border: 1px solid #dcd7ff; border-radius: 999px; background: #f0eeff; font-size: 12px; }
 .template-modal { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 20px; }
 .template-modal-backdrop { position: absolute; inset: 0; background: rgba(24, 34, 53, .42); }
-.template-modal-card { position: relative; z-index: 1; display: grid; gap: 14px; width: min(100%, 640px); padding: 26px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: var(--shadow); }
+.template-modal-card { position: relative; z-index: 1; display: grid; gap: 14px; width: min(100%, 640px); max-height: calc(100vh - 40px); padding: 26px; overflow-y: auto; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: var(--shadow); }
 .template-modal-heading { align-items: start; }
 .template-modal-heading p { margin-bottom: 0; }
 .template-modal-actions { position: sticky; bottom: 0; z-index: 2; margin: 6px -2px -2px; padding: 14px 2px 2px; border-top: 1px solid var(--line); background: var(--surface); }

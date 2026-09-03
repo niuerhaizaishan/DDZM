@@ -140,6 +140,7 @@ class CorePort(Protocol):
         worker_id: str,
         lease_token: UUID,
         now: datetime,
+        retry_delay_seconds: int = 5,
     ) -> None: ...
 
     def claim_outbound_recall(
@@ -455,6 +456,7 @@ class CoreClient:
         worker_id: str,
         lease_token: UUID,
         now: datetime,
+        retry_delay_seconds: int = 5,
     ) -> None:
         self._post(
             f"/internal/outbound/{message_id}/retry",
@@ -462,6 +464,7 @@ class CoreClient:
                 "worker_id": worker_id,
                 "lease_token": str(lease_token),
                 "now": now.isoformat(),
+                "retry_delay_seconds": retry_delay_seconds,
             },
         )
 

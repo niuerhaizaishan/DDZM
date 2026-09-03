@@ -9992,6 +9992,24 @@ def test_failed_outbound_is_not_claimed_again(repository, session_factory, inbou
     assert repository.claim_outbound("worker-b", now + timedelta(seconds=31), 30) is None
 
 
+def test_released_outbound_waits_until_its_retry_delay_before_reclaim(
+    repository, inbound, now
+):
+    stored, _ = repository.accept_inbound(inbound)
+    outbound = repository.enqueue_outbound(stored.id, "稍后发送")
+    claimed = repository.claim_outbound("worker-a", now, 30)
+
+    assert repository.release_outbound(
+        outbound.id,
+        "worker-a",
+        claimed.lease_token,
+        now,
+        retry_delay_seconds=5,
+    )
+    assert repository.claim_outbound("worker-b", now + timedelta(seconds=4), 30) is None
+    assert repository.claim_outbound("worker-b", now + timedelta(seconds=5), 30).id == outbound.id
+
+
 def test_stale_outbound_confirmation_is_rejected_after_reclaim(
     repository, session_factory, inbound, now
 ):
