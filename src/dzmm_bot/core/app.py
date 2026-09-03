@@ -2379,6 +2379,7 @@ def create_app(
                 request.submission_max_participants,
                 request.submission_default_target_rounds,
                 request.submission_default_event_reward,
+                request.global_completion_reward,
                 request.submission_approval_reward,
                 request.tipping_duration_seconds,
             )
@@ -3492,6 +3493,7 @@ def _random_event_settings_response(settings) -> RandomEventSettingsResponse:
         submission_max_participants=settings.submission_max_participants,
         submission_default_target_rounds=settings.submission_default_target_rounds,
         submission_default_event_reward=settings.submission_default_event_reward,
+        global_completion_reward=settings.global_completion_reward,
         submission_approval_reward=settings.submission_approval_reward,
         tipping_duration_seconds=settings.tipping_duration_seconds,
     )

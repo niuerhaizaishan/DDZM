@@ -511,6 +511,7 @@ _DEFAULT_RANDOM_EVENT_SUBMISSION_TIMEOUT_MINUTES = 30
 _DEFAULT_RANDOM_EVENT_SUBMISSION_MAX_PARTICIPANTS = 99
 _DEFAULT_RANDOM_EVENT_SUBMISSION_TARGET_ROUNDS = 10
 _DEFAULT_RANDOM_EVENT_SUBMISSION_EVENT_REWARD = 6
+_DEFAULT_RANDOM_EVENT_GLOBAL_COMPLETION_REWARD = 6
 _DEFAULT_RANDOM_EVENT_SUBMISSION_APPROVAL_REWARD = 10
 _DEFAULT_RANDOM_EVENT_TIPPING_DURATION_SECONDS = 120
 _RANDOM_EVENT_CONFIGURABLE_COMMANDS = frozenset(
@@ -726,6 +727,7 @@ class RandomEventSettings:
     submission_max_participants: int
     submission_default_target_rounds: int
     submission_default_event_reward: int
+    global_completion_reward: int
     submission_approval_reward: int
     tipping_duration_seconds: int
 
@@ -2903,6 +2905,7 @@ class CoreRepository:
         submission_max_participants: int | None = None,
         submission_default_target_rounds: int | None = None,
         submission_default_event_reward: int | None = None,
+        global_completion_reward: int | None = None,
         submission_approval_reward: int | None = None,
         tipping_duration_seconds: int | None = None,
     ) -> RandomEventSettings:
@@ -2960,6 +2963,7 @@ class CoreRepository:
                 ("最大参加人数", submission_max_participants, 1, 999),
                 ("默认目标轮数", submission_default_target_rounds, 1, 999),
                 ("默认事件奖励", submission_default_event_reward, 0, 999),
+                ("全局完成奖励", global_completion_reward, 0, 999),
                 ("投稿通过奖励", submission_approval_reward, 0, 999),
             )
             for label, value, minimum, maximum in numeric_submission_values:
@@ -2991,6 +2995,8 @@ class CoreRepository:
                 record.submission_default_target_rounds = submission_default_target_rounds
             if submission_default_event_reward is not None:
                 record.submission_default_event_reward = submission_default_event_reward
+            if global_completion_reward is not None:
+                record.global_completion_reward = global_completion_reward
             if submission_approval_reward is not None:
                 record.submission_approval_reward = submission_approval_reward
             if tipping_duration_seconds is not None:
@@ -21090,7 +21096,12 @@ class CoreRepository:
                 result = "left_signup"
                 if event.state == "in_progress":
                     if participant.rounds >= event.target_rounds:
-                        self._apply_balance_change(user, event.reward, "random_event", now)
+                        self._apply_balance_change(
+                            user,
+                            self.get_random_event_settings().global_completion_reward,
+                            "random_event",
+                            now,
+                        )
                         participant.rewarded_at = now
                         result = "rewarded"
                     else:
@@ -26931,6 +26942,7 @@ def _random_event_settings(record: RandomEventSettingsRecord) -> RandomEventSett
         submission_max_participants=record.submission_max_participants,
         submission_default_target_rounds=record.submission_default_target_rounds,
         submission_default_event_reward=record.submission_default_event_reward,
+        global_completion_reward=record.global_completion_reward,
         submission_approval_reward=record.submission_approval_reward,
         tipping_duration_seconds=record.tipping_duration_seconds,
     )

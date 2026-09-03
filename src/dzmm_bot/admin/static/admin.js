@@ -702,6 +702,7 @@ function renderRandomEventSettings(settings) {
     <article><span>报名与提醒</span><strong>${settings.signup_timeout_minutes} / ${settings.reminder_interval_minutes} 分钟</strong><small>报名超时 / 未满员提醒</small></article>
     <article><span>打赏环节</span><strong>${settings.tipping_duration_seconds} 秒</strong><small>最后一名参与者退出后开始</small></article>
     <article><span>期间指令放行</span><strong>${settings.signup_allowed_commands.length} / ${settings.in_progress_allowed_commands.length}</strong><small>报名中 / 进行中</small></article>
+    <article><span>完成奖励</span><strong>${settings.global_completion_reward} 摸鱼币</strong><small>所有随机事件统一按此金额结算</small></article>
     <article><span>玩家投稿</span><strong>${settings.submission_enabled ? "已开放" : "已关闭"}</strong><small>草稿 ${settings.submission_draft_timeout_minutes} 分钟过期 · 最多 ${settings.submission_max_participants} 人 · 通过奖励 ${settings.submission_approval_reward}</small></article>`;
 }
 
@@ -1337,6 +1338,7 @@ async function openRandomEventSettingsModal() {
   document.querySelector("#random-event-submission-timeout").value = settings.submission_draft_timeout_minutes;
   document.querySelector("#random-event-submission-max-participants").value = settings.submission_max_participants;
   document.querySelector("#random-event-submission-target-rounds").value = settings.submission_default_target_rounds;
+  document.querySelector("#random-event-global-completion-reward").value = settings.global_completion_reward;
   document.querySelector("#random-event-submission-event-reward").value = settings.submission_default_event_reward;
   document.querySelector("#random-event-submission-approval-reward").value = settings.submission_approval_reward;
   renderRandomEventCommandPermissions("#random-event-signup-command-permissions", "signup", settings.signup_allowed_commands);
@@ -3259,6 +3261,7 @@ randomEventSettingsModal.addEventListener("click", async (event) => {
     submission_draft_timeout_minutes: Number(document.querySelector("#random-event-submission-timeout").value),
     submission_max_participants: Number(document.querySelector("#random-event-submission-max-participants").value),
     submission_default_target_rounds: Number(document.querySelector("#random-event-submission-target-rounds").value),
+    global_completion_reward: Number(document.querySelector("#random-event-global-completion-reward").value),
     submission_default_event_reward: Number(document.querySelector("#random-event-submission-event-reward").value),
     submission_approval_reward: Number(document.querySelector("#random-event-submission-approval-reward").value),
   };

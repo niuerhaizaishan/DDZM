@@ -240,6 +240,9 @@ class RandomEventSettingsRecord(Base):
     submission_default_event_reward: Mapped[int] = mapped_column(
         Integer, nullable=False, default=6, server_default="6"
     )
+    global_completion_reward: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=6, server_default="6"
+    )
     submission_approval_reward: Mapped[int] = mapped_column(
         Integer, nullable=False, default=10, server_default="10"
     )

@@ -2627,6 +2627,7 @@ def test_random_event_settings_are_available_through_internal_api(client, header
             "signup_allowed_commands": ["/加入", "/退出", "/打卡"],
             "in_progress_allowed_commands": ["/退出", "/打卡"],
             "blocked_message": "当前有随机事件发生，监事不会处理。",
+            "global_completion_reward": 4,
             "tipping_duration_seconds": 75,
         },
     )
@@ -2635,6 +2636,7 @@ def test_random_event_settings_are_available_through_internal_api(client, header
     assert response.json()["schedule_times"] == ["10:00", "14:00"]
     assert response.json()["signup_allowed_commands"] == ["/加入", "/退出", "/打卡"]
     assert response.json()["in_progress_allowed_commands"] == ["/退出", "/打卡"]
+    assert response.json()["global_completion_reward"] == 4
     assert response.json()["tipping_duration_seconds"] == 75
     for duration in (9, 3601):
         invalid = client.patch(

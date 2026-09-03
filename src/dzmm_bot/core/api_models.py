@@ -1243,6 +1243,7 @@ class RandomEventSettingsResponse(ApiModel):
     submission_max_participants: int = Field(default=99, ge=1, le=999)
     submission_default_target_rounds: int = Field(default=10, ge=1, le=999)
     submission_default_event_reward: int = Field(default=6, ge=0, le=999)
+    global_completion_reward: int = Field(default=6, ge=0, le=999)
     submission_approval_reward: int = Field(default=10, ge=0, le=999)
     tipping_duration_seconds: int = Field(default=120, ge=10, le=3600)
 
@@ -1253,6 +1254,7 @@ class SetRandomEventSettingsRequest(RandomEventSettingsResponse):
     submission_max_participants: int | None = Field(default=None, ge=1, le=999)
     submission_default_target_rounds: int | None = Field(default=None, ge=1, le=999)
     submission_default_event_reward: int | None = Field(default=None, ge=0, le=999)
+    global_completion_reward: int | None = Field(default=None, ge=0, le=999)
     submission_approval_reward: int | None = Field(default=None, ge=0, le=999)
     tipping_duration_seconds: int | None = Field(default=None, ge=10, le=3600)
 

@@ -8878,7 +8878,9 @@ def test_random_event_lifecycle_rewards_only_completed_participant(
         2,
         [("员工", 2)],
     )
-    repository.set_random_event_settings(["10:00"], "{可选身份}", 15, 5)
+    repository.set_random_event_settings(
+        ["10:00"], "{可选身份}", 15, 5, global_completion_reward=5
+    )
     first, _ = repository.create_user("u1", "小明", now, 0)
     second, _ = repository.create_user("u2", "小红", now, 0)
 
@@ -8896,7 +8898,7 @@ def test_random_event_lifecycle_rewards_only_completed_participant(
     assert repository.leave_random_event("u2", now) == "left_without_reward"
 
     with session_factory() as session:
-        assert session.get(UserRecord, first.id).balance == 3
+        assert session.get(UserRecord, first.id).balance == 5
         assert session.get(UserRecord, second.id).balance == 0
         assert session.scalars(select(OutboundRecord)).first() is not None
     assert repository.list_ai_activity_facts("u1")[0].last_result == "win"
