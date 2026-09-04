@@ -871,7 +871,33 @@ def test_worker_retries_a_temporarily_rejected_non_dark_market_outbound(context)
     assert core.failed == []
 
 
-def test_worker_replaces_a_temporarily_rejected_dark_market_list_with_notice():
+def test_worker_limits_main_account_sends_to_thirty_per_minute():
+    current_time = [0.0]
+    sleeps = []
+    sent = []
+
+    def sleep_for(seconds):
+        sleeps.append(seconds)
+        current_time[0] += seconds
+
+    worker = BrowserWorker(
+        worker_id="worker-a",
+        core=FakeCore(),
+        session=FakeSession(FakeGateway()),
+        desktop=FakeDesktop(),
+        clock=lambda: NOW,
+        monotonic=lambda: current_time[0],
+        sleep=sleep_for,
+    )
+
+    for _ in range(31):
+        worker._send_with_main_account_tokens(lambda: sent.append("sent"))
+
+    assert sent == ["sent"] * 31
+    assert sleeps == [3.0] * 21
+
+
+def test_worker_retries_a_temporarily_rejected_dark_market_list():
     gateway = FakeGateway(send_errors=[
         AikdaMessageRejectedError("消息发送失败，请稍后再试")
     ])
@@ -882,7 +908,6 @@ def test_worker_replaces_a_temporarily_rejected_dark_market_list_with_notice():
         dark_market_list_query_sender_name="饭饭",
     )
     core = FakeCore(pending=[outbound])
-
     worker = BrowserWorker(
         worker_id="worker-a",
         core=core,
@@ -893,21 +918,13 @@ def test_worker_replaces_a_temporarily_rejected_dark_market_list_with_notice():
 
     worker.run_once()
 
-    assert core.failed_event.wait(timeout=1)
-    assert core.released == []
-    deadline = monotonic() + 1
-    while not gateway.sent_to and monotonic() < deadline:
-        sleep(0.01)
-    assert len(gateway.sent_to) == 1
-    destination, notice = gateway.sent_to[0]
-    assert destination == "direct-a"
-    assert re.fullmatch(
-        r"饭饭 - 数据流识别码：[0-9a-f]{64} - 目前暗网火爆稍后再试～",
-        notice,
-    )
+    assert core.released_event.wait(timeout=1)
+    assert core.release_delays == [60]
+    assert core.failed == []
+    assert gateway.sent_to == []
 
 
-def test_worker_prefixes_a_dark_market_list_with_random_encryption_data(context):
+def test_worker_sends_dark_market_list_without_artificial_prefix(context):
     worker, gateway, _, _, core, _ = context
     outbound = OutboundClaim(
         OUTBOUND_ID, "in-1", "#1 旧钥匙\n#2 铜镜", LEASE,
@@ -920,10 +937,7 @@ def test_worker_prefixes_a_dark_market_list_with_random_encryption_data(context)
 
     assert core.confirmed_event.wait(timeout=1)
     _, text = gateway.sent_to[0]
-    lines = text.splitlines()
-    assert re.fullmatch(r"数据流识别码：[0-9a-f]{64}", lines[0])
-    assert lines[1] == "以上是暗网随机账户加密内容可以忽略不计，以下是暗网列表："
-    assert "\n".join(lines[2:]) == "#1 旧钥匙\n#2 铜镜"
+    assert text == "#1 旧钥匙\n#2 铜镜"
 
 
 def test_worker_reconnects_socket_on_main_loop_after_outbound_timeout(context):
@@ -1065,7 +1079,7 @@ def test_worker_stops_outbound_batch_when_time_budget_is_reached():
             for index in range(1, 21)
         ]
     )
-    ticks = iter((0.0, 0.0, 0.7, 1.4, 2.0))
+    ticks = iter((0.0, 0.0, 0.0, 0.7, 0.7, 1.4, 1.4, 2.0))
     worker = BrowserWorker(
         worker_id="worker-a",
         core=core,
@@ -1103,6 +1117,28 @@ def test_worker_uses_bot_api_for_group_replies_over_the_newline_limit(context):
     assert bot_sender.sent_to == [("group-1", text)]
     assert gateway.sent == []
     assert core.confirmed == [(OUTBOUND_ID, "worker-a", LEASE, "bot-1", NOW)]
+
+
+def test_worker_uses_bot_api_for_short_group_replies(context):
+    _, gateway, session, desktop, core, _ = context
+    bot_sender = FakeBotSender()
+    worker = BrowserWorker(
+        worker_id="worker-a",
+        core=core,
+        session=session,
+        desktop=desktop,
+        clock=lambda: NOW,
+        bot_sender=bot_sender,
+    )
+    core.pending = [OutboundClaim(
+        OUTBOUND_ID, "in-1", "短回复", LEASE,
+        group_chat_id=GROUP_ID, destination_chatroom_id="group-1",
+    )]
+
+    worker.run_once()
+
+    assert bot_sender.sent_to == [("group-1", "短回复")]
+    assert gateway.sent_to == []
 
 
 def test_worker_falls_back_to_browser_chunks_when_bot_is_not_in_group(context):
@@ -1205,7 +1241,7 @@ def test_worker_skips_bot_after_captcha_until_the_status_is_rechecked(context):
     ]
 
 
-def test_worker_keeps_group_replies_within_platform_limits_on_the_browser_gateway(context):
+def test_worker_uses_bot_api_for_group_replies_within_browser_limits(context):
     _, gateway, session, desktop, core, _ = context
     bot_sender = FakeBotSender()
     worker = BrowserWorker(
@@ -1224,8 +1260,8 @@ def test_worker_keeps_group_replies_within_platform_limits_on_the_browser_gatewa
 
     worker.run_once()
 
-    assert bot_sender.sent_to == []
-    assert gateway.sent_to == [("group-1", text)]
+    assert bot_sender.sent_to == [("group-1", text)]
+    assert gateway.sent_to == []
 
 
 def test_worker_uses_bot_api_for_group_replies_over_the_character_limit(context):

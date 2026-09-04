@@ -559,16 +559,13 @@ def test_dark_market_commands_complete_listing_bid_and_query_in_group_and_direct
             market.chatroom_id,
         )
         outbounds = _outbounds_for(factory, login.message_id)
-        assert len(outbounds) == 2
-        assert outbounds[0].text == "暗网查询结果已私聊发送。"
-        assert outbounds[0].destination_chatroom_id == market.chatroom_id
-        assert outbounds[0].delivery_kind == "group"
-        assert outbounds[1].destination_chatroom_id == "direct-buyer"
-        assert outbounds[1].delivery_kind == "direct"
-        assert "旧钥匙" in outbounds[1].text
-        assert "当前 20" in outbounds[1].text
-        assert "卖家" not in outbounds[1].text
-        assert "截止" not in outbounds[1].text
+        assert len(outbounds) == 1
+        assert outbounds[0].destination_chatroom_id == "direct-buyer"
+        assert outbounds[0].delivery_kind == "direct"
+        assert "旧钥匙" in outbounds[0].text
+        assert "当前 20" in outbounds[0].text
+        assert "卖家" not in outbounds[0].text
+        assert "截止" not in outbounds[0].text
     for index, command in enumerate(("/查看暗网",)):
         private_query = _direct_receive(
             service,
@@ -632,9 +629,7 @@ def test_dark_market_list_query_reuses_a_pending_direct_delivery():
 
     assert len(_outbounds_for(factory, first.message_id)) == 1
     assert _outbounds_for(factory, duplicate_direct.message_id) == []
-    assert _replies_for(factory, duplicate_group.message_id) == [
-        "暗网查询结果正在私聊发送。"
-    ]
+    assert _replies_for(factory, duplicate_group.message_id) == []
 
 
 def test_dark_market_group_query_requires_an_established_direct_chat():
@@ -709,14 +704,9 @@ def test_dark_market_group_empty_and_missing_results_are_sent_privately(
     )
 
     outbounds = _outbounds_for(factory, result.message_id)
-    assert [outbound.text for outbound in outbounds] == [
-        "暗网查询结果已私聊发送。",
-        private_text,
-    ]
-    assert outbounds[0].destination_chatroom_id == market.chatroom_id
-    assert outbounds[0].delivery_kind == "group"
-    assert outbounds[1].destination_chatroom_id == "direct-dark-empty-buyer"
-    assert outbounds[1].delivery_kind == "direct"
+    assert [outbound.text for outbound in outbounds] == [private_text]
+    assert outbounds[0].destination_chatroom_id == "direct-dark-empty-buyer"
+    assert outbounds[0].delivery_kind == "direct"
 
 
 def test_dark_market_receipt_commands_are_private_and_confirm_the_order():

@@ -2,7 +2,6 @@ from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
-from secrets import token_hex
 from zoneinfo import ZoneInfo
 import logging
 from threading import Event, Lock
@@ -20,7 +19,7 @@ from dzmm_bot.runtime.contracts import (
     LoginState,
     MessageReference,
 )
-from dzmm_bot.runtime.outbound import group_message_chunks, requires_bot_group_sender
+from dzmm_bot.runtime.outbound import group_message_chunks
 
 from .bot_api import DzmmBotSendError
 from .core_client import CorePort, OutboundClaim, WorkerCommand
@@ -50,6 +49,8 @@ _OUTBOUND_BATCH_SIZE = 20
 _OUTBOUND_BATCH_BUDGET_SECONDS = 2.0
 _GROUP_TARGET_SYNC_INTERVAL_SECONDS = 5.0
 _BROWSER_SEND_INTERVAL_SECONDS = 1.0
+_MAIN_ACCOUNT_TOKEN_CAPACITY = 10
+_MAIN_ACCOUNT_TOKEN_REFILL_SECONDS = 3.0
 _RATE_LIMIT_RETRY_DELAY_SECONDS = 60
 
 
@@ -111,6 +112,9 @@ class BrowserWorker:
         self._outbound_futures: dict[str, Future[None]] = {}
         self._browser_send_lock = Lock()
         self._next_browser_send_at = 0.0
+        self._main_account_send_lock = Lock()
+        self._main_account_send_tokens = float(_MAIN_ACCOUNT_TOKEN_CAPACITY)
+        self._main_account_tokens_updated_at = self._monotonic()
         self._paused_messages: list[InboundMessage] = []
         self._paused_messages_lock = Lock()
         self._group_targets: tuple[GroupChatTarget, ...] = ()
@@ -379,15 +383,7 @@ class BrowserWorker:
             _LOGGER.warning(
                 "outbound send rejected: %s: %s", outbound.id, error
             )
-            if "请稍后再试" in str(error) and outbound.is_dark_market_list:
-                self._core.mark_outbound_failed(
-                    outbound.id,
-                    self._worker_id,
-                    outbound.lease_token,
-                    self._clock(),
-                )
-                self._send_dark_market_rejection_notice(gateway, outbound)
-            elif "请稍后再试" in str(error):
+            if "请稍后再试" in str(error):
                 self._core.release_outbound(
                     outbound.id,
                     self._worker_id,
@@ -519,11 +515,7 @@ class BrowserWorker:
     def _send_outbound(self, gateway: ChatGateway, outbound) -> str:
         platform_message_id = str(outbound.id)
         reference = self._outbound_reference(outbound)
-        text = (
-            self._render_dark_market_list(outbound.text)
-            if outbound.is_dark_market_list
-            else outbound.text
-        )
+        text = outbound.text
         if outbound.content_type == "image":
             if outbound.image_url is None:
                 raise RuntimeError("image outbound missing URL")
@@ -536,20 +528,23 @@ class BrowserWorker:
                     reference=reference,
                 )
                 if outbound.delivery_kind == "direct":
-                    return self._send_direct_with_interval(send_image)
-                return send_image()
-            return gateway.send_image(
-                outbound.image_url,
-                alt=outbound.image_alt or "image",
-                message_id=platform_message_id,
-                reference=reference,
+                    return self._send_direct_with_interval(
+                        lambda: self._send_with_main_account_tokens(send_image)
+                    )
+                return self._send_with_main_account_tokens(send_image)
+            return self._send_with_main_account_tokens(
+                lambda: gateway.send_image(
+                    outbound.image_url,
+                    alt=outbound.image_alt or "image",
+                    message_id=platform_message_id,
+                    reference=reference,
+                )
             )
         if (
             self._bot_sender is not None
             and outbound.destination_chatroom_id is not None
             and outbound.delivery_kind == "group"
             and outbound.recall_after_seconds is None
-            and requires_bot_group_sender(text)
         ):
             if self._bot_delivery_status[0] != "captcha_required":
                 try:
@@ -571,11 +566,13 @@ class BrowserWorker:
                     )
             platform_message_id = ""
             for index, chunk in enumerate(group_message_chunks(text)):
-                platform_message_id = gateway.send_to(
-                    outbound.destination_chatroom_id,
-                    chunk,
-                    message_id=str(uuid5(outbound.id, f"browser-fallback:{index}")),
-                    reference=reference if index == 0 else None,
+                platform_message_id = self._send_with_main_account_tokens(
+                    lambda: gateway.send_to(
+                        outbound.destination_chatroom_id,
+                        chunk,
+                        message_id=str(uuid5(outbound.id, f"browser-fallback:{index}")),
+                        reference=reference if index == 0 else None,
+                    )
                 )
             return platform_message_id
         if (
@@ -592,53 +589,47 @@ class BrowserWorker:
                 reference=reference,
             )
             if outbound.delivery_kind == "direct":
-                return self._send_direct_with_interval(send_text)
-            return send_text()
-        return gateway.send(
-            text, message_id=platform_message_id, reference=reference
-        )
-
-    @staticmethod
-    def _render_dark_market_list(text: str) -> str:
-        return (
-            f"数据流识别码：{token_hex(32)}\n"
-            "以上是暗网随机账户加密内容可以忽略不计，以下是暗网列表：\n"
-            f"{text}"
-        )
-
-    def _send_dark_market_rejection_notice(
-        self, gateway: ChatGateway, outbound
-    ) -> None:
-        sender_name = outbound.dark_market_list_query_sender_name
-        if sender_name is None or outbound.destination_chatroom_id is None:
-            return
-        notice = (
-            f"{sender_name} - 数据流识别码：{token_hex(32)} - "
-            "目前暗网火爆稍后再试～"
-        )
-        try:
-            gateway.send_to(
-                outbound.destination_chatroom_id,
-                notice,
-                message_id=str(uuid5(outbound.id, "dark-market-rejection")),
+                return self._send_direct_with_interval(
+                    lambda: self._send_with_main_account_tokens(send_text)
+                )
+            return self._send_with_main_account_tokens(send_text)
+        return self._send_with_main_account_tokens(
+            lambda: gateway.send(
+                text, message_id=platform_message_id, reference=reference
             )
-        except Exception:
-            _LOGGER.warning(
-                "dark market rejection notice failed: %s",
-                outbound.id,
-                exc_info=True,
-            )
+        )
 
     def _send_direct_with_interval(self, send: Callable[[], str]) -> str:
         with self._browser_send_lock:
             delay = self._next_browser_send_at - self._monotonic()
             if delay > 0:
                 self._sleep(delay)
-            result = send()
-            self._next_browser_send_at = (
-                self._monotonic() + _BROWSER_SEND_INTERVAL_SECONDS
+            try:
+                return send()
+            finally:
+                self._next_browser_send_at = (
+                    self._monotonic() + _BROWSER_SEND_INTERVAL_SECONDS
+                )
+
+    def _send_with_main_account_tokens(self, send: Callable[[], str]) -> str:
+        with self._main_account_send_lock:
+            now = self._monotonic()
+            elapsed = max(0.0, now - self._main_account_tokens_updated_at)
+            refill_rate = 1 / _MAIN_ACCOUNT_TOKEN_REFILL_SECONDS
+            self._main_account_send_tokens = min(
+                float(_MAIN_ACCOUNT_TOKEN_CAPACITY),
+                self._main_account_send_tokens + elapsed * refill_rate,
             )
-            return result
+            self._main_account_tokens_updated_at = now
+            if self._main_account_send_tokens < 1:
+                delay = (
+                    1 - self._main_account_send_tokens
+                ) * _MAIN_ACCOUNT_TOKEN_REFILL_SECONDS
+                self._sleep(delay)
+                self._main_account_send_tokens = 1.0
+                self._main_account_tokens_updated_at = self._monotonic()
+            self._main_account_send_tokens -= 1
+            return send()
 
     @staticmethod
     def _outbound_reference(outbound) -> MessageReference | None:

@@ -861,7 +861,7 @@ class GroupCommandHandler:
                     direct_chatroom_id
                 )
             ):
-                return "暗网查询结果正在私聊发送。"
+                return None
         elif (
             result.status == "shown"
             and is_full_list
@@ -883,14 +883,11 @@ class GroupCommandHandler:
             values,
         )
         if message.source_type == "group":
-            return [
-                "暗网查询结果已私聊发送。",
-                CommandReply(
-                    response,
-                    destination_chatroom_id=direct_chatroom_id,
-                    delivery_kind="direct",
-                ),
-            ]
+            return CommandReply(
+                response,
+                destination_chatroom_id=direct_chatroom_id,
+                delivery_kind="direct",
+            )
         return response
 
     def _dark_market_receipt(
