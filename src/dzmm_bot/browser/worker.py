@@ -1,6 +1,7 @@
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta
+from math import ceil
 from pathlib import Path
 from zoneinfo import ZoneInfo
 import logging
@@ -49,9 +50,14 @@ _OUTBOUND_BATCH_SIZE = 20
 _OUTBOUND_BATCH_BUDGET_SECONDS = 2.0
 _GROUP_TARGET_SYNC_INTERVAL_SECONDS = 5.0
 _BROWSER_SEND_INTERVAL_SECONDS = 1.0
-_MAIN_ACCOUNT_TOKEN_CAPACITY = 10
-_MAIN_ACCOUNT_TOKEN_REFILL_SECONDS = 3.0
+_MAIN_ACCOUNT_TOKEN_CAPACITY = 1
+_MAIN_ACCOUNT_TOKEN_REFILL_SECONDS = 2.0
 _RATE_LIMIT_RETRY_DELAY_SECONDS = 60
+
+
+class MainAccountSendDeferred(RuntimeError):
+    def __init__(self, retry_delay_seconds: int) -> None:
+        self.retry_delay_seconds = retry_delay_seconds
 
 
 class ManualDesktop(Protocol):
@@ -115,6 +121,7 @@ class BrowserWorker:
         self._main_account_send_lock = Lock()
         self._main_account_send_tokens = float(_MAIN_ACCOUNT_TOKEN_CAPACITY)
         self._main_account_tokens_updated_at = self._monotonic()
+        self._main_account_cooldown_until = 0.0
         self._paused_messages: list[InboundMessage] = []
         self._paused_messages_lock = Lock()
         self._group_targets: tuple[GroupChatTarget, ...] = ()
@@ -368,7 +375,21 @@ class BrowserWorker:
 
     def _send_one_outbound(self, gateway: ChatGateway, outbound) -> bool:
         try:
-            platform_sent_id = self._send_outbound(gateway, outbound)
+            if outbound.delivery_kind == "direct":
+                platform_sent_id = self._send_with_main_account_tokens(
+                    lambda: self._send_outbound(gateway, outbound)
+                )
+            else:
+                platform_sent_id = self._send_outbound(gateway, outbound)
+        except MainAccountSendDeferred as error:
+            self._core.release_outbound(
+                outbound.id,
+                self._worker_id,
+                outbound.lease_token,
+                self._clock(),
+                retry_delay_seconds=error.retry_delay_seconds,
+            )
+            return False
         except SocketTimeoutError:
             _LOGGER.warning("outbound acknowledgement timed out: %s", outbound.id)
             self._gateway_reconnect_requested.set()
@@ -535,9 +556,7 @@ class BrowserWorker:
                     reference=reference,
                 )
                 if outbound.delivery_kind == "direct":
-                    return self._send_direct_with_interval(
-                        lambda: self._send_with_main_account_tokens(send_image)
-                    )
+                    return self._send_direct_with_interval(send_image)
                 return self._send_with_main_account_tokens(send_image)
             return self._send_with_main_account_tokens(
                 lambda: gateway.send_image(
@@ -571,17 +590,18 @@ class BrowserWorker:
                         outbound.destination_chatroom_id,
                         error,
                     )
-            platform_message_id = ""
-            for index, chunk in enumerate(group_message_chunks(text)):
-                platform_message_id = self._send_with_main_account_tokens(
-                    lambda: gateway.send_to(
+            def send_browser_chunks() -> str:
+                platform_message_id = ""
+                for index, chunk in enumerate(group_message_chunks(text)):
+                    platform_message_id = gateway.send_to(
                         outbound.destination_chatroom_id,
                         chunk,
                         message_id=str(uuid5(outbound.id, f"browser-fallback:{index}")),
                         reference=reference if index == 0 else None,
                     )
-                )
-            return platform_message_id
+                return platform_message_id
+
+            return self._send_with_main_account_tokens(send_browser_chunks)
         if (
             outbound.delivery_kind == "group"
             and outbound.group_chat_id is not None
@@ -596,9 +616,7 @@ class BrowserWorker:
                 reference=reference,
             )
             if outbound.delivery_kind == "direct":
-                return self._send_direct_with_interval(
-                    lambda: self._send_with_main_account_tokens(send_text)
-                )
+                return self._send_direct_with_interval(send_text)
             return self._send_with_main_account_tokens(send_text)
         return self._send_with_main_account_tokens(
             lambda: gateway.send(
@@ -621,6 +639,10 @@ class BrowserWorker:
     def _send_with_main_account_tokens(self, send: Callable[[], str]) -> str:
         with self._main_account_send_lock:
             now = self._monotonic()
+            if now < self._main_account_cooldown_until:
+                raise MainAccountSendDeferred(
+                    max(1, ceil(self._main_account_cooldown_until - now))
+                )
             elapsed = max(0.0, now - self._main_account_tokens_updated_at)
             refill_rate = 1 / _MAIN_ACCOUNT_TOKEN_REFILL_SECONDS
             self._main_account_send_tokens = min(
@@ -629,14 +651,18 @@ class BrowserWorker:
             )
             self._main_account_tokens_updated_at = now
             if self._main_account_send_tokens < 1:
-                delay = (
-                    1 - self._main_account_send_tokens
-                ) * _MAIN_ACCOUNT_TOKEN_REFILL_SECONDS
-                self._sleep(delay)
-                self._main_account_send_tokens = 1.0
-                self._main_account_tokens_updated_at = self._monotonic()
+                delay = (1 - self._main_account_send_tokens) * _MAIN_ACCOUNT_TOKEN_REFILL_SECONDS
+                raise MainAccountSendDeferred(max(1, ceil(delay)))
             self._main_account_send_tokens -= 1
-            return send()
+            try:
+                return send()
+            except AikdaMessageRejectedError as error:
+                if "请稍后再试" in str(error):
+                    self._main_account_cooldown_until = max(
+                        self._main_account_cooldown_until,
+                        self._monotonic() + _RATE_LIMIT_RETRY_DELAY_SECONDS,
+                    )
+                raise
 
     @staticmethod
     def _outbound_reference(outbound) -> MessageReference | None:

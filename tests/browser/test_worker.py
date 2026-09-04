@@ -852,6 +852,7 @@ def test_worker_retries_socket_timeout_with_the_same_platform_message_id(context
     assert core.released == [(OUTBOUND_ID, "worker-a", LEASE, NOW)]
 
     core.pending = [outbound]
+    worker._main_account_tokens_updated_at -= 2
     worker.run_once()
 
     assert core.confirmed_event.wait(timeout=1)
@@ -871,7 +872,7 @@ def test_worker_retries_a_temporarily_rejected_non_dark_market_outbound(context)
     assert core.failed == []
 
 
-def test_worker_limits_main_account_sends_to_thirty_per_minute():
+def test_worker_releases_main_account_send_until_next_token():
     current_time = [0.0]
     sleeps = []
     sent = []
@@ -890,11 +891,56 @@ def test_worker_limits_main_account_sends_to_thirty_per_minute():
         sleep=sleep_for,
     )
 
-    for _ in range(31):
-        worker._send_with_main_account_tokens(lambda: sent.append("sent"))
+    first = OutboundClaim(
+        UUID(int=104), "in-a", "A", LEASE,
+        destination_chatroom_id="direct-a", delivery_key="direct-a",
+        delivery_kind="direct",
+    )
+    second = OutboundClaim(
+        UUID(int=105), "in-b", "B", LEASE,
+        destination_chatroom_id="direct-b", delivery_key="direct-b",
+        delivery_kind="direct",
+    )
+    gateway = FakeGateway()
 
-    assert sent == ["sent"] * 31
-    assert sleeps == [3.0] * 21
+    assert worker._send_one_outbound(gateway, first) is True
+    assert worker._send_one_outbound(gateway, second) is False
+
+    assert gateway.sent_to == [("direct-a", "A")]
+    assert worker._core.release_delays == [2]
+    assert sleeps == []
+
+
+def test_worker_cools_down_main_account_after_platform_rejection():
+    current_time = [0.0]
+    gateway = FakeGateway(send_errors=[
+        AikdaMessageRejectedError("消息发送失败，请稍后再试")
+    ])
+    core = FakeCore()
+    worker = BrowserWorker(
+        worker_id="worker-a",
+        core=core,
+        session=FakeSession(gateway),
+        desktop=FakeDesktop(),
+        clock=lambda: NOW,
+        monotonic=lambda: current_time[0],
+    )
+    first = OutboundClaim(
+        UUID(int=106), "in-a", "A", LEASE,
+        destination_chatroom_id="direct-a", delivery_key="direct-a",
+        delivery_kind="direct",
+    )
+    second = OutboundClaim(
+        UUID(int=107), "in-b", "B", LEASE,
+        destination_chatroom_id="direct-b", delivery_key="direct-b",
+        delivery_kind="direct",
+    )
+
+    assert worker._send_one_outbound(gateway, first) is False
+    assert worker._send_one_outbound(gateway, second) is False
+
+    assert gateway.sent_to == []
+    assert core.release_delays == [60, 60]
 
 
 def test_worker_fails_a_temporarily_rejected_dark_market_list():
@@ -990,7 +1036,7 @@ def test_worker_contains_main_thread_socket_close_failure(context):
     assert len(core.heartbeats) == 2
 
 
-def test_worker_drains_at_most_twenty_outbounds_in_order(context):
+def test_worker_releases_following_group_outbounds_until_next_token(context):
     worker, gateway, _, _, core, _ = context
     core.pending = [
         OutboundClaim(UUID(int=index), f"in-{index}", f"reply-{index}", LEASE)
@@ -999,16 +1045,16 @@ def test_worker_drains_at_most_twenty_outbounds_in_order(context):
 
     worker.run_once()
 
-    assert gateway.sent == [f"reply-{index}" for index in range(1, 21)]
-    assert [confirmed[0] for confirmed in core.confirmed] == [
-        UUID(int=index) for index in range(1, 21)
-    ]
+    assert gateway.sent == ["reply-1"]
+    assert [confirmed[0] for confirmed in core.confirmed] == [UUID(int=1)]
+    assert [released[0] for released in core.released] == [UUID(int=2)]
+    assert core.release_delays == [2]
     assert [outbound.id for outbound in core.pending] == [
-        UUID(int=index) for index in range(21, 26)
+        UUID(int=index) for index in range(3, 26)
     ]
 
 
-def test_worker_serializes_direct_rooms_before_sending_the_next_message():
+def test_worker_releases_second_direct_room_until_next_token():
     gateway = FakeGateway()
     gateway.direct_send_release = Event()
     sleeps = []
@@ -1040,10 +1086,12 @@ def test_worker_serializes_direct_rooms_before_sending_the_next_message():
     assert not gateway.direct_send_started.wait(timeout=0.1)
     gateway.direct_send_release.set()
     deadline = monotonic() + 1
-    while len(core.confirmed) < 2 and monotonic() < deadline:
+    while len(core.confirmed) < 1 and monotonic() < deadline:
         sleep(0.01)
-    assert {item[0] for item in core.confirmed} == {UUID(int=101), UUID(int=102)}
-    assert sleeps == [1.0]
+    assert {item[0] for item in core.confirmed} == {UUID(int=101)}
+    assert [released[0] for released in core.released] == [UUID(int=102)]
+    assert core.release_delays == [2]
+    assert sleeps == []
 
 
 def test_worker_passes_trigger_reference_to_gateway(context):
@@ -1091,8 +1139,9 @@ def test_worker_stops_outbound_batch_when_time_budget_is_reached():
 
     worker.run_once()
 
-    assert gateway.sent == ["reply-1", "reply-2", "reply-3"]
-    assert len(core.pending) == 17
+    assert gateway.sent == ["reply-1"]
+    assert [released[0] for released in core.released] == [UUID(int=2)]
+    assert len(core.pending) == 18
 
 
 def test_worker_uses_bot_api_for_group_replies_over_the_newline_limit(context):
@@ -1232,6 +1281,7 @@ def test_worker_skips_bot_after_captcha_until_the_status_is_rechecked(context):
     )
 
     worker._send_outbound(gateway, first)
+    worker._main_account_tokens_updated_at -= 2
     worker._send_outbound(gateway, second)
 
     assert bot_sender.sent_to == [("group-2", "字" * 1001)]
