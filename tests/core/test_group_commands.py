@@ -566,22 +566,22 @@ def test_dark_market_commands_complete_listing_bid_and_query_in_group_and_direct
         assert "当前 20" in outbounds[0].text
         assert "卖家" not in outbounds[0].text
         assert "截止" not in outbounds[0].text
-    group_list = _group_receive(
-        service, "dark-group-list", "buyer", "/查看暗网", now, market.chatroom_id
-    )
-    outbounds = _outbounds_for(factory, group_list.message_id)
-    assert len(outbounds) == 1
-    assert outbounds[0].destination_chatroom_id == market.chatroom_id
-    assert outbounds[0].delivery_kind == "group"
-    assert "旧钥匙" in outbounds[0].text
-    assert "当前 20" in outbounds[0].text
-
     private_query = _direct_receive(
         service, "dark-direct-query", "buyer", "/查看暗网", now, "direct-buyer"
     )
-    assert _replies_for(factory, private_query.message_id) == [
-        "暗网完整列表仅在吸烟室发布，请前往群聊查看。"
-    ]
+    outbounds = _outbounds_for(factory, private_query.message_id)
+    assert len(outbounds) == 2
+    assert outbounds[0].destination_chatroom_id == "direct-buyer"
+    assert outbounds[0].delivery_kind == "direct"
+    assert outbounds[0].text == "暗网查询结果已发布至吸烟室，请前往群聊查看。"
+    assert outbounds[1].destination_chatroom_id == market.chatroom_id
+    assert outbounds[1].delivery_kind == "group"
+    assert "旧钥匙" in outbounds[1].text
+
+    group_list = _group_receive(
+        service, "dark-group-list", "buyer", "/查看暗网", now, market.chatroom_id
+    )
+    assert _outbounds_for(factory, group_list.message_id) == []
 
 
 def test_dark_market_list_query_reuses_a_pending_group_delivery():

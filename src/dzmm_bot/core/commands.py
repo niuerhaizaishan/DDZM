@@ -872,7 +872,39 @@ class GroupCommandHandler:
             if direct_chatroom_id is None:
                 return "请先私聊总监事发送任意消息，再重新发送 /暗网。"
         elif is_full_list:
-            return self._reply("/查看暗网", "private_list", received_at)
+            settings = self._repository.get_dark_market_settings()
+            destination_chatroom_id = (
+                self._repository.group_chat_destination(
+                    settings.announcement_group_id
+                )
+                if settings.announcement_group_id is not None
+                else None
+            )
+            notice = self._reply("/查看暗网", "private_list", received_at)
+            if destination_chatroom_id is None:
+                return notice
+            if self._repository.has_pending_dark_market_list_delivery(
+                destination_chatroom_id
+            ):
+                return notice
+            values = (
+                {"{商品列表}": result.text or ""}
+                if result.status == "shown"
+                else None
+            )
+            return [
+                CommandReply(
+                    notice,
+                    destination_chatroom_id=message.chatroom_id,
+                    delivery_kind="direct",
+                ),
+                CommandReply(
+                    self._reply("/查看暗网", result.status, received_at, values),
+                    destination_chatroom_id=destination_chatroom_id,
+                    delivery_kind="group",
+                    group_chat_id=settings.announcement_group_id,
+                ),
+            ]
         values = (
             {"{商品列表}": result.text or ""}
             if result.status == "shown"
