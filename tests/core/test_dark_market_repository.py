@@ -51,6 +51,45 @@ def _configure_market(repository: CoreRepository, now: datetime) -> None:
     )
 
 
+def test_browse_dark_market_shuffles_the_full_list(repository, now):
+    class ReverseShuffle:
+        def shuffle(self, values):
+            values.reverse()
+
+    _configure_market(repository, now)
+    seller, _ = repository.create_user("seller", "卖家", now, 100)
+    repository._dark_market_random = ReverseShuffle()
+    with repository._session() as session:
+        session.add_all(
+            [
+                DarkMarketListingRecord(
+                    public_number=number,
+                    seller_user_id=seller.id,
+                    announcement_group_id=PRIMARY_GROUP_CHAT_ID,
+                    name=name,
+                    purpose="测试",
+                    details="测试详情",
+                    gender="private",
+                    starting_price=10,
+                    duration_hours_snapshot=3,
+                    fee_percent_snapshot=5,
+                    state="active",
+                    ends_at=now + timedelta(hours=3),
+                    created_at=now,
+                )
+                for number, name in ((1, "旧钥匙"), (2, "铜镜"))
+            ]
+        )
+
+    result = repository.browse_dark_market(
+        PRIMARY_GROUP_CHAT_ID, now, direct=True
+    )
+
+    assert result.status == "shown"
+    assert result.text is not None
+    assert result.text.splitlines()[0].startswith("#2 铜镜")
+
+
 def _complete_draft(
     repository: CoreRepository, platform_id: str, now: datetime
 ) -> None:

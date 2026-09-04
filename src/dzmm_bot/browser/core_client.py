@@ -33,6 +33,8 @@ class OutboundClaim:
     reference_content_type: str | None = None
     reference_text: str | None = None
     recall_after_seconds: int | None = None
+    is_dark_market_list: bool = False
+    dark_market_list_query_sender_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -414,6 +416,10 @@ class CoreClient:
             reference_content_type=data.get("reference_content_type"),
             reference_text=data.get("reference_text"),
             recall_after_seconds=data["recall_after_seconds"],
+            is_dark_market_list=data.get("is_dark_market_list", False),
+            dark_market_list_query_sender_name=data.get(
+                "dark_market_list_query_sender_name"
+            ),
         )
 
     def confirm_sent(

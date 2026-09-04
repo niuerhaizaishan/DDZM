@@ -2,6 +2,7 @@ from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
+from secrets import token_hex
 from zoneinfo import ZoneInfo
 import logging
 from threading import Event, Lock
@@ -49,7 +50,6 @@ _OUTBOUND_BATCH_SIZE = 20
 _OUTBOUND_BATCH_BUDGET_SECONDS = 2.0
 _GROUP_TARGET_SYNC_INTERVAL_SECONDS = 5.0
 _BROWSER_SEND_INTERVAL_SECONDS = 1.0
-_RATE_LIMIT_RETRY_DELAY_SECONDS = 60
 
 
 class ManualDesktop(Protocol):
@@ -379,13 +379,13 @@ class BrowserWorker:
                 "outbound send rejected: %s: %s", outbound.id, error
             )
             if "请稍后再试" in str(error):
-                self._core.release_outbound(
+                self._core.mark_outbound_failed(
                     outbound.id,
                     self._worker_id,
                     outbound.lease_token,
                     self._clock(),
-                    retry_delay_seconds=_RATE_LIMIT_RETRY_DELAY_SECONDS,
                 )
+                self._send_dark_market_rejection_notice(gateway, outbound)
             else:
                 self._core.mark_outbound_failed(
                     outbound.id,
@@ -510,6 +510,11 @@ class BrowserWorker:
     def _send_outbound(self, gateway: ChatGateway, outbound) -> str:
         platform_message_id = str(outbound.id)
         reference = self._outbound_reference(outbound)
+        text = (
+            self._render_dark_market_list(outbound.text)
+            if outbound.is_dark_market_list
+            else outbound.text
+        )
         if outbound.content_type == "image":
             if outbound.image_url is None:
                 raise RuntimeError("image outbound missing URL")
@@ -535,12 +540,12 @@ class BrowserWorker:
             and outbound.destination_chatroom_id is not None
             and outbound.delivery_kind == "group"
             and outbound.recall_after_seconds is None
-            and requires_bot_group_sender(outbound.text)
+            and requires_bot_group_sender(text)
         ):
             if self._bot_delivery_status[0] != "captcha_required":
                 try:
                     message_id = self._bot_sender.send_to(
-                        outbound.destination_chatroom_id, outbound.text
+                        outbound.destination_chatroom_id, text
                     )
                     self._bot_delivery_status = ("ready", None)
                     return message_id
@@ -556,7 +561,7 @@ class BrowserWorker:
                         error,
                     )
             platform_message_id = ""
-            for index, chunk in enumerate(group_message_chunks(outbound.text)):
+            for index, chunk in enumerate(group_message_chunks(text)):
                 platform_message_id = gateway.send_to(
                     outbound.destination_chatroom_id,
                     chunk,
@@ -573,7 +578,7 @@ class BrowserWorker:
         if outbound.destination_chatroom_id is not None:
             send_text = lambda: gateway.send_to(
                 outbound.destination_chatroom_id,
-                outbound.text,
+                text,
                 message_id=platform_message_id,
                 reference=reference,
             )
@@ -581,8 +586,39 @@ class BrowserWorker:
                 return self._send_direct_with_interval(send_text)
             return send_text()
         return gateway.send(
-            outbound.text, message_id=platform_message_id, reference=reference
+            text, message_id=platform_message_id, reference=reference
         )
+
+    @staticmethod
+    def _render_dark_market_list(text: str) -> str:
+        return (
+            f"数据流识别码：{token_hex(32)}\n"
+            "以上是暗网随机账户加密内容可以忽略不计，以下是暗网列表：\n"
+            f"{text}"
+        )
+
+    def _send_dark_market_rejection_notice(
+        self, gateway: ChatGateway, outbound
+    ) -> None:
+        sender_name = outbound.dark_market_list_query_sender_name
+        if sender_name is None or outbound.destination_chatroom_id is None:
+            return
+        notice = (
+            f"{sender_name} - 数据流识别码：{token_hex(32)} - "
+            "目前暗网火爆稍后再试～"
+        )
+        try:
+            gateway.send_to(
+                outbound.destination_chatroom_id,
+                notice,
+                message_id=str(uuid5(outbound.id, "dark-market-rejection")),
+            )
+        except Exception:
+            _LOGGER.warning(
+                "dark market rejection notice failed: %s",
+                outbound.id,
+                exc_info=True,
+            )
 
     def _send_direct_with_interval(self, send: Callable[[], str]) -> str:
         with self._browser_send_lock:

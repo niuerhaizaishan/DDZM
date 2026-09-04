@@ -275,6 +275,8 @@ class OutboundClaimResponse(ApiModel):
     reference_content_type: str | None
     reference_text: str | None
     recall_after_seconds: int | None
+    is_dark_market_list: bool
+    dark_market_list_query_sender_name: str | None
 
 
 class SentRequest(ApiModel):

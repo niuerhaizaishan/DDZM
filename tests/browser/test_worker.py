@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+import re
 from threading import Event, Lock, Thread
 from time import monotonic, sleep
 from uuid import UUID
@@ -857,17 +858,70 @@ def test_worker_retries_socket_timeout_with_the_same_platform_message_id(context
     assert gateway.sent_message_ids == [str(OUTBOUND_ID), str(OUTBOUND_ID)]
 
 
-def test_worker_retries_a_temporarily_rejected_outbound_instead_of_failing_it(context):
+def test_worker_marks_a_temporarily_rejected_outbound_failed_without_retry(context):
     worker, gateway, _, _, core, _ = context
     core.pending = [OutboundClaim(OUTBOUND_ID, "in-1", "reply", LEASE)]
     gateway.send_error = AikdaMessageRejectedError("消息发送失败，请稍后再试")
 
     worker.run_once()
 
-    assert core.released_event.wait(timeout=1)
-    assert core.released == [(OUTBOUND_ID, "worker-a", LEASE, NOW)]
-    assert core.release_delays == [60]
-    assert core.failed == []
+    assert core.failed_event.wait(timeout=1)
+    assert core.released == []
+    assert core.failed == [(OUTBOUND_ID, "worker-a", LEASE, NOW)]
+
+
+def test_worker_replaces_a_temporarily_rejected_dark_market_list_with_notice():
+    gateway = FakeGateway(send_errors=[
+        AikdaMessageRejectedError("消息发送失败，请稍后再试")
+    ])
+    outbound = OutboundClaim(
+        UUID(int=103), "in-a", "暗网完整列表", LEASE,
+        destination_chatroom_id="direct-a", delivery_key="direct-a",
+        delivery_kind="direct", dark_market_list_query_sender_name="饭饭",
+    )
+    core = FakeCore(pending=[outbound])
+
+    worker = BrowserWorker(
+        worker_id="worker-a",
+        core=core,
+        session=FakeSession(gateway),
+        desktop=FakeDesktop(),
+        clock=lambda: NOW,
+    )
+
+    worker.run_once()
+
+    assert core.failed_event.wait(timeout=1)
+    assert core.released == []
+    deadline = monotonic() + 1
+    while not gateway.sent_to and monotonic() < deadline:
+        sleep(0.01)
+    assert len(gateway.sent_to) == 1
+    destination, notice = gateway.sent_to[0]
+    assert destination == "direct-a"
+    assert re.fullmatch(
+        r"饭饭 - 数据流识别码：[0-9a-f]{64} - 目前暗网火爆稍后再试～",
+        notice,
+    )
+
+
+def test_worker_prefixes_a_dark_market_list_with_random_encryption_data(context):
+    worker, gateway, _, _, core, _ = context
+    outbound = OutboundClaim(
+        OUTBOUND_ID, "in-1", "#1 旧钥匙\n#2 铜镜", LEASE,
+        destination_chatroom_id="direct-a", delivery_key="direct-a",
+        delivery_kind="direct", is_dark_market_list=True,
+    )
+    core.pending = [outbound]
+
+    worker.run_once()
+
+    assert core.confirmed_event.wait(timeout=1)
+    _, text = gateway.sent_to[0]
+    lines = text.splitlines()
+    assert re.fullmatch(r"数据流识别码：[0-9a-f]{64}", lines[0])
+    assert lines[1] == "以上是暗网随机账户加密内容可以忽略不计，以下是暗网列表："
+    assert "\n".join(lines[2:]) == "#1 旧钥匙\n#2 铜镜"
 
 
 def test_worker_reconnects_socket_on_main_loop_after_outbound_timeout(context):

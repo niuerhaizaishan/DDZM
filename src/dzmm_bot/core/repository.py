@@ -2049,6 +2049,7 @@ class CoreRepository:
         number_bomb_random: RandomSource | None = None,
         texas_holdem_random: RandomSource | None = None,
         shop_random: RandomSource | None = None,
+        dark_market_random: RandomSource | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._preserve_long_group_messages = preserve_long_group_messages
@@ -2056,6 +2057,7 @@ class CoreRepository:
         self._number_bomb_random = number_bomb_random or SystemRandom()
         self._texas_holdem_random = texas_holdem_random or SystemRandom()
         self._shop_random = shop_random or SystemRandom()
+        self._dark_market_random = dark_market_random or SystemRandom()
         self._active_session: ContextVar[Session | None] = ContextVar(
             f"core_repository_session_{id(self)}", default=None
         )
@@ -8173,6 +8175,8 @@ class CoreRepository:
                 return DarkMarketBrowseResult(
                     "not_found" if public_number is not None else "empty"
                 )
+            if public_number is None:
+                self._dark_market_random.shuffle(listings)
             lines = []
             for listing in listings:
                 current_amount = session.scalar(
@@ -8197,6 +8201,32 @@ class CoreRepository:
                     else render_listing_summary(view)
                 )
             return DarkMarketBrowseResult("shown", "\n".join(lines))
+
+    def dark_market_list_outbound_context(
+        self, message_id: UUID
+    ) -> tuple[bool, str | None]:
+        with self._session() as session:
+            outbound = session.get(OutboundRecord, message_id)
+            if (
+                outbound is None
+                or outbound.delivery_kind != "direct"
+                or outbound.inbound_message_id is None
+            ):
+                return False, None
+            inbound = session.get(InboundRecord, outbound.inbound_message_id)
+            if inbound is None or inbound.content.strip() not in {
+                "/查看暗网",
+                "/登陆暗网",
+                "/登录暗网",
+                "/暗网",
+            }:
+                return False, None
+            display_name = session.scalar(
+                select(UserRecord.display_name).where(
+                    UserRecord.platform_id == inbound.sender_platform_id
+                )
+            )
+            return True, display_name
 
     def has_pending_dark_market_list_delivery(
         self, destination_chatroom_id: str

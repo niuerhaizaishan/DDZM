@@ -686,6 +686,9 @@ def create_app(
         )
         if record is None:
             return None
+        is_dark_market_list, sender_name = (
+            repository.dark_market_list_outbound_context(record.id)
+        )
         return OutboundClaimResponse(
             id=record.id,
             inbound_message_id=record.inbound_message_id,
@@ -705,6 +708,8 @@ def create_app(
             reference_content_type=record.reference_content_type,
             reference_text=record.reference_text,
             recall_after_seconds=record.recall_after_seconds,
+            is_dark_market_list=is_dark_market_list,
+            dark_market_list_query_sender_name=sender_name,
         )
 
     @app.post(
