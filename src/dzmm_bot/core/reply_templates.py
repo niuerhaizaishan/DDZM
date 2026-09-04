@@ -523,6 +523,7 @@ TEMPLATE_DEFINITIONS = (
     TemplateDefinition("/查看暗网", "empty", "暂无商品", "暗网交易所当前没有竞价中的商品。", ("{日期}",)),
     TemplateDefinition("/查看暗网", "not_found", "商品不存在", "未找到该竞价中的暗网商品。", ("{日期}",)),
     TemplateDefinition("/查看暗网", "shown", "查询成功", "{商品列表}", ("{商品列表}", "{日期}")),
+    TemplateDefinition("/查看暗网", "private_list", "请前往吸烟室", "暗网完整列表仅在吸烟室发布，请前往群聊查看。", ("{日期}",)),
     *(
         definition
         for command, success_scenario, success_title, success_text in (

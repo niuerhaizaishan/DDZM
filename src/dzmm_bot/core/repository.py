@@ -8209,7 +8209,7 @@ class CoreRepository:
             outbound = session.get(OutboundRecord, message_id)
             if (
                 outbound is None
-                or outbound.delivery_kind != "direct"
+                or outbound.delivery_kind != "group"
                 or outbound.inbound_message_id is None
             ):
                 return False, None
@@ -8240,7 +8240,7 @@ class CoreRepository:
                 )
                 .where(
                     OutboundRecord.destination_chatroom_id == destination_chatroom_id,
-                    OutboundRecord.delivery_kind == "direct",
+                    OutboundRecord.delivery_kind == "group",
                     OutboundRecord.status.in_(("pending", "leased")),
                     func.trim(InboundRecord.content).in_(
                         ("/查看暗网", "/登陆暗网", "/登录暗网", "/暗网")

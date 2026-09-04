@@ -848,29 +848,31 @@ class GroupCommandHandler:
         if result.status == "wrong_group":
             return self._reply("/查看暗网", result.status, received_at)
         is_full_list = len(parts) == 1
+        if message.source_type == "group" and is_full_list:
+            if (
+                result.status == "shown"
+                and message.chatroom_id is not None
+                and self._repository.has_pending_dark_market_list_delivery(
+                    message.chatroom_id
+                )
+            ):
+                return None
+            values = (
+                {"{商品列表}": result.text or ""}
+                if result.status == "shown"
+                else None
+            )
+            return self._reply(
+                "/查看暗网", result.status, received_at, values
+            )
         if message.source_type == "group":
             direct_chatroom_id = self._repository.direct_chat_destination(
                 message.sender_platform_id
             )
             if direct_chatroom_id is None:
                 return "请先私聊总监事发送任意消息，再重新发送 /暗网。"
-            if (
-                result.status == "shown"
-                and is_full_list
-                and self._repository.has_pending_dark_market_list_delivery(
-                    direct_chatroom_id
-                )
-            ):
-                return None
-        elif (
-            result.status == "shown"
-            and is_full_list
-            and message.chatroom_id is not None
-            and self._repository.has_pending_dark_market_list_delivery(
-                message.chatroom_id
-            )
-        ):
-            return None
+        elif is_full_list:
+            return self._reply("/查看暗网", "private_list", received_at)
         values = (
             {"{商品列表}": result.text or ""}
             if result.status == "shown"
@@ -4014,7 +4016,7 @@ class GroupCommandHandler:
                     ("/取消上架", "私聊 /取消上架：取消尚未确认的上架草稿"),
                     ("/确认", "私聊 /确认：正式上架当前完整草稿；上架后不能撤回"),
                     ("/报价", "私聊 /报价 商品编号 金额：匿名报价并冻结相应摸鱼币"),
-                    ("/查看暗网", "/查看暗网 [商品编号]：可在配置的暗网群或私聊查询，结果只私聊发送；不显示精确结算时间"),
+                    ("/查看暗网", "/查看暗网：完整列表在吸烟室发布；/查看暗网 [商品编号]：私聊返回单件详情；不显示精确结算时间"),
                     ("/确认收货", "私聊 /确认收货 [商品编号]：确认收到拍下的商品"),
                     ("/投诉", "私聊 /投诉 [商品编号]：未收到商品时提交董事会审核"),
                     ("/公开", "私聊 /公开 [商品编号]：只有双方都同意才公开买卖双方身份"),

@@ -566,23 +566,25 @@ def test_dark_market_commands_complete_listing_bid_and_query_in_group_and_direct
         assert "当前 20" in outbounds[0].text
         assert "卖家" not in outbounds[0].text
         assert "截止" not in outbounds[0].text
-    for index, command in enumerate(("/查看暗网",)):
-        private_query = _direct_receive(
-            service,
-            f"dark-direct-query-{index}",
-            "buyer",
-            command,
-            now,
-            "direct-buyer",
-        )
-        private_text = "".join(_replies_for(factory, private_query.message_id))
-        assert "旧钥匙" in private_text
-        assert "当前 20" in private_text
-        assert "卖家" not in private_text
-        assert "截止" not in private_text
+    group_list = _group_receive(
+        service, "dark-group-list", "buyer", "/查看暗网", now, market.chatroom_id
+    )
+    outbounds = _outbounds_for(factory, group_list.message_id)
+    assert len(outbounds) == 1
+    assert outbounds[0].destination_chatroom_id == market.chatroom_id
+    assert outbounds[0].delivery_kind == "group"
+    assert "旧钥匙" in outbounds[0].text
+    assert "当前 20" in outbounds[0].text
+
+    private_query = _direct_receive(
+        service, "dark-direct-query", "buyer", "/查看暗网", now, "direct-buyer"
+    )
+    assert _replies_for(factory, private_query.message_id) == [
+        "暗网完整列表仅在吸烟室发布，请前往群聊查看。"
+    ]
 
 
-def test_dark_market_list_query_reuses_a_pending_direct_delivery():
+def test_dark_market_list_query_reuses_a_pending_group_delivery():
     service, repository, factory = _service()
     now = datetime(2026, 8, 24, 10, 0, tzinfo=BEIJING)
     market = repository.bootstrap_primary_group(
@@ -607,16 +609,8 @@ def test_dark_market_list_query_reuses_a_pending_direct_delivery():
             service, f"dark-dedup-{suffix}", "seller", content, now, "direct-seller"
         )
 
-    first = _direct_receive(
-        service, "dark-dedup-direct-first", "buyer", "/暗网", now, "direct-buyer"
-    )
-    duplicate_direct = _direct_receive(
-        service,
-        "dark-dedup-direct-second",
-        "buyer",
-        "/登陆暗网",
-        now,
-        "direct-buyer",
+    first = _group_receive(
+        service, "dark-dedup-group-first", "buyer", "/暗网", now, market.chatroom_id
     )
     duplicate_group = _group_receive(
         service,
@@ -628,11 +622,10 @@ def test_dark_market_list_query_reuses_a_pending_direct_delivery():
     )
 
     assert len(_outbounds_for(factory, first.message_id)) == 1
-    assert _outbounds_for(factory, duplicate_direct.message_id) == []
     assert _replies_for(factory, duplicate_group.message_id) == []
 
 
-def test_dark_market_group_query_requires_an_established_direct_chat():
+def test_dark_market_group_list_query_does_not_require_a_direct_chat():
     service, repository, factory = _service()
     now = datetime(2026, 8, 24, 10, 0, tzinfo=BEIJING)
     market = repository.bootstrap_primary_group(
@@ -667,10 +660,9 @@ def test_dark_market_group_query_requires_an_established_direct_chat():
 
     outbounds = _outbounds_for(factory, result.message_id)
     assert len(outbounds) == 1
-    assert outbounds[0].text == "请先私聊总监事发送任意消息，再重新发送 /暗网。"
+    assert "旧钥匙" in outbounds[0].text
     assert outbounds[0].destination_chatroom_id == market.chatroom_id
     assert outbounds[0].delivery_kind == "group"
-    assert "旧钥匙" not in outbounds[0].text
 
 
 @pytest.mark.parametrize(
@@ -680,7 +672,7 @@ def test_dark_market_group_query_requires_an_established_direct_chat():
         ("/暗网 999", "未找到该竞价中的暗网商品。"),
     ),
 )
-def test_dark_market_group_empty_and_missing_results_are_sent_privately(
+def test_dark_market_group_empty_result_is_sent_to_the_smoking_room_and_missing_item_is_private(
     command, private_text
 ):
     service, repository, factory = _service()
@@ -704,9 +696,14 @@ def test_dark_market_group_empty_and_missing_results_are_sent_privately(
     )
 
     outbounds = _outbounds_for(factory, result.message_id)
-    assert [outbound.text for outbound in outbounds] == [private_text]
-    assert outbounds[0].destination_chatroom_id == "direct-dark-empty-buyer"
-    assert outbounds[0].delivery_kind == "direct"
+    if command == "/暗网":
+        assert [outbound.text for outbound in outbounds] == [private_text]
+        assert outbounds[0].destination_chatroom_id == market.chatroom_id
+        assert outbounds[0].delivery_kind == "group"
+    else:
+        assert [outbound.text for outbound in outbounds] == [private_text]
+        assert outbounds[0].destination_chatroom_id == "direct-dark-empty-buyer"
+        assert outbounds[0].delivery_kind == "direct"
 
 
 def test_dark_market_receipt_commands_are_private_and_confirm_the_order():
@@ -854,6 +851,7 @@ def test_help_dark_market_lists_exact_commands_and_anonymity_rules():
     assert "/登陆暗网" not in text
     assert "双方都同意" in text
     assert "不显示" in text
+    assert "完整列表在吸烟室" in text
 
 
 def test_texas_holdem_group_commands_create_join_start_and_deal_privately():
