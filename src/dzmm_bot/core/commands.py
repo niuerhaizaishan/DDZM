@@ -847,6 +847,30 @@ class GroupCommandHandler:
         )
         if result.status == "wrong_group":
             return self._reply("/查看暗网", result.status, received_at)
+        is_full_list = len(parts) == 1
+        if message.source_type == "group":
+            direct_chatroom_id = self._repository.direct_chat_destination(
+                message.sender_platform_id
+            )
+            if direct_chatroom_id is None:
+                return "请先私聊总监事发送任意消息，再重新发送 /暗网。"
+            if (
+                result.status == "shown"
+                and is_full_list
+                and self._repository.has_pending_dark_market_list_delivery(
+                    direct_chatroom_id
+                )
+            ):
+                return "暗网查询结果正在私聊发送。"
+        elif (
+            result.status == "shown"
+            and is_full_list
+            and message.chatroom_id is not None
+            and self._repository.has_pending_dark_market_list_delivery(
+                message.chatroom_id
+            )
+        ):
+            return None
         values = (
             {"{商品列表}": result.text or ""}
             if result.status == "shown"
@@ -859,11 +883,6 @@ class GroupCommandHandler:
             values,
         )
         if message.source_type == "group":
-            direct_chatroom_id = self._repository.direct_chat_destination(
-                message.sender_platform_id
-            )
-            if direct_chatroom_id is None:
-                return "请先私聊总监事发送任意消息，再重新发送 /暗网。"
             return [
                 "暗网查询结果已私聊发送。",
                 CommandReply(

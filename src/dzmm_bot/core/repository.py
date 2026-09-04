@@ -8198,6 +8198,28 @@ class CoreRepository:
                 )
             return DarkMarketBrowseResult("shown", "\n".join(lines))
 
+    def has_pending_dark_market_list_delivery(
+        self, destination_chatroom_id: str
+    ) -> bool:
+        with self._session() as session:
+            pending = session.scalar(
+                select(OutboundRecord.id)
+                .join(
+                    InboundRecord,
+                    OutboundRecord.inbound_message_id == InboundRecord.id,
+                )
+                .where(
+                    OutboundRecord.destination_chatroom_id == destination_chatroom_id,
+                    OutboundRecord.delivery_kind == "direct",
+                    OutboundRecord.status.in_(("pending", "leased")),
+                    func.trim(InboundRecord.content).in_(
+                        ("/查看暗网", "/登陆暗网", "/登录暗网", "/暗网")
+                    ),
+                )
+                .limit(1)
+            )
+            return pending is not None
+
     @staticmethod
     def _dark_market_listing_summary(
         listing: DarkMarketListingRecord,

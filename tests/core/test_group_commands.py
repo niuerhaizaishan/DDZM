@@ -548,8 +548,6 @@ def test_dark_market_commands_complete_listing_bid_and_query_in_group_and_direct
             "/登陆暗网 1",
             "/登录暗网 1",
             "/暗网 1",
-            "/登陆暗网",
-            "/暗网",
         )
     ):
         login = _group_receive(
@@ -571,9 +569,7 @@ def test_dark_market_commands_complete_listing_bid_and_query_in_group_and_direct
         assert "当前 20" in outbounds[1].text
         assert "卖家" not in outbounds[1].text
         assert "截止" not in outbounds[1].text
-    for index, command in enumerate(
-        ("/查看暗网", "/登陆暗网", "/登录暗网", "/暗网")
-    ):
+    for index, command in enumerate(("/查看暗网",)):
         private_query = _direct_receive(
             service,
             f"dark-direct-query-{index}",
@@ -587,6 +583,58 @@ def test_dark_market_commands_complete_listing_bid_and_query_in_group_and_direct
         assert "当前 20" in private_text
         assert "卖家" not in private_text
         assert "截止" not in private_text
+
+
+def test_dark_market_list_query_reuses_a_pending_direct_delivery():
+    service, repository, factory = _service()
+    now = datetime(2026, 8, 24, 10, 0, tzinfo=BEIJING)
+    market = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=dark-query-dedup", now
+    )
+    repository.create_user("seller", "卖家", now, 100)
+    repository.create_user("buyer", "买家", now, 100)
+    repository.upsert_direct_chats(
+        [("seller", "direct-seller"), ("buyer", "direct-buyer")], now
+    )
+    _configure_dark_market(repository, market.id, now)
+    for suffix, content in (
+        ("start", "/上架暗网"),
+        ("name", "旧钥匙"),
+        ("purpose", "开门"),
+        ("details", "来历不明"),
+        ("gender", "保密"),
+        ("price", "10"),
+        ("confirm", "/确认"),
+    ):
+        _direct_receive(
+            service, f"dark-dedup-{suffix}", "seller", content, now, "direct-seller"
+        )
+
+    first = _direct_receive(
+        service, "dark-dedup-direct-first", "buyer", "/暗网", now, "direct-buyer"
+    )
+    duplicate_direct = _direct_receive(
+        service,
+        "dark-dedup-direct-second",
+        "buyer",
+        "/登陆暗网",
+        now,
+        "direct-buyer",
+    )
+    duplicate_group = _group_receive(
+        service,
+        "dark-dedup-group-second",
+        "buyer",
+        "/查看暗网",
+        now,
+        market.chatroom_id,
+    )
+
+    assert len(_outbounds_for(factory, first.message_id)) == 1
+    assert _outbounds_for(factory, duplicate_direct.message_id) == []
+    assert _replies_for(factory, duplicate_group.message_id) == [
+        "暗网查询结果正在私聊发送。"
+    ]
 
 
 def test_dark_market_group_query_requires_an_established_direct_chat():
