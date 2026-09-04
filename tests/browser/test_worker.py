@@ -866,7 +866,7 @@ def test_worker_retries_a_temporarily_rejected_outbound_instead_of_failing_it(co
 
     assert core.released_event.wait(timeout=1)
     assert core.released == [(OUTBOUND_ID, "worker-a", LEASE, NOW)]
-    assert core.release_delays == [5]
+    assert core.release_delays == [60]
     assert core.failed == []
 
 
@@ -938,9 +938,10 @@ def test_worker_drains_at_most_twenty_outbounds_in_order(context):
     ]
 
 
-def test_worker_sends_different_direct_rooms_concurrently():
+def test_worker_serializes_direct_rooms_before_sending_the_next_message():
     gateway = FakeGateway()
     gateway.direct_send_release = Event()
+    sleeps = []
     core = FakeCore(pending=[
         OutboundClaim(
             UUID(int=101), "in-a", "A", LEASE,
@@ -959,17 +960,20 @@ def test_worker_sends_different_direct_rooms_concurrently():
         session=FakeSession(gateway),
         desktop=FakeDesktop(),
         clock=lambda: NOW,
+        monotonic=lambda: 0,
+        sleep=sleeps.append,
         outbound_concurrency=2,
     )
 
     worker.run_once()
 
-    assert gateway.direct_send_started.wait(timeout=1)
+    assert not gateway.direct_send_started.wait(timeout=0.1)
     gateway.direct_send_release.set()
     deadline = monotonic() + 1
     while len(core.confirmed) < 2 and monotonic() < deadline:
         sleep(0.01)
     assert {item[0] for item in core.confirmed} == {UUID(int=101), UUID(int=102)}
+    assert sleeps == [1.0]
 
 
 def test_worker_passes_trigger_reference_to_gateway(context):

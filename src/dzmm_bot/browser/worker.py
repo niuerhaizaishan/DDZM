@@ -48,6 +48,8 @@ _DIRECT_ENTRY_COMMANDS = {
 _OUTBOUND_BATCH_SIZE = 20
 _OUTBOUND_BATCH_BUDGET_SECONDS = 2.0
 _GROUP_TARGET_SYNC_INTERVAL_SECONDS = 5.0
+_BROWSER_SEND_INTERVAL_SECONDS = 1.0
+_RATE_LIMIT_RETRY_DELAY_SECONDS = 60
 
 
 class ManualDesktop(Protocol):
@@ -106,6 +108,8 @@ class BrowserWorker:
         )
         self._outbound_concurrency = outbound_concurrency
         self._outbound_futures: dict[str, Future[None]] = {}
+        self._browser_send_lock = Lock()
+        self._next_browser_send_at = 0.0
         self._paused_messages: list[InboundMessage] = []
         self._paused_messages_lock = Lock()
         self._group_targets: tuple[GroupChatTarget, ...] = ()
@@ -380,6 +384,7 @@ class BrowserWorker:
                     self._worker_id,
                     outbound.lease_token,
                     self._clock(),
+                    retry_delay_seconds=_RATE_LIMIT_RETRY_DELAY_SECONDS,
                 )
             else:
                 self._core.mark_outbound_failed(
@@ -509,13 +514,16 @@ class BrowserWorker:
             if outbound.image_url is None:
                 raise RuntimeError("image outbound missing URL")
             if outbound.destination_chatroom_id is not None:
-                return gateway.send_image_to(
+                send_image = lambda: gateway.send_image_to(
                     outbound.destination_chatroom_id,
                     outbound.image_url,
                     alt=outbound.image_alt or "image",
                     message_id=platform_message_id,
                     reference=reference,
                 )
+                if outbound.delivery_kind == "direct":
+                    return self._send_direct_with_interval(send_image)
+                return send_image()
             return gateway.send_image(
                 outbound.image_url,
                 alt=outbound.image_alt or "image",
@@ -563,15 +571,29 @@ class BrowserWorker:
         ):
             raise RuntimeError("group outbound missing destination chatroom")
         if outbound.destination_chatroom_id is not None:
-            return gateway.send_to(
+            send_text = lambda: gateway.send_to(
                 outbound.destination_chatroom_id,
                 outbound.text,
                 message_id=platform_message_id,
                 reference=reference,
             )
+            if outbound.delivery_kind == "direct":
+                return self._send_direct_with_interval(send_text)
+            return send_text()
         return gateway.send(
             outbound.text, message_id=platform_message_id, reference=reference
         )
+
+    def _send_direct_with_interval(self, send: Callable[[], str]) -> str:
+        with self._browser_send_lock:
+            delay = self._next_browser_send_at - self._monotonic()
+            if delay > 0:
+                self._sleep(delay)
+            result = send()
+            self._next_browser_send_at = (
+                self._monotonic() + _BROWSER_SEND_INTERVAL_SECONDS
+            )
+            return result
 
     @staticmethod
     def _outbound_reference(outbound) -> MessageReference | None:
