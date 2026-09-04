@@ -7408,6 +7408,95 @@ def test_king_game_phase_timeout_redraws_without_revealing(repository):
     assert started.king_platform_id != result[0].king_platform_id or True
 
 
+def test_king_game_leaving_a_revealed_player_keeps_the_game_active(repository):
+    now = datetime(2026, 9, 3, 12, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group("https://www.aikda.com/chat?c=king-leave", now)
+    platform_ids = ("host", "u2", "u3", "u4")
+    for platform_id in platform_ids:
+        repository.create_user(platform_id, platform_id, now, 0)
+    repository.start_king_game("host", now, PRIMARY_GROUP_CHAT_ID)
+    for platform_id in platform_ids[1:]:
+        repository.join_king_game(platform_id, now, PRIMARY_GROUP_CHAT_ID)
+    started = repository.begin_king_game("host", now, PRIMARY_GROUP_CHAT_ID)
+    assert started.king_platform_id is not None
+    repository.reveal_king_game_numbers(
+        started.king_platform_id, "1", now, PRIMARY_GROUP_CHAT_ID
+    )
+    leaver = next(
+        platform_id for platform_id in platform_ids
+        if platform_id != started.king_platform_id
+    )
+
+    result = repository.leave_king_game(leaver, now, PRIMARY_GROUP_CHAT_ID)
+
+    assert result.status == "left_game"
+    assert len(result.players) == 3
+    assert repository.active_gameplay_summary(
+        "u2", now, PRIMARY_GROUP_CHAT_ID
+    ).game_type == "king_game"
+
+
+def test_king_game_redraws_when_the_current_king_leaves(repository):
+    now = datetime(2026, 9, 3, 12, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group("https://www.aikda.com/chat?c=king-king-leave", now)
+    for platform_id in ("host", "u2", "u3", "u4"):
+        repository.create_user(platform_id, platform_id, now, 0)
+    repository.start_king_game("host", now, PRIMARY_GROUP_CHAT_ID)
+    for platform_id in ("u2", "u3", "u4"):
+        repository.join_king_game(platform_id, now, PRIMARY_GROUP_CHAT_ID)
+    started = repository.begin_king_game("host", now, PRIMARY_GROUP_CHAT_ID)
+    assert started.king_platform_id is not None
+
+    result = repository.leave_king_game(
+        started.king_platform_id, now, PRIMARY_GROUP_CHAT_ID
+    )
+
+    assert result.status == "king_left_redrawn"
+    assert result.round_number == 2
+    assert result.king_platform_id != started.king_platform_id
+    assert len(result.players) == 3
+
+
+def test_king_game_transfers_the_signup_host_when_the_host_leaves(repository):
+    now = datetime(2026, 9, 3, 12, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group("https://www.aikda.com/chat?c=king-host-leave", now)
+    for platform_id in ("host", "u2", "u3", "u4"):
+        repository.create_user(platform_id, platform_id, now, 0)
+    repository.start_king_game("host", now, PRIMARY_GROUP_CHAT_ID)
+    for platform_id in ("u2", "u3", "u4"):
+        repository.join_king_game(platform_id, now, PRIMARY_GROUP_CHAT_ID)
+
+    result = repository.leave_king_game("host", now, PRIMARY_GROUP_CHAT_ID)
+    started = repository.begin_king_game("u2", now, PRIMARY_GROUP_CHAT_ID)
+
+    assert result.status == "left_game"
+    assert started.status == "started"
+
+
+def test_king_game_ends_immediately_when_a_leave_drops_it_below_three_players(repository):
+    now = datetime(2026, 9, 3, 12, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group("https://www.aikda.com/chat?c=king-too-few", now)
+    platform_ids = ("host", "u2", "u3")
+    for platform_id in platform_ids:
+        repository.create_user(platform_id, platform_id, now, 0)
+    repository.start_king_game("host", now, PRIMARY_GROUP_CHAT_ID)
+    for platform_id in platform_ids[1:]:
+        repository.join_king_game(platform_id, now, PRIMARY_GROUP_CHAT_ID)
+    started = repository.begin_king_game("host", now, PRIMARY_GROUP_CHAT_ID)
+    assert started.king_platform_id is not None
+    leaver = next(
+        platform_id for platform_id in platform_ids
+        if platform_id != started.king_platform_id
+    )
+
+    result = repository.leave_king_game(leaver, now, PRIMARY_GROUP_CHAT_ID)
+
+    assert result.status == "completed"
+    assert repository.active_gameplay_summary(
+        "u2", now, PRIMARY_GROUP_CHAT_ID
+    ).game_type is None
+
+
 def test_never_have_i_ever_signup_and_host_start(repository, session_factory):
     from dzmm_bot.core.schema import NeverHaveIEverRoundRecord
 

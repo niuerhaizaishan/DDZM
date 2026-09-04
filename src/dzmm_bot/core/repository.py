@@ -11951,6 +11951,7 @@ class CoreRepository:
         group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
     ) -> KingGameResult:
         now = now.astimezone(BEIJING)
+        settings = self.get_king_game_settings()
         with self.transaction():
             with self._session() as session:
                 self._lock_gameplay_gate(session)
@@ -11973,14 +11974,29 @@ class CoreRepository:
                     return self._king_game_result_locked(session, game, "not_participant")
                 player.state = "withdrawn"
                 player.left_at = now
-                if game.state == "signup" and actor.id == game.host_user_id:
-                    self._finish_king_game_locked(game, "cancelled", "host_cancelled", now)
-                    return self._king_game_result_locked(session, game, "signup_cancelled")
-                if actor.id == game.current_king_user_id or game.state == "revealed":
-                    self._finish_king_game_locked(game, "completed", "participant_left", now)
+                player_state = "signup" if game.state == "signup" else "active"
+                remaining_players = self._active_king_game_players(
+                    session, game.id, player_state
+                )
+                if len(remaining_players) < 3:
+                    self._finish_king_game_locked(
+                        game, "completed", "not_enough_players", now
+                    )
                     return self._king_game_result_locked(session, game, "completed")
-                if len(self._active_king_game_players(session, game.id)) < 3:
-                    game.end_after_round = True
+                if game.state == "signup" and actor.id == game.host_user_id:
+                    game.host_user_id = remaining_players[0][0].user_id
+                elif (
+                    game.state == "awaiting_reveal"
+                    and actor.id == game.current_king_user_id
+                ):
+                    round_record = self._current_king_game_round(session, game)
+                    if round_record is not None:
+                        round_record.state = "timed_out"
+                    self._start_king_game_round_locked(session, game, now, settings)
+                    return self._king_game_result_locked(
+                        session, game, "king_left_redrawn"
+                    )
+                game.end_after_round = False
                 return self._king_game_result_locked(session, game, "left_game")
 
     def end_king_game(

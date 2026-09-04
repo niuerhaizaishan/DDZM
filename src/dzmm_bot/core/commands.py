@@ -1393,13 +1393,15 @@ class GroupCommandHandler:
         result = self._repository.leave_king_game(
             message.sender_platform_id, received_at, group_chat_id
         )
-        if result.status == "signup_cancelled":
-            return "【国王游戏】发起者退出，报名局已取消。"
         if result.status == "left_game":
-            suffix = "本轮公开后将自动结束。" if result.end_after_round else ""
-            return f"你已退出本局国王游戏。{suffix}"
+            return "你已退出本局国王游戏。"
+        if result.status == "king_left_redrawn":
+            return (
+                "【国王游戏】本轮国王已退出，已重新抽取国王。\n"
+                f"{self._king_game_turn_message(result)}"
+            )
         if result.status == "completed":
-            return "【国王游戏】关键玩家退出或人数不足，本局已结束。"
+            return "【国王游戏】剩余参与者不足 3 人，本局已结束。"
         return {
             "no_game": "当前没有国王游戏对局。",
             "not_joined": "请先用 /入职 名字 加入摸鱼公司。",
