@@ -1395,11 +1395,8 @@ class GroupCommandHandler:
         )
         if result.status == "left_game":
             return "你已退出本局国王游戏。"
-        if result.status == "king_left_redrawn":
-            return (
-                "【国王游戏】本轮国王已退出，已重新抽取国王。\n"
-                f"{self._king_game_turn_message(result)}"
-            )
+        if result.status == "leave_queued":
+            return "已登记退出，本轮仍按当前编号参与；下一轮开始时生效。"
         if result.status == "completed":
             return "【国王游戏】剩余参与者不足 3 人，本局已结束。"
         return {

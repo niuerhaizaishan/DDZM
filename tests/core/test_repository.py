@@ -7408,7 +7408,7 @@ def test_king_game_phase_timeout_redraws_without_revealing(repository):
     assert started.king_platform_id != result[0].king_platform_id or True
 
 
-def test_king_game_leaving_a_revealed_player_keeps_the_game_active(repository):
+def test_king_game_defers_a_revealed_player_leave_until_the_next_round(repository):
     now = datetime(2026, 9, 3, 12, 0, tzinfo=BEIJING)
     repository.bootstrap_primary_group("https://www.aikda.com/chat?c=king-leave", now)
     platform_ids = ("host", "u2", "u3", "u4")
@@ -7429,14 +7429,21 @@ def test_king_game_leaving_a_revealed_player_keeps_the_game_active(repository):
 
     result = repository.leave_king_game(leaver, now, PRIMARY_GROUP_CHAT_ID)
 
-    assert result.status == "left_game"
-    assert len(result.players) == 3
-    assert repository.active_gameplay_summary(
-        "u2", now, PRIMARY_GROUP_CHAT_ID
-    ).game_type == "king_game"
+    assert result.status == "leave_queued"
+    assert len(result.players) == 4
+
+    next_round = repository.continue_king_game(
+        started.king_platform_id, now, PRIMARY_GROUP_CHAT_ID
+    )
+    assert next_round.status == "next_round"
+    assert len(next_round.players) == 3
+    revealed = repository.reveal_king_game_numbers(
+        next_round.king_platform_id or "", "1", now, PRIMARY_GROUP_CHAT_ID
+    )
+    assert {number for number, _ in revealed.number_map} == {1, 2, 3}
 
 
-def test_king_game_redraws_when_the_current_king_leaves(repository):
+def test_king_game_defers_the_current_king_leave_until_the_next_round(repository):
     now = datetime(2026, 9, 3, 12, 0, tzinfo=BEIJING)
     repository.bootstrap_primary_group("https://www.aikda.com/chat?c=king-king-leave", now)
     for platform_id in ("host", "u2", "u3", "u4"):
@@ -7451,10 +7458,10 @@ def test_king_game_redraws_when_the_current_king_leaves(repository):
         started.king_platform_id, now, PRIMARY_GROUP_CHAT_ID
     )
 
-    assert result.status == "king_left_redrawn"
-    assert result.round_number == 2
-    assert result.king_platform_id != started.king_platform_id
-    assert len(result.players) == 3
+    assert result.status == "leave_queued"
+    assert result.round_number == 1
+    assert result.king_platform_id == started.king_platform_id
+    assert len(result.players) == 4
 
 
 def test_king_game_transfers_the_signup_host_when_the_host_leaves(repository):
@@ -7473,7 +7480,7 @@ def test_king_game_transfers_the_signup_host_when_the_host_leaves(repository):
     assert started.status == "started"
 
 
-def test_king_game_ends_immediately_when_a_leave_drops_it_below_three_players(repository):
+def test_king_game_ends_when_the_next_round_has_fewer_than_three_players(repository):
     now = datetime(2026, 9, 3, 12, 0, tzinfo=BEIJING)
     repository.bootstrap_primary_group("https://www.aikda.com/chat?c=king-too-few", now)
     platform_ids = ("host", "u2", "u3")
@@ -7490,8 +7497,15 @@ def test_king_game_ends_immediately_when_a_leave_drops_it_below_three_players(re
     )
 
     result = repository.leave_king_game(leaver, now, PRIMARY_GROUP_CHAT_ID)
+    assert result.status == "leave_queued"
+    repository.reveal_king_game_numbers(
+        started.king_platform_id, "1", now, PRIMARY_GROUP_CHAT_ID
+    )
+    continued = repository.continue_king_game(
+        started.king_platform_id, now, PRIMARY_GROUP_CHAT_ID
+    )
 
-    assert result.status == "completed"
+    assert continued.status == "completed"
     assert repository.active_gameplay_summary(
         "u2", now, PRIMARY_GROUP_CHAT_ID
     ).game_type is None

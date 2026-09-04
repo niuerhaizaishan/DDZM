@@ -11951,7 +11951,6 @@ class CoreRepository:
         group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID,
     ) -> KingGameResult:
         now = now.astimezone(BEIJING)
-        settings = self.get_king_game_settings()
         with self.transaction():
             with self._session() as session:
                 self._lock_gameplay_gate(session)
@@ -11972,30 +11971,24 @@ class CoreRepository:
                 )
                 if player is None:
                     return self._king_game_result_locked(session, game, "not_participant")
+                if game.state != "signup":
+                    if player.left_at is None:
+                        player.left_at = now
+                    return self._king_game_result_locked(
+                        session, game, "leave_queued"
+                    )
                 player.state = "withdrawn"
                 player.left_at = now
-                player_state = "signup" if game.state == "signup" else "active"
                 remaining_players = self._active_king_game_players(
-                    session, game.id, player_state
+                    session, game.id, "signup"
                 )
                 if len(remaining_players) < 3:
                     self._finish_king_game_locked(
                         game, "completed", "not_enough_players", now
                     )
                     return self._king_game_result_locked(session, game, "completed")
-                if game.state == "signup" and actor.id == game.host_user_id:
+                if actor.id == game.host_user_id:
                     game.host_user_id = remaining_players[0][0].user_id
-                elif (
-                    game.state == "awaiting_reveal"
-                    and actor.id == game.current_king_user_id
-                ):
-                    round_record = self._current_king_game_round(session, game)
-                    if round_record is not None:
-                        round_record.state = "timed_out"
-                    self._start_king_game_round_locked(session, game, now, settings)
-                    return self._king_game_result_locked(
-                        session, game, "king_left_redrawn"
-                    )
                 game.end_after_round = False
                 return self._king_game_result_locked(session, game, "left_game")
 
@@ -12104,6 +12097,17 @@ class CoreRepository:
     def _promote_king_game_candidates_locked(
         self, session: Session, game_id: UUID
     ) -> None:
+        pending_leaves = session.scalars(
+            select(KingGamePlayerRecord)
+            .where(
+                KingGamePlayerRecord.game_id == game_id,
+                KingGamePlayerRecord.state == "active",
+                KingGamePlayerRecord.left_at.is_not(None),
+            )
+            .with_for_update()
+        )
+        for player in pending_leaves:
+            player.state = "withdrawn"
         for player, _ in self._active_king_game_players(session, game_id, "signup"):
             player.state = "active"
 
