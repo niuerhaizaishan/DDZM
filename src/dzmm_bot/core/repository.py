@@ -26313,7 +26313,8 @@ class CoreRepository:
         has_reference: bool,
     ) -> bool:
         return (
-            recall_after_seconds is not None
+            delivery_kind == "direct"
+            or recall_after_seconds is not None
             or (
                 self._preserve_long_group_messages
                 and not has_reference

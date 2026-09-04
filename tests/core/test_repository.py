@@ -9933,6 +9933,28 @@ def test_system_outbound_splits_after_ten_newlines(repository, session_factory):
     ]
 
 
+def test_direct_outbound_keeps_multiline_reply_in_one_message(
+    repository, session_factory, inbound
+):
+    stored, _ = repository.accept_inbound(inbound)
+    text = "\n".join(f"第{index}项" for index in range(1, 13))
+
+    repository.enqueue_outbound(
+        stored.id,
+        text,
+        destination_chatroom_id="direct-room-1",
+        delivery_kind="direct",
+    )
+
+    with session_factory() as session:
+        records = list(
+            session.scalars(
+                select(OutboundRecord).order_by(OutboundRecord.reply_index)
+            )
+        )
+    assert [record.text for record in records] == [text]
+
+
 def test_system_outbound_keeps_exactly_ten_newlines_in_one_message(
     repository, session_factory
 ):
