@@ -383,7 +383,14 @@ class BrowserWorker:
             _LOGGER.warning(
                 "outbound send rejected: %s: %s", outbound.id, error
             )
-            if "请稍后再试" in str(error):
+            if outbound.is_dark_market_list:
+                self._core.mark_outbound_failed(
+                    outbound.id,
+                    self._worker_id,
+                    outbound.lease_token,
+                    self._clock(),
+                )
+            elif "请稍后再试" in str(error):
                 self._core.release_outbound(
                     outbound.id,
                     self._worker_id,

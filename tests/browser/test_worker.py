@@ -897,7 +897,7 @@ def test_worker_limits_main_account_sends_to_thirty_per_minute():
     assert sleeps == [3.0] * 21
 
 
-def test_worker_retries_a_temporarily_rejected_dark_market_list():
+def test_worker_fails_a_temporarily_rejected_dark_market_list():
     gateway = FakeGateway(send_errors=[
         AikdaMessageRejectedError("消息发送失败，请稍后再试")
     ])
@@ -918,9 +918,9 @@ def test_worker_retries_a_temporarily_rejected_dark_market_list():
 
     worker.run_once()
 
-    assert core.released_event.wait(timeout=1)
-    assert core.release_delays == [60]
-    assert core.failed == []
+    assert core.failed_event.wait(timeout=1)
+    assert core.failed == [(UUID(int=103), "worker-a", LEASE, NOW)]
+    assert core.release_delays == []
     assert gateway.sent_to == []
 
 
