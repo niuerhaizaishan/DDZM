@@ -50,6 +50,7 @@ _OUTBOUND_BATCH_SIZE = 20
 _OUTBOUND_BATCH_BUDGET_SECONDS = 2.0
 _GROUP_TARGET_SYNC_INTERVAL_SECONDS = 5.0
 _BROWSER_SEND_INTERVAL_SECONDS = 1.0
+_RATE_LIMIT_RETRY_DELAY_SECONDS = 60
 
 
 class ManualDesktop(Protocol):
@@ -378,7 +379,7 @@ class BrowserWorker:
             _LOGGER.warning(
                 "outbound send rejected: %s: %s", outbound.id, error
             )
-            if "请稍后再试" in str(error):
+            if "请稍后再试" in str(error) and outbound.is_dark_market_list:
                 self._core.mark_outbound_failed(
                     outbound.id,
                     self._worker_id,
@@ -386,6 +387,14 @@ class BrowserWorker:
                     self._clock(),
                 )
                 self._send_dark_market_rejection_notice(gateway, outbound)
+            elif "请稍后再试" in str(error):
+                self._core.release_outbound(
+                    outbound.id,
+                    self._worker_id,
+                    outbound.lease_token,
+                    self._clock(),
+                    retry_delay_seconds=_RATE_LIMIT_RETRY_DELAY_SECONDS,
+                )
             else:
                 self._core.mark_outbound_failed(
                     outbound.id,

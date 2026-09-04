@@ -858,16 +858,17 @@ def test_worker_retries_socket_timeout_with_the_same_platform_message_id(context
     assert gateway.sent_message_ids == [str(OUTBOUND_ID), str(OUTBOUND_ID)]
 
 
-def test_worker_marks_a_temporarily_rejected_outbound_failed_without_retry(context):
+def test_worker_retries_a_temporarily_rejected_non_dark_market_outbound(context):
     worker, gateway, _, _, core, _ = context
     core.pending = [OutboundClaim(OUTBOUND_ID, "in-1", "reply", LEASE)]
     gateway.send_error = AikdaMessageRejectedError("消息发送失败，请稍后再试")
 
     worker.run_once()
 
-    assert core.failed_event.wait(timeout=1)
-    assert core.released == []
-    assert core.failed == [(OUTBOUND_ID, "worker-a", LEASE, NOW)]
+    assert core.released_event.wait(timeout=1)
+    assert core.released == [(OUTBOUND_ID, "worker-a", LEASE, NOW)]
+    assert core.release_delays == [60]
+    assert core.failed == []
 
 
 def test_worker_replaces_a_temporarily_rejected_dark_market_list_with_notice():
@@ -877,7 +878,8 @@ def test_worker_replaces_a_temporarily_rejected_dark_market_list_with_notice():
     outbound = OutboundClaim(
         UUID(int=103), "in-a", "暗网完整列表", LEASE,
         destination_chatroom_id="direct-a", delivery_key="direct-a",
-        delivery_kind="direct", dark_market_list_query_sender_name="饭饭",
+        delivery_kind="direct", is_dark_market_list=True,
+        dark_market_list_query_sender_name="饭饭",
     )
     core = FakeCore(pending=[outbound])
 
