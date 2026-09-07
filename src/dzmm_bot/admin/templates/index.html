@@ -256,7 +256,7 @@
 
               <section id="employees-view" class="dashboard-view panel" hidden>
                 <p class="eyebrow">群成员</p>
-                <h2>员工</h2>
+                <div class="panel-heading"><div><h2>员工</h2><p class="muted">公司名称用于系统内展示；平台昵称用于管理员核对身份。</p></div><button id="refresh-platform-nicknames" class="secondary" type="button">同步平台昵称</button></div>
                 <div class="list-toolbar"><div class="list-toolbar-controls"><input class="list-search" data-list-filter="employees" type="search" placeholder="搜索员工"></div><label>每页<select class="page-size-select" data-list-page-size="employees"><option value="5">5</option><option value="10">10</option><option value="15">15</option><option value="20" selected>20</option><option value="50">50</option></select></label></div>
                 <div class="list-scroll"><div id="employee-list" class="data-list"></div></div>
                 <nav id="employee-pagination" class="pagination" aria-label="员工分页"></nav>

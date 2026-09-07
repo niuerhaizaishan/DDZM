@@ -314,6 +314,16 @@ class AikdaSocketGateway:
             {"chatroomId": chatroom_id, "botId": bot_id},
         )
 
+    def lookup_platform_nickname(
+        self, chatroom_id: str, platform_user_id: str
+    ) -> str | None:
+        profile = self._request(
+            "user.getChatroomUser",
+            {"chatroomId": chatroom_id, "userId": platform_user_id},
+        )
+        nickname = profile.get("nickname")
+        return nickname.strip() if isinstance(nickname, str) and nickname.strip() else None
+
     def retract(self, message_id: str, *, chatroom_id: str | None = None) -> None:
         self._ensure_connected()
         acknowledgement = self._call(

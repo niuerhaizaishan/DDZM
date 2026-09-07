@@ -39,6 +39,8 @@ class AdminCorePort(Protocol):
 
     def list_game_users(self, page: int, page_size: int) -> dict: ...
 
+    def request_platform_nickname_refresh_all(self) -> dict: ...
+
     def list_balance_transactions(
         self, platform_id: str, page: int, page_size: int
     ) -> dict: ...
@@ -417,6 +419,11 @@ class CoreClient:
         return self._get(
             "/internal/game/users", params={"page": page, "page_size": page_size}
         )
+
+    def request_platform_nickname_refresh_all(self) -> dict:
+        response = self._client.post("/internal/game/users/platform-nickname-refreshes")
+        response.raise_for_status()
+        return response.json()
 
     def list_balance_transactions(
         self, platform_id: str, page: int, page_size: int

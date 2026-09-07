@@ -70,6 +70,12 @@ class ProfileImageCleanupClaim:
     lease_token: UUID
 
 
+@dataclass(frozen=True)
+class PlatformNicknameRefreshClaim:
+    platform_id: str
+    chatroom_id: str
+
+
 class CorePort(Protocol):
     def submit_inbound(self, message: InboundMessage) -> None: ...
 
@@ -78,6 +84,14 @@ class CorePort(Protocol):
     def sync_direct_chats(self, rooms: list[DirectChatRoom], now: datetime) -> None: ...
 
     def direct_inbound_chatroom_ids(self) -> tuple[str, ...]: ...
+
+    def claim_platform_nickname_refresh(
+        self, now: datetime
+    ) -> PlatformNicknameRefreshClaim | None: ...
+
+    def complete_platform_nickname_refresh(
+        self, platform_id: str, nickname: str | None, now: datetime
+    ) -> bool: ...
 
     def group_chat_targets(self) -> tuple[GroupChatTarget, ...]: ...
 
@@ -269,6 +283,28 @@ class CoreClient:
     def direct_inbound_chatroom_ids(self) -> tuple[str, ...]:
         data = self._get("/internal/direct-inbound/rooms")
         return tuple(data["chatroom_ids"])
+
+    def claim_platform_nickname_refresh(
+        self, now: datetime
+    ) -> PlatformNicknameRefreshClaim | None:
+        data = self._post(
+            "/internal/platform-nickname-refreshes/claim",
+            {"now": now.isoformat()},
+        )
+        if data is None:
+            return None
+        return PlatformNicknameRefreshClaim(
+            platform_id=data["platform_id"], chatroom_id=data["chatroom_id"]
+        )
+
+    def complete_platform_nickname_refresh(
+        self, platform_id: str, nickname: str | None, now: datetime
+    ) -> bool:
+        data = self._post(
+            f"/internal/platform-nickname-refreshes/{platform_id}/completed",
+            {"nickname": nickname, "now": now.isoformat()},
+        )
+        return bool(data["accepted"])
 
     def group_chat_targets(self) -> tuple[GroupChatTarget, ...]:
         return tuple(

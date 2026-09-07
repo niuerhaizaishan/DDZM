@@ -137,6 +137,31 @@ def test_personal_profile_reply_templates_are_managed(repository):
     }
 
 
+def test_platform_nickname_refresh_uses_latest_group_room_and_caches_result(
+    repository, now
+):
+    repository.create_user("nickname-user", "公司名称", now, 0)
+    repository.accept_inbound(
+        InboundMessage(
+            "nickname-message", "nickname-user", "你好", now,
+            source_type="group", chatroom_id="nickname-room",
+        )
+    )
+
+    claim = repository.claim_platform_nickname_refresh(now)
+
+    assert claim is not None
+    assert claim.platform_id == "nickname-user"
+    assert claim.chatroom_id == "nickname-room"
+    repository.complete_platform_nickname_refresh(
+        claim.platform_id, "平台昵称", now
+    )
+    user = repository.find_user("nickname-user")
+    assert user is not None
+    assert user.platform_nickname == "平台昵称"
+    assert user.platform_nickname_synced_at == now
+
+
 def test_random_event_settings_accept_personal_profile_commands(repository):
     current = repository.get_random_event_settings()
     updated = repository.set_random_event_settings(

@@ -2125,6 +2125,13 @@ class UserRecord(Base):
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     platform_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     display_name: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    platform_nickname: Mapped[str | None] = mapped_column(String(64))
+    platform_nickname_synced_at: Mapped[datetime | None] = mapped_column(
+        BeijingDateTime
+    )
+    platform_nickname_attempted_at: Mapped[datetime | None] = mapped_column(
+        BeijingDateTime
+    )
     employee_number: Mapped[int] = mapped_column(Integer, unique=True, nullable=False)
     balance: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     profile_text: Mapped[str] = mapped_column(

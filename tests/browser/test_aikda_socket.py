@@ -83,6 +83,8 @@ class FakeRequest:
         self.calls.append((procedure, payload))
         if procedure == "user.getMe":
             return self.profile
+        if procedure == "user.getChatroomUser":
+            return self.member_profile
         if procedure == "chatroom.addBot":
             return {"success": True}
         if procedure == "chat.listAll":
@@ -257,6 +259,23 @@ def test_add_bot_uses_the_logged_in_account_and_target_chatroom():
 
     assert request.calls == [
         ("chatroom.addBot", {"chatroomId": "target-room", "botId": "long-message-bot"})
+    ]
+
+
+def test_lookup_platform_nickname_uses_chatroom_member_profile():
+    request = FakeRequest()
+    request.member_profile = {"id": "member-1", "nickname": "平台小雪"}
+    gateway = AikdaSocketGateway(
+        TARGET_URL,
+        token_provider=lambda: "token",
+        request=request,
+        socket_factory=FakeSocket,
+        clock=lambda: NOW,
+    )
+
+    assert gateway.lookup_platform_nickname("room-2", "member-1") == "平台小雪"
+    assert request.calls == [
+        ("user.getChatroomUser", {"chatroomId": "room-2", "userId": "member-1"})
     ]
 
 

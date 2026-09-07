@@ -386,6 +386,7 @@ class SetCommandTemplateRequest(ApiModel):
 class UserResponse(ApiModel):
     platform_id: str
     display_name: str
+    platform_nickname: str | None
     employee_number: int
     balance: int
     joined_at: datetime
@@ -697,6 +698,24 @@ class ProfileImageCleanupClaimResponse(ApiModel):
     id: UUID
     temp_path: str
     lease_token: UUID
+
+
+class PlatformNicknameRefreshClaimRequest(ApiModel):
+    now: AwareDatetime
+
+
+class PlatformNicknameRefreshClaimResponse(ApiModel):
+    platform_id: str
+    chatroom_id: str
+
+
+class PlatformNicknameRefreshQueueResponse(ApiModel):
+    queued: int = Field(ge=0)
+
+
+class CompletePlatformNicknameRefreshRequest(ApiModel):
+    nickname: str | None = Field(default=None, max_length=64)
+    now: AwareDatetime
 
 
 class CompleteProfileImageUploadRequest(ApiModel):

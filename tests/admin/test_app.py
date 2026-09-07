@@ -56,6 +56,7 @@ class FakeCore:
         ]
     )
     employees: list[dict] = field(default_factory=list)
+    platform_nickname_refresh_requests: int = 0
     balance_ledgers: dict[str, dict] = field(default_factory=dict)
     balance_ledger_requests: list[tuple[str, int, int]] = field(default_factory=list)
     employee_group_messages: dict[str, dict] = field(default_factory=dict)
@@ -525,6 +526,10 @@ class FakeCore:
 
     def list_game_users(self, page, page_size):
         return _page(self.employees, page, page_size)
+
+    def request_platform_nickname_refresh_all(self):
+        self.platform_nickname_refresh_requests += 1
+        return {"queued": len(self.employees)}
 
     def list_balance_transactions(self, platform_id, page, page_size):
         self.balance_ledger_requests.append((platform_id, page, page_size))
@@ -1723,6 +1728,14 @@ def test_admin_proxies_paginated_employee_and_item_pages(client, headers, core):
     assert employees.json()["items"][0]["employee_number"] == 21
     assert items.json()["page_size"] == 20
     assert items.json()["items"][0]["name"] == "午休券20"
+
+
+def test_admin_can_queue_platform_nickname_refresh(client, headers, core):
+    response = client.post("/api/game/users/platform-nickname-refreshes", headers=headers)
+
+    assert response.status_code == 202
+    assert response.json() == {"queued": 0}
+    assert core.platform_nickname_refresh_requests == 1
 
 
 def test_admin_proxies_shop_activity_and_controls(client, headers):
@@ -3269,6 +3282,15 @@ def test_admin_script_supports_management_filters_and_status_badges():
     assert 'data-list-filter="random-event-scenes"' in Path("src/dzmm_bot/admin/templates/index.html").read_text()
     assert 'data-list-page-size="shop"' in Path("src/dzmm_bot/admin/templates/index.html").read_text()
     assert 'data-list-page-size="ranks"' in Path("src/dzmm_bot/admin/templates/index.html").read_text()
+
+
+def test_admin_employee_ui_supports_platform_nickname_refresh():
+    page = Path("src/dzmm_bot/admin/templates/index.html").read_text()
+    script = Path("src/dzmm_bot/admin/static/admin.js").read_text()
+
+    assert 'id="refresh-platform-nicknames"' in page
+    assert "employee.platform_nickname" in script
+    assert '"/api/game/users/platform-nickname-refreshes"' in script
 
 
 def test_admin_updates_random_event_scene_with_named_events(client, headers):

@@ -216,6 +216,8 @@ class BrowserWorker:
 
         self._run_daily_jobs(now)
 
+        self._process_platform_nickname_refresh(gateway)
+
         recall = self._core.claim_outbound_recall(
             self._worker_id, self._clock(), self._lease_seconds
         )
@@ -248,6 +250,20 @@ class BrowserWorker:
             self._core.run_daily_jobs(now)
         except Exception:
             _LOGGER.exception("daily jobs failed")
+
+    def _process_platform_nickname_refresh(self, gateway: ChatGateway) -> None:
+        try:
+            claim = self._core.claim_platform_nickname_refresh(self._clock())
+            if claim is None:
+                return
+            nickname = gateway.lookup_platform_nickname(
+                claim.chatroom_id, claim.platform_id
+            )
+            self._core.complete_platform_nickname_refresh(
+                claim.platform_id, nickname, self._clock()
+            )
+        except Exception:
+            _LOGGER.warning("platform nickname refresh failed", exc_info=True)
 
     def _process_profile_image_upload(self, gateway: ChatGateway) -> None:
         claim = self._core.claim_profile_image_upload(

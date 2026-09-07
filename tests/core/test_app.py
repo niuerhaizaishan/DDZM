@@ -104,6 +104,44 @@ def test_internal_inbound_is_idempotent(client, headers, payload):
     assert second.json()["message_id"] == first.json()["message_id"]
 
 
+def test_game_users_expose_platform_nickname(app_context, headers):
+    app_context.repository.create_user("nickname-api", "公司名称", NOW, 0)
+    app_context.repository.complete_platform_nickname_refresh(
+        "nickname-api", "平台昵称", NOW
+    )
+
+    response = app_context.client.get("/internal/game/users", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["platform_nickname"] == "平台昵称"
+
+
+def test_platform_nickname_refresh_internal_endpoints(app_context, headers):
+    app_context.repository.create_user("nickname-worker", "公司名称", NOW, 0)
+    app_context.repository.accept_inbound(
+        InboundMessage(
+            "nickname-worker-message", "nickname-worker", "你好", NOW,
+            source_type="group", chatroom_id="nickname-worker-room",
+        )
+    )
+
+    claimed = app_context.client.post(
+        "/internal/platform-nickname-refreshes/claim",
+        headers=headers, json={"now": NOW.isoformat()},
+    )
+
+    assert claimed.status_code == 200
+    assert claimed.json() == {
+        "platform_id": "nickname-worker", "chatroom_id": "nickname-worker-room",
+    }
+    completed = app_context.client.post(
+        "/internal/platform-nickname-refreshes/nickname-worker/completed",
+        headers=headers,
+        json={"nickname": "平台昵称", "now": NOW.isoformat()},
+    )
+    assert completed.json() == {"accepted": True}
+
+
 def test_group_performance_switch_round_trip(app_context, headers) -> None:
     app_context.repository.bootstrap_primary_group(
         "https://www.aikda.com/chat?c=primary-room", NOW

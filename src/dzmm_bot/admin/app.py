@@ -580,6 +580,15 @@ def create_app(
     ) -> dict:
         return core.list_game_users(page, page_size)
 
+    @app.post(
+        "/api/game/users/platform-nickname-refreshes",
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    def request_platform_nickname_refresh_all(
+        _: Annotated[None, Depends(authorize)],
+    ) -> dict:
+        return _relay_core(core.request_platform_nickname_refresh_all)
+
     @app.get("/api/game/users/{platform_id}/balance-transactions")
     def balance_transactions(
         platform_id: str,

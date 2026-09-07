@@ -62,6 +62,10 @@ from .api_models import (
     ProfileImageCleanupClaimResponse,
     ProfileImageUploadClaimResponse,
     ProfileImageUploadStatusResponse,
+    PlatformNicknameRefreshClaimRequest,
+    PlatformNicknameRefreshClaimResponse,
+    PlatformNicknameRefreshQueueResponse,
+    CompletePlatformNicknameRefreshRequest,
     ProfileSettingsResponse,
     PerformanceExtensionResponse,
     PerformanceAuditResponse,
@@ -752,6 +756,36 @@ def create_app(
         )
 
     @app.post(
+        "/internal/platform-nickname-refreshes/claim",
+        response_model=PlatformNicknameRefreshClaimResponse | None,
+    )
+    def claim_platform_nickname_refresh(
+        request: PlatformNicknameRefreshClaimRequest,
+        _: Annotated[None, Depends(authorize)],
+    ) -> PlatformNicknameRefreshClaimResponse | None:
+        claim = repository.claim_platform_nickname_refresh(request.now)
+        if claim is None:
+            return None
+        return PlatformNicknameRefreshClaimResponse(
+            platform_id=claim.platform_id, chatroom_id=claim.chatroom_id
+        )
+
+    @app.post(
+        "/internal/platform-nickname-refreshes/{platform_id}/completed",
+        response_model=AcceptedResponse,
+    )
+    def complete_platform_nickname_refresh(
+        platform_id: str,
+        request: CompletePlatformNicknameRefreshRequest,
+        _: Annotated[None, Depends(authorize)],
+    ) -> AcceptedResponse:
+        return AcceptedResponse(
+            accepted=repository.complete_platform_nickname_refresh(
+                platform_id, request.nickname, request.now
+            )
+        )
+
+    @app.post(
         "/internal/game/users/{platform_id}/profile-image-uploads",
         response_model=ProfileImageUploadStatusResponse,
         status_code=status.HTTP_201_CREATED,
@@ -1245,6 +1279,17 @@ def create_app(
             page_size=page_size,
             total=total,
             pages=(total + page_size - 1) // page_size,
+        )
+
+    @app.post(
+        "/internal/game/users/platform-nickname-refreshes",
+        response_model=PlatformNicknameRefreshQueueResponse,
+    )
+    def request_platform_nickname_refresh_all(
+        _: Annotated[None, Depends(authorize)],
+    ) -> PlatformNicknameRefreshQueueResponse:
+        return PlatformNicknameRefreshQueueResponse(
+            queued=repository.request_platform_nickname_refresh_all()
         )
 
     @app.get(
@@ -3323,6 +3368,7 @@ def _user_response(profile) -> UserResponse:
     return UserResponse(
         platform_id=profile.user.platform_id,
         display_name=profile.user.display_name,
+        platform_nickname=profile.user.platform_nickname,
         employee_number=profile.user.employee_number,
         balance=profile.user.balance,
         joined_at=profile.user.joined_at,

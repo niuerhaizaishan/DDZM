@@ -60,6 +60,8 @@ class FakeGateway:
     close_count: int = 0
     close_error: Exception | None = None
     added_bots: list[tuple[str, str]] = field(default_factory=list)
+    nickname_lookups: list[tuple[str, str]] = field(default_factory=list)
+    nickname: str | None = "平台昵称"
 
     def configure_group_rooms(self, targets):
         self.configured_groups = targets
@@ -149,6 +151,10 @@ class FakeGateway:
     def add_bot_to_chatroom(self, chatroom_id, bot_id):
         self.added_bots.append((chatroom_id, bot_id))
 
+    def lookup_platform_nickname(self, chatroom_id, platform_user_id):
+        self.nickname_lookups.append((chatroom_id, platform_user_id))
+        return self.nickname
+
 @dataclass
 class FakeSession:
     gateway: FakeGateway
@@ -231,6 +237,8 @@ class FakeCore:
     group_targets: tuple[GroupChatTarget, ...] = ()
     group_runtime_updates: list[tuple] = field(default_factory=list)
     confirm_error: Exception | None = None
+    nickname_claims: list = field(default_factory=list)
+    nickname_completions: list[tuple] = field(default_factory=list)
 
     def group_chat_targets(self):
         return self.group_targets
@@ -330,6 +338,13 @@ class FakeCore:
     def direct_inbound_chatroom_ids(self):
         return self.direct_rooms_to_read
 
+    def claim_platform_nickname_refresh(self, now):
+        return self.nickname_claims.pop(0) if self.nickname_claims else None
+
+    def complete_platform_nickname_refresh(self, platform_id, nickname, now):
+        self.nickname_completions.append((platform_id, nickname, now))
+        return True
+
     def claim_profile_image_upload(self, worker_id, now, lease_seconds):
         return self.upload_tasks.pop(0) if self.upload_tasks else None
 
@@ -384,6 +399,22 @@ def test_worker_submits_each_platform_message_once(context):
     worker.run_once()
 
     assert core.submitted_ids == ["p-1"]
+
+
+def test_worker_refreshes_one_platform_nickname_without_waiting_for_inbound(
+    context,
+):
+    worker, gateway, _, _, core, _ = context
+    core.nickname_claims.append(
+        type("NicknameClaim", (), {
+            "platform_id": "employee-1", "chatroom_id": "group-1",
+        })()
+    )
+
+    worker.run_once()
+
+    assert gateway.nickname_lookups == [("group-1", "employee-1")]
+    assert core.nickname_completions == [("employee-1", "平台昵称", NOW)]
 
 
 def test_worker_adds_the_configured_long_message_bot_to_a_group():

@@ -1932,9 +1932,9 @@ async function loadEmployees(page = employeePage) {
   const settings = gameSettings || await loadSettings();
   const employees = await requestGame(`/api/game/users?page=${page}&page_size=${pageSizeFor("employees")}`);
   employeePage = employees.page;
-  const filtered = filterList("employees", employees.items, (employee) => `${employee.display_name} ${formatEmployeeNumber(employee.employee_number)} ${employee.employee_number} ${employee.rank_name || ""} ${employee.department_name || ""}`);
+  const filtered = filterList("employees", employees.items, (employee) => `${employee.display_name} ${employee.platform_nickname || ""} ${formatEmployeeNumber(employee.employee_number)} ${employee.employee_number} ${employee.rank_name || ""} ${employee.department_name || ""}`);
   document.querySelector("#employee-list").innerHTML = filtered.map((employee) => `
-    <article class="data-row"><div><b>${escapeHtml(employee.display_name)}</b><small>工号：${formatEmployeeNumber(employee.employee_number)} · ${escapeHtml(employee.rank_name || "职位未分配")}（${escapeHtml(employee.rank_level_label || "—")}）· ${escapeHtml(employee.department_name || "未分配部门")}</small><small>入职：${formatHeartbeat(employee.joined_at)}</small></div><div class="command-actions"><strong>${employee.balance} ${escapeHtml(settings.currency_name)}</strong><button class="secondary" data-balance-ledger="${escapeHtml(employee.platform_id)}" type="button">摸鱼币流水</button><button class="secondary" data-employee-group-messages="${escapeHtml(employee.platform_id)}" type="button">群聊记录</button><button class="secondary" data-personal-profile="${escapeHtml(employee.platform_id)}" data-personal-profile-name="${escapeHtml(employee.display_name)}" type="button">档案</button><button class="secondary" data-ai-memory="${escapeHtml(employee.platform_id)}" data-ai-memory-name="${escapeHtml(employee.display_name)}" type="button">AI 记忆</button>${identity?.role === "super_admin" ? `<button class="secondary" data-board-member="${escapeHtml(employee.platform_id)}" data-board-active="${employee.rank_name === "核心董事会"}" type="button">${employee.rank_name === "核心董事会" ? "撤销董事会" : "授予董事会"}</button>` : ""}</div></article>`).join("") || "<p class=\"muted\">还没有员工入职。</p>";
+    <article class="data-row"><div><b>${escapeHtml(employee.display_name)}</b><small>平台昵称：${escapeHtml(employee.platform_nickname || "暂未获取")}</small><small>工号：${formatEmployeeNumber(employee.employee_number)} · ${escapeHtml(employee.rank_name || "职位未分配")}（${escapeHtml(employee.rank_level_label || "—")}）· ${escapeHtml(employee.department_name || "未分配部门")}</small><small>入职：${formatHeartbeat(employee.joined_at)}</small></div><div class="command-actions"><strong>${employee.balance} ${escapeHtml(settings.currency_name)}</strong><button class="secondary" data-balance-ledger="${escapeHtml(employee.platform_id)}" type="button">摸鱼币流水</button><button class="secondary" data-employee-group-messages="${escapeHtml(employee.platform_id)}" type="button">群聊记录</button><button class="secondary" data-personal-profile="${escapeHtml(employee.platform_id)}" data-personal-profile-name="${escapeHtml(employee.display_name)}" type="button">档案</button><button class="secondary" data-ai-memory="${escapeHtml(employee.platform_id)}" data-ai-memory-name="${escapeHtml(employee.display_name)}" type="button">AI 记忆</button>${identity?.role === "super_admin" ? `<button class="secondary" data-board-member="${escapeHtml(employee.platform_id)}" data-board-active="${employee.rank_name === "核心董事会"}" type="button">${employee.rank_name === "核心董事会" ? "撤销董事会" : "授予董事会"}</button>` : ""}</div></article>`).join("") || "<p class=\"muted\">还没有员工入职。</p>";
   renderPagination(document.querySelector("#employee-pagination"), employees, "位员工", loadEmployees);
 }
 
@@ -2384,6 +2384,14 @@ document.querySelector("#cancel-login").addEventListener("click", async (event) 
   }
 });
 document.querySelector("#edit-settings").addEventListener("click", () => void openSettingsModal());
+document.querySelector("#refresh-platform-nicknames").addEventListener("click", async (event) => {
+  try {
+    const result = await runMutation(event.currentTarget, "已加入队列…", () => requestGame("/api/game/users/platform-nickname-refreshes", {method: "POST"}));
+    setResult(`已将 ${result.queued} 位员工加入平台昵称同步队列。`, "success");
+  } catch (error) {
+    setResult(`同步平台昵称失败（${error.message}）`, "error");
+  }
+});
 document.querySelector("#edit-profile-settings").addEventListener("click", () => void openProfileSettingsModal());
 document.querySelector("#edit-activity-settings").addEventListener("click", () => void openActivitySettingsModal());
 document.querySelector("#edit-number-bomb-settings").addEventListener("click", () => void openNumberBombSettingsModal());

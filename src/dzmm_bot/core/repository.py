@@ -714,6 +714,12 @@ class ProfileImageCleanupClaim:
 
 
 @dataclass(frozen=True)
+class PlatformNicknameRefreshClaim:
+    platform_id: str
+    chatroom_id: str
+
+
+@dataclass(frozen=True)
 class RandomEventSettings:
     schedule_times: list[str]
     signup_notice_template: str
@@ -24176,6 +24182,79 @@ class CoreRepository:
             return list(
                 session.scalars(select(UserRecord).order_by(UserRecord.joined_at))
             )
+
+    def claim_platform_nickname_refresh(
+        self, now: datetime
+    ) -> PlatformNicknameRefreshClaim | None:
+        refresh_before = now - timedelta(days=7)
+        retry_before = now - timedelta(minutes=5)
+        with self._session() as session:
+            candidates = list(
+                session.scalars(
+                    select(UserRecord)
+                    .where(
+                        or_(
+                            UserRecord.platform_nickname_synced_at.is_(None),
+                            UserRecord.platform_nickname_synced_at <= refresh_before,
+                        ),
+                        or_(
+                            UserRecord.platform_nickname_attempted_at.is_(None),
+                            UserRecord.platform_nickname_attempted_at <= retry_before,
+                        ),
+                    )
+                    .order_by(
+                        UserRecord.platform_nickname_synced_at.is_not(None),
+                        UserRecord.joined_at,
+                    )
+                    .with_for_update(skip_locked=True)
+                    .limit(20)
+                )
+            )
+            for user in candidates:
+                chatroom_id = session.scalar(
+                    select(InboundRecord.chatroom_id)
+                    .where(
+                        InboundRecord.sender_platform_id == user.platform_id,
+                        InboundRecord.source_type == "group",
+                        InboundRecord.chatroom_id.is_not(None),
+                    )
+                    .order_by(InboundRecord.received_at.desc(), InboundRecord.id.desc())
+                    .limit(1)
+                )
+                user.platform_nickname_attempted_at = now
+                if isinstance(chatroom_id, str) and chatroom_id:
+                    return PlatformNicknameRefreshClaim(
+                        platform_id=user.platform_id,
+                        chatroom_id=chatroom_id,
+                    )
+            return None
+
+    def complete_platform_nickname_refresh(
+        self, platform_id: str, nickname: str | None, now: datetime
+    ) -> bool:
+        normalized = nickname.strip()[:64] if isinstance(nickname, str) else ""
+        with self._session() as session:
+            user = session.scalar(
+                select(UserRecord)
+                .where(UserRecord.platform_id == platform_id)
+                .with_for_update()
+            )
+            if user is None:
+                return False
+            user.platform_nickname = normalized or None
+            user.platform_nickname_synced_at = now
+            user.platform_nickname_attempted_at = now
+            return True
+
+    def request_platform_nickname_refresh_all(self) -> int:
+        with self._session() as session:
+            result = session.execute(
+                update(UserRecord).values(
+                    platform_nickname_synced_at=None,
+                    platform_nickname_attempted_at=None,
+                )
+            )
+            return int(result.rowcount or 0)
 
     @staticmethod
     def _ensure_organization_defaults(
