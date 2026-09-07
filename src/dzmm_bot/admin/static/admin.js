@@ -513,7 +513,7 @@ function renderSettings(settings) {
   document.querySelector("#settings-card").innerHTML = `
     <article><span>货币名称</span><strong>${escapeHtml(settings.currency_name)}</strong><small>余额、打卡和商店的计价单位</small></article>
     <article><span>入职初始余额</span><strong>${settings.onboarding_bonus}</strong><small>仅影响之后新入职的员工</small></article>
-    <article><span>每日打卡奖励</span><strong>${settings.checkin_reward}</strong><small>${escapeHtml(settings.reset_time_label)} 重置</small></article>
+    <article><span>默认打卡奖励</span><strong>${settings.checkin_reward}</strong><small>现有职位奖励请在职位配置中设置</small></article>
     <article><span>每周全勤奖</span><strong>${settings.weekly_attendance_reward}</strong><small>上周全勤于周一自动入账</small></article>`;
 }
 
@@ -1943,6 +1943,7 @@ function openRankModal(rank) {
   document.querySelector("#rank-modal-title").textContent = `编辑职位：${rank.name}`;
   document.querySelector("#rank-name").value = rank.name;
   document.querySelector("#rank-promotion-price").value = rank.promotion_price;
+  document.querySelector("#rank-checkin-reward").value = rank.checkin_reward;
   document.querySelector("#rank-vote-weight").value = rank.vote_weight;
   document.querySelector("#rank-game-limit").value = rank.multiplayer_game_limit;
   document.querySelector("#rank-group-management").checked = rank.has_group_management;
@@ -1978,7 +1979,7 @@ function renderRanks(ranks) {
   );
   rankPage = pageData.page;
   document.querySelector("#rank-list").innerHTML = pageData.items.map((rank) => `
-    <article class="data-row"><div><b>${escapeHtml(rank.name)}（${escapeHtml(rank.level_label)}）</b><small>${statusBadge(rank.enabled ? "已启用" : "已停用", rank.enabled ? "success" : "warning")}</small><small>晋升价格 ${rank.promotion_price} · 投票权益 ${rank.vote_weight} · 多人小游戏 ${rank.multiplayer_game_limit < 0 ? "不限" : `${rank.multiplayer_game_limit} 次`}</small><small>${rank.has_group_management ? "显示群内管理资格" : "无群内管理资格"}</small></div><button class="secondary" data-rank="${escapeHtml(JSON.stringify(rank))}" type="button">编辑</button></article>`).join("") || "<p class=\"muted\">暂无符合条件的职位。</p>";
+    <article class="data-row"><div><b>${escapeHtml(rank.name)}（${escapeHtml(rank.level_label)}）</b><small>${statusBadge(rank.enabled ? "已启用" : "已停用", rank.enabled ? "success" : "warning")}</small><small>晋升价格 ${rank.promotion_price} · 每日打卡 ${rank.checkin_reward} · 投票权益 ${rank.vote_weight} · 多人小游戏 ${rank.multiplayer_game_limit < 0 ? "不限" : `${rank.multiplayer_game_limit} 次`}</small><small>${rank.has_group_management ? "显示群内管理资格" : "无群内管理资格"}</small></div><button class="secondary" data-rank="${escapeHtml(JSON.stringify(rank))}" type="button">编辑</button></article>`).join("") || "<p class=\"muted\">暂无符合条件的职位。</p>";
 }
 
 function renderDepartments(departments) {
@@ -2638,6 +2639,7 @@ rankModal.addEventListener("click", async (event) => {
   const payload = {
     name: document.querySelector("#rank-name").value.trim(),
     promotion_price: Number(document.querySelector("#rank-promotion-price").value),
+    checkin_reward: Number(document.querySelector("#rank-checkin-reward").value),
     vote_weight: Number(document.querySelector("#rank-vote-weight").value),
     multiplayer_game_limit: Number(document.querySelector("#rank-game-limit").value),
     has_group_management: document.querySelector("#rank-group-management").checked,

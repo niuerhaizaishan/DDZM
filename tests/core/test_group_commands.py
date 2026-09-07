@@ -3279,6 +3279,44 @@ def test_invalid_persisted_template_falls_back_after_checkin_awards_balance():
         assert session.scalar(select(UserRecord)).balance == 5
 
 
+def test_checkin_uses_the_configured_reward_for_each_rank():
+    from dzmm_bot.core.schema import UserRecord
+
+    service, repository, factory = _service()
+    received_at = datetime(2026, 8, 5, 2, 0, tzinfo=UTC)
+    intern_rank, employee_rank = repository.list_ranks()[:2]
+    repository.update_rank(
+        intern_rank.id,
+        name=intern_rank.name,
+        promotion_price=intern_rank.promotion_price,
+        vote_weight=intern_rank.vote_weight,
+        multiplayer_game_limit=intern_rank.multiplayer_game_limit,
+        has_group_management=intern_rank.has_group_management,
+        enabled=intern_rank.enabled,
+        checkin_reward=2,
+    )
+    repository.update_rank(
+        employee_rank.id,
+        name=employee_rank.name,
+        promotion_price=employee_rank.promotion_price,
+        vote_weight=employee_rank.vote_weight,
+        multiplayer_game_limit=employee_rank.multiplayer_game_limit,
+        has_group_management=employee_rank.has_group_management,
+        enabled=employee_rank.enabled,
+        checkin_reward=8,
+    )
+    repository.create_user("intern", "实习生", received_at, 0)
+    employee, _ = repository.create_user("employee", "正式员工", received_at, 0)
+    with factory.begin() as session:
+        session.get(UserRecord, employee.id).rank_id = employee_rank.id
+
+    _receive(service, "checkin-intern", "intern", "/打卡", received_at)
+    assert _latest_reply(factory) == "打卡成功，领取 2 摸鱼币。当前余额：2 摸鱼币。"
+
+    _receive(service, "checkin-employee", "employee", "/打卡", received_at)
+    assert _latest_reply(factory) == "打卡成功，领取 8 摸鱼币。当前余额：8 摸鱼币。"
+
+
 def test_help_lists_only_enabled_commands_and_uses_its_template():
     """Fails if help does not reflect the command library or its template."""
     service, repository, factory = _service()

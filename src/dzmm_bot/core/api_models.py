@@ -438,6 +438,7 @@ class RankResponse(ApiModel):
     name: str
     level_label: str
     promotion_price: int
+    checkin_reward: int
     vote_weight: int
     multiplayer_game_limit: int
     has_group_management: bool
@@ -448,6 +449,7 @@ class RankResponse(ApiModel):
 class UpdateRankRequest(ApiModel):
     name: str = Field(min_length=1, max_length=64)
     promotion_price: int = Field(ge=0, le=99999)
+    checkin_reward: int = Field(ge=0, le=999)
     vote_weight: int = Field(ge=0, le=99)
     multiplayer_game_limit: int = Field(ge=-1, le=999)
     has_group_management: bool

@@ -4046,7 +4046,7 @@ class CoreRepository:
             activity = self.get_activity_settings()
             lines.extend((
                 f"当前货币：{settings.currency_name}；当前余额：{profile.user.balance if profile else '未知'}",
-                f"入职奖励 {settings.onboarding_bonus}；打卡奖励 {settings.checkin_reward}；每周全勤奖励 {settings.weekly_attendance_reward}",
+                f"入职奖励 {settings.onboarding_bonus}；当前职位打卡奖励 {profile.rank.checkin_reward if profile else '未知'}；每周全勤奖励 {settings.weekly_attendance_reward}",
                 "活跃度奖励：" + "、".join(f"LV{rule.level}={rule.reward}" for rule in activity.rules),
             ))
         if "departments" in topic_set:
@@ -4083,7 +4083,10 @@ class CoreRepository:
                         DailyActivityRecord.user_id == profile.user.id,
                         DailyActivityRecord.activity_date == now.astimezone(BEIJING).date(),
                     )) or 0)
-            lines.append(f"今日打卡：{'已完成' if checked_in else '未完成'}；打卡奖励 {settings.checkin_reward}")
+            lines.append(
+                f"今日打卡：{'已完成' if checked_in else '未完成'}；"
+                f"当前职位打卡奖励 {profile.rank.checkin_reward if profile else '未知'}"
+            )
             lines.append(f"今日有效发言字符 {activity_chars}；活跃规则：" + "、".join(
                 f"LV{rule.level}需 {rule.character_threshold} 字奖 {rule.reward}" for rule in activity.rules
             ))
@@ -22371,10 +22374,14 @@ class CoreRepository:
                     )
                 else:
                     activity.character_count = character_count
-            for checkin in session.scalars(
-                select(DailyCheckinRecord).where(
-                    DailyCheckinRecord.checkin_date == now.date()
+            for checkin, checkin_reward in session.execute(
+                select(
+                    DailyCheckinRecord,
+                    func.coalesce(RankRecord.checkin_reward, settings.checkin_reward),
                 )
+                .join(UserRecord, UserRecord.id == DailyCheckinRecord.user_id)
+                .outerjoin(RankRecord, RankRecord.id == UserRecord.rank_id)
+                .where(DailyCheckinRecord.checkin_date == now.date())
             ):
                 income_recorded = session.scalar(
                     select(BalanceTransactionRecord.id).where(
@@ -22391,7 +22398,7 @@ class CoreRepository:
                         BalanceTransactionRecord(
                             id=uuid4(),
                             user_id=checkin.user_id,
-                            amount=settings.checkin_reward,
+                            amount=checkin_reward,
                             source="checkin_backfill",
                             occurred_at=checkin.checked_in_at,
                         )
@@ -23371,6 +23378,7 @@ class CoreRepository:
         *,
         name: str,
         promotion_price: int,
+        checkin_reward: int,
         vote_weight: int,
         multiplayer_game_limit: int,
         has_group_management: bool,
@@ -23379,6 +23387,8 @@ class CoreRepository:
         normalized_name = name.strip()
         if not normalized_name:
             raise ValueError("职位名称不能为空")
+        if not 0 <= checkin_reward <= 999:
+            raise ValueError("职位打卡奖励需在 0 至 999 之间")
         with self._session() as session:
             self._ensure_organization_defaults(session)
             rank = session.get(RankRecord, rank_id)
@@ -23395,6 +23405,7 @@ class CoreRepository:
                 raise ValueError("职位名称已存在")
             rank.name = normalized_name
             rank.promotion_price = promotion_price
+            rank.checkin_reward = checkin_reward
             rank.vote_weight = vote_weight
             rank.multiplayer_game_limit = multiplayer_game_limit
             rank.has_group_management = has_group_management
@@ -24156,6 +24167,12 @@ class CoreRepository:
         session: Session,
     ) -> tuple[RankRecord, DepartmentRecord]:
         if not session.scalar(select(RankRecord.id).limit(1)):
+            settings = session.get(GameSettingsRecord, 1)
+            checkin_reward = (
+                _DEFAULT_CHECKIN_REWARD
+                if settings is None
+                else settings.checkin_reward
+            )
             session.add_all(
                 [
                     RankRecord(
@@ -24163,6 +24180,7 @@ class CoreRepository:
                         name=name,
                         level_label=level_label,
                         promotion_price=promotion_price,
+                        checkin_reward=checkin_reward,
                         vote_weight=vote_weight,
                         multiplayer_game_limit=multiplayer_game_limit,
                         has_group_management=has_group_management,

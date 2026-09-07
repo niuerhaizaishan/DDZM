@@ -3298,6 +3298,7 @@ def _rank_response(record) -> RankResponse:
         name=record.name,
         level_label=record.level_label,
         promotion_price=record.promotion_price,
+        checkin_reward=record.checkin_reward,
         vote_weight=record.vote_weight,
         multiplayer_game_limit=record.multiplayer_game_limit,
         has_group_management=record.has_group_management,

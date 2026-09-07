@@ -396,9 +396,9 @@
         <label for="settings-onboarding-bonus">入职初始余额</label>
         <input id="settings-onboarding-bonus" type="number" min="0" max="999" required>
         <small class="muted">只给之后新入职的员工，不会修改现有余额。</small>
-        <label for="settings-checkin-reward">每日打卡奖励</label>
+        <label for="settings-checkin-reward">默认打卡奖励</label>
         <input id="settings-checkin-reward" type="number" min="0" max="999" required>
-        <small class="muted">每位员工每天最多领取一次，按北京时间日期重置。</small>
+        <small class="muted">仅用于初始化新职位；现有职位请在职位配置中分别设置。</small>
         <label for="settings-weekly-attendance-reward">每周全勤奖</label>
         <input id="settings-weekly-attendance-reward" type="number" min="0" max="999" required>
         <small class="muted">上一自然周每日均打卡的员工，于周一自动领取。</small>
@@ -686,7 +686,7 @@
     <div id="rank-modal" class="template-modal" role="dialog" aria-modal="true" aria-labelledby="rank-modal-title" hidden>
       <div class="template-modal-backdrop" data-close-rank-modal></div>
       <section class="template-modal-card"><div class="template-modal-heading"><div><p class="eyebrow">职位配置</p><h2 id="rank-modal-title">编辑职位</h2><p class="muted">职级顺序与等级标签固定；核心董事会不可停用。</p></div><button class="text-button" data-close-rank-modal type="button">关闭</button></div>
-        <label>职位名称<input id="rank-name" maxlength="64"></label><div class="event-input-grid"><label>晋升价格<input id="rank-promotion-price" type="number" min="0" max="99999"></label><label>投票权益<input id="rank-vote-weight" type="number" min="0" max="99"></label><label>多人小游戏次数<input id="rank-game-limit" type="number" min="-1" max="999"></label></div><label><input id="rank-group-management" type="checkbox"> 显示群内管理资格</label><label><input id="rank-enabled" type="checkbox"> 启用职位</label><div class="template-modal-actions"><button class="secondary" data-close-rank-modal type="button">取消</button><button id="save-rank" class="primary" type="button">保存职位</button></div>
+        <label>职位名称<input id="rank-name" maxlength="64"></label><div class="event-input-grid"><label>晋升价格<input id="rank-promotion-price" type="number" min="0" max="99999"></label><label>每日打卡奖励<input id="rank-checkin-reward" type="number" min="0" max="999"></label><label>投票权益<input id="rank-vote-weight" type="number" min="0" max="99"></label><label>多人小游戏次数<input id="rank-game-limit" type="number" min="-1" max="999"></label></div><label><input id="rank-group-management" type="checkbox"> 显示群内管理资格</label><label><input id="rank-enabled" type="checkbox"> 启用职位</label><div class="template-modal-actions"><button class="secondary" data-close-rank-modal type="button">取消</button><button id="save-rank" class="primary" type="button">保存职位</button></div>
       </section>
     </div>
     <div id="department-modal" class="template-modal" role="dialog" aria-modal="true" aria-labelledby="department-modal-title" hidden>

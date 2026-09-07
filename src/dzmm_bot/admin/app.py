@@ -620,6 +620,7 @@ def create_app(
         required = (
             "name",
             "promotion_price",
+            "checkin_reward",
             "vote_weight",
             "multiplayer_game_limit",
             "has_group_management",

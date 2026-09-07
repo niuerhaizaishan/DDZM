@@ -10539,7 +10539,7 @@ def test_item_page_returns_newest_records_and_total(repository, session_factory,
 def test_daily_jobs_backfill_current_day_history_and_legacy_checkin_income(
     repository, session_factory
 ):
-    from dzmm_bot.core.schema import BEIJING, DailyCheckinRecord, UserRecord
+    from dzmm_bot.core.schema import BEIJING, DailyCheckinRecord, RankRecord, UserRecord
 
     joined_at = datetime(2026, 8, 5, 9, 0, tzinfo=BEIJING)
     checkin_at = datetime(2026, 8, 5, 10, 0, tzinfo=BEIJING)
@@ -10550,6 +10550,7 @@ def test_daily_jobs_backfill_current_day_history_and_legacy_checkin_income(
     )
     with session_factory.begin() as session:
         session.get(UserRecord, user.id).balance = 5
+        session.scalar(select(RankRecord)).checkin_reward = 7
         session.add(
             DailyCheckinRecord(
                 id=uuid4(),
@@ -10562,10 +10563,10 @@ def test_daily_jobs_backfill_current_day_history_and_legacy_checkin_income(
     repository.run_daily_jobs(now)
 
     assert repository.personal_activity("u1", now).level == 1
-    assert repository.today_income(user.id, now) == 5
+    assert repository.today_income(user.id, now) == 7
     repository.run_daily_jobs(now + timedelta(minutes=1))
     assert repository.find_user("u1").balance == 5
-    assert repository.today_income(user.id, now) == 5
+    assert repository.today_income(user.id, now) == 7
 
 
 def test_activity_settings_reject_non_increasing_thresholds(repository):

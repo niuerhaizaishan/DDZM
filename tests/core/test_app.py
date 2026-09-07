@@ -1565,6 +1565,20 @@ def test_game_management_lists_commands_employees_and_shop_items(client, headers
 
 def test_rank_department_and_promotion_management_endpoints(app_context, client, headers):
     ranks = client.get("/internal/game/ranks", headers=headers)
+    rank = ranks.json()[0]
+    updated_rank = client.patch(
+        f"/internal/game/ranks/{rank['id']}",
+        headers=headers,
+        json={
+            "name": rank["name"],
+            "promotion_price": rank["promotion_price"],
+            "checkin_reward": 8,
+            "vote_weight": rank["vote_weight"],
+            "multiplayer_game_limit": rank["multiplayer_game_limit"],
+            "has_group_management": rank["has_group_management"],
+            "enabled": rank["enabled"],
+        },
+    )
     departments = client.get(
         "/internal/game/departments?page=1&page_size=20", headers=headers
     )
@@ -1594,6 +1608,8 @@ def test_rank_department_and_promotion_management_endpoints(app_context, client,
 
     assert ranks.status_code == 200
     assert ranks.json()[0]["name"] == "实习生"
+    assert updated_rank.status_code == 200
+    assert updated_rank.json()["checkin_reward"] == 8
     assert departments.status_code == 200
     assert departments.json()["items"][0]["name"] == "未分配部门"
     assert created_department.status_code == 201

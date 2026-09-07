@@ -2183,6 +2183,7 @@ class RankRecord(Base):
     name: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     level_label: Mapped[str] = mapped_column(String(16), unique=True, nullable=False)
     promotion_price: Mapped[int] = mapped_column(Integer, nullable=False)
+    checkin_reward: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
     vote_weight: Mapped[int] = mapped_column(Integer, nullable=False)
     multiplayer_game_limit: Mapped[int] = mapped_column(Integer, nullable=False)
     has_group_management: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

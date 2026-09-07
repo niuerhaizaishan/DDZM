@@ -1491,11 +1491,12 @@ class GroupCommandHandler:
         )
 
     def _check_in(self, platform_id: str, received_at) -> str:
-        employee = self._repository.find_user(platform_id)
-        if employee is None:
+        profile = self._repository.get_user_profile(platform_id)
+        if profile is None:
             return self._reply("/打卡", "not_joined", received_at)
-        settings = self._repository.get_game_settings()
-        if not self._repository.check_in(employee, received_at, settings.checkin_reward):
+        employee = profile.user
+        reward = profile.rank.checkin_reward
+        if not self._repository.check_in(employee, received_at, reward):
             return self._reply(
                 "/打卡", "already_checked_in", received_at, {"{昵称}": employee.display_name}
             )
@@ -1506,7 +1507,7 @@ class GroupCommandHandler:
             {
                 "{昵称}": employee.display_name,
                 "{余额}": employee.balance,
-                "{打卡奖励}": settings.checkin_reward,
+                "{打卡奖励}": reward,
             },
         )
 
@@ -3913,7 +3914,7 @@ class GroupCommandHandler:
                 "【基础与资产】",
                 (
                     ("/入职", "/入职 名字：登记成为员工"),
-                    ("/打卡", f"/打卡：每日领取 {settings.checkin_reward} {settings.currency_name}"),
+                    ("/打卡", "/打卡：按当前职位领取每日奖励"),
                     ("/余额", "/余额：查看当前余额"),
                     ("/修改名称", "/修改名称 新名称：修改自己的员工名称"),
                     ("/编辑档案", "/编辑档案 档案内容：更新个人档案"),
