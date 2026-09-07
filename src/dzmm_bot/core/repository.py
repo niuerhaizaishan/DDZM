@@ -21629,11 +21629,29 @@ class CoreRepository:
         performed_scene_names = set(
             session.scalars(select(RandomEventRecord.scene_name).distinct())
         )
+        planned_scene_names = set(
+            session.scalars(
+                select(RandomEventScheduleRecord.scene_name).where(
+                    RandomEventScheduleRecord.event_date == schedule.event_date,
+                    RandomEventScheduleRecord.id != schedule.id,
+                    RandomEventScheduleRecord.scene_name.is_not(None),
+                )
+            )
+        )
         unperformed_scenes = [
-            scene for scene in scenes if scene.name not in performed_scene_names
+            scene
+            for scene in scenes
+            if scene.name not in performed_scene_names
+            and scene.name not in planned_scene_names
         ]
         if unperformed_scenes:
             scenes = unperformed_scenes
+        else:
+            unplanned_scenes = [
+                scene for scene in scenes if scene.name not in planned_scene_names
+            ]
+            if unplanned_scenes:
+                scenes = unplanned_scenes
         scene = scenes[randbelow(len(scenes))]
         templates = list(
             session.scalars(

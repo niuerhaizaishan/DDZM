@@ -8334,6 +8334,28 @@ def test_random_event_schedules_are_created_only_for_enabled_groups(repository):
     }
 
 
+def test_random_event_daily_schedule_does_not_repeat_an_unstarted_scene(
+    repository, monkeypatch
+):
+    now = datetime(2026, 8, 6, 0, 0, tzinfo=BEIJING)
+    for scene_name in ("茶水间", "会议室", "休息室"):
+        repository.create_random_event_scene(
+            scene_name, "报名", ["开场"], 1, 1, [("员工", 1)]
+        )
+    repository.set_random_event_settings(
+        ["10:00", "12:00", "14:00"], "可选身份：{可选身份}", 15, 5
+    )
+    monkeypatch.setattr("dzmm_bot.core.repository.randbelow", lambda _: 0)
+
+    schedules = repository.schedule_random_events(now)
+
+    assert [schedule.scene_name for schedule in schedules] == [
+        "茶水间",
+        "会议室",
+        "休息室",
+    ]
+
+
 def test_random_event_history_is_paginated_newest_first_and_excludes_today(
     repository, session_factory
 ) -> None:
