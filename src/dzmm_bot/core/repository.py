@@ -22508,6 +22508,21 @@ class CoreRepository:
                     user, settings.weekly_attendance_reward, "weekly_attendance", now
                 )
 
+    def weekly_attendance_reward_for_user(
+        self, user_id: UUID, now: datetime
+    ) -> int | None:
+        now = now.astimezone(BEIJING)
+        if now.weekday() != 0:
+            return None
+        week_start = now.date() - timedelta(days=7)
+        with self._session() as session:
+            return session.scalar(
+                select(WeeklyAttendanceSettlementRecord.reward).where(
+                    WeeklyAttendanceSettlementRecord.user_id == user_id,
+                    WeeklyAttendanceSettlementRecord.week_start == week_start,
+                )
+            )
+
     def _enqueue_due_income_reports(self, now: datetime) -> None:
         settings = self.get_activity_settings()
         current_time = now.strftime("%H:%M")

@@ -3317,6 +3317,30 @@ def test_checkin_uses_the_configured_reward_for_each_rank():
     assert _latest_reply(factory) == "打卡成功，领取 8 摸鱼币。当前余额：8 摸鱼币。"
 
 
+def test_monday_checkin_shows_the_weekly_attendance_reward():
+    from dzmm_bot.core.schema import UserRecord
+
+    service, repository, factory = _service()
+    monday = datetime(2026, 8, 10, 9, 0, tzinfo=BEIJING)
+    employee, _ = repository.create_user(
+        "weekly-employee", "全勤员工", monday - timedelta(days=8), 0
+    )
+    formal_rank = repository.list_ranks()[1]
+    repository.set_game_settings("摸鱼币", 0, 5, 14)
+    with factory.begin() as session:
+        session.get(UserRecord, employee.id).rank_id = formal_rank.id
+    for offset in range(7, 0, -1):
+        repository.check_in(employee, monday - timedelta(days=offset), 0)
+    repository.run_daily_jobs(monday)
+
+    _receive(service, "weekly-checkin", "weekly-employee", "/打卡", monday)
+
+    assert _latest_reply(factory) == (
+        "打卡成功，领取 5 摸鱼币。当前余额：19 摸鱼币。\n"
+        "已连续打卡 7 天，获得本周全勤奖，职位是正式员工，获得 14 摸鱼币。"
+    )
+
+
 def test_help_lists_only_enabled_commands_and_uses_its_template():
     """Fails if help does not reflect the command library or its template."""
     service, repository, factory = _service()

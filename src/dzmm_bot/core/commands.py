@@ -1500,16 +1500,28 @@ class GroupCommandHandler:
             return self._reply(
                 "/打卡", "already_checked_in", received_at, {"{昵称}": employee.display_name}
             )
-        return self._reply(
+        weekly_reward = self._repository.weekly_attendance_reward_for_user(
+            employee.id, received_at
+        )
+        current_employee = self._repository.find_user(platform_id)
+        if current_employee is None:
+            raise RuntimeError("employee disappeared")
+        reply = self._reply(
             "/打卡",
             "checked_in",
             received_at,
             {
                 "{昵称}": employee.display_name,
-                "{余额}": employee.balance,
+                "{余额}": current_employee.balance,
                 "{打卡奖励}": reward,
             },
         )
+        if weekly_reward is not None:
+            reply += (
+                f"\n已连续打卡 7 天，获得本周全勤奖，职位是{profile.rank.name}，"
+                f"获得 {weekly_reward} {self._repository.get_game_settings().currency_name}。"
+            )
+        return reply
 
     def _balance(self, platform_id: str, received_at) -> str:
         employee = self._repository.find_user(platform_id)
