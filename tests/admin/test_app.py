@@ -80,6 +80,7 @@ class FakeCore:
             "onboarding_bonus": 0,
             "checkin_reward": 5,
             "weekly_attendance_reward": 5,
+            "company_story_novel_url": None,
             "reset_time_label": "北京时间 00:00",
         }
     )
@@ -1943,6 +1944,12 @@ def test_admin_proxies_game_settings(client, headers, core):
     assert updated.json()["version"] == 1
     assert core.game_settings["checkin_reward"] == 7
     assert core.game_settings["weekly_attendance_reward"] == 9
+
+
+def test_admin_game_settings_modal_includes_company_story_novel_url(client):
+    page = client.get("/").text
+
+    assert 'id="settings-company-story-novel-url"' in page
 
 
 def test_admin_proxies_profile_settings_and_employee_profile(client, headers, core):

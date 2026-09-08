@@ -25,7 +25,7 @@ _DIRECT_COMMANDS = {
     "/答案", "/继续", "/收手", "/投降", "/跳过", "/结束游戏", "/看牌", "/上场",
     "/上架暗网", "/取消上架", "/确认", "/报价", "/公开", "/不公开",
     "/查看暗网", "/登陆暗网", "/登录暗网", "/暗网", "/确认收货", "/投诉",
-    "/我的公演预约", "/取消公演预约", "/延期",
+    "/我的公演预约", "/取消公演预约", "/延期", "/公司的故事集",
 }
 _RANDOM_EVENT_INDEPENDENT_COMMANDS = {
     "/发红包", "/抢红包", "/打赏", "/余额", "/当前游戏"
@@ -413,6 +413,7 @@ class CoreService:
                             reply_index,
                             group_chat_id=group_chat_id,
                             destination_chatroom_id=destination_chatroom_id,
+                            content_type=reply.content_type,
                         )
                     else:
                         self._repository.enqueue_outbound(
@@ -422,6 +423,7 @@ class CoreService:
                             group_chat_id=group_chat_id,
                             destination_chatroom_id=destination_chatroom_id,
                             delivery_kind=reply.delivery_kind,
+                            content_type=reply.content_type,
                         )
                     continue
                 self._repository.enqueue_outbound(
@@ -434,6 +436,7 @@ class CoreService:
                     group_chat_id=group_chat_id,
                     destination_chatroom_id=destination_chatroom_id,
                     delivery_kind=reply.delivery_kind,
+                    content_type=reply.content_type,
                 )
             return ReceiveResult(stored.id, True)
 
@@ -567,6 +570,7 @@ class CoreService:
                     group_chat_id=group_chat_id,
                     destination_chatroom_id=destination,
                     delivery_kind=delivery_kind,
+                    content_type=reply.content_type,
                 )
 
 

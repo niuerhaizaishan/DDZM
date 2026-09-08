@@ -240,6 +240,33 @@ class AikdaSocketGateway:
             content["reference"] = _reference_payload(reference)
         return self._send_content(chatroom_id, content, message_id=message_id)
 
+    def send_share(
+        self, share_type: str, resource_id: str, *, message_id: str | None = None,
+        reference: MessageReference | None = None,
+    ) -> str:
+        return self.send_share_to(
+            self.chatroom_id,
+            share_type,
+            resource_id,
+            message_id=message_id,
+            reference=reference,
+        )
+
+    def send_share_to(
+        self, chatroom_id: str, share_type: str, resource_id: str,
+        *, message_id: str | None = None, reference: MessageReference | None = None,
+    ) -> str:
+        if not share_type.strip() or not resource_id.strip():
+            raise ValueError("share_type and resource_id must be nonempty")
+        content = {
+            "type": "share",
+            "shareType": share_type,
+            "resourceId": resource_id,
+        }
+        if reference is not None:
+            content["reference"] = _reference_payload(reference)
+        return self._send_content(chatroom_id, content, message_id=message_id)
+
     def send_image(
         self, image_url: str, *, alt: str = "image", message_id: str | None = None,
         reference: MessageReference | None = None,

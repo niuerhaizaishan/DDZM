@@ -504,6 +504,33 @@ _DEFAULT_RANDOM_EVENT_SIGNUP_NOTICE_TEMPLATE = (
     "可选身份：{可选身份}\n"
     "请使用 /加入 身份 报名，报名将在 {报名截止分钟} 分钟后截止。"
 )
+_COMPANY_STORY_NOVEL_URL_PATTERN = re.compile(
+    r"https?://(?:www\.)?(?:aikda\.com|dzmm\.ai)/novel/"
+    r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
+    r"(?:[?#]\S*)?",
+    re.IGNORECASE,
+)
+_UNSET = object()
+
+
+def _normalize_company_story_novel_url(value: str | None | object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("公司故事集小说链接格式不正确")
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if company_story_novel_resource_id(normalized) is None:
+        raise ValueError("公司故事集小说链接必须是 DZMM 小说链接")
+    return normalized
+
+
+def company_story_novel_resource_id(value: str | None) -> str | None:
+    if not isinstance(value, str):
+        return None
+    match = _COMPANY_STORY_NOVEL_URL_PATTERN.fullmatch(value.strip())
+    return None if match is None else match.group(1).lower()
 _DEFAULT_RANDOM_EVENT_SIGNUP_ALLOWED_COMMANDS = ("/加入", "/退出")
 _DEFAULT_RANDOM_EVENT_IN_PROGRESS_ALLOWED_COMMANDS = ("/退出",)
 _DEFAULT_RANDOM_EVENT_BLOCKED_MESSAGE = "当前有随机事件发生，监事不会处理。"
@@ -1949,6 +1976,7 @@ _COMMAND_DEFINITIONS = (
     ("/编辑档案", "/编辑档案 档案内容", "更新自己的个人档案"),
     ("/编辑档案形象", "/编辑档案形象（回复一张图片）", "更新自己的档案形象"),
     ("/我的档案", "/我的档案", "查看自己的个人档案"),
+    ("/公司的故事集", "/公司的故事集", "打开后台配置的公司故事集小说"),
     ("/发奖金", "回复发送 /发奖金 金额；/发奖金 员工名 金额；/发奖金 全部 金额", "核心董事会向单个或全部员工发放系统奖金"),
     ("/发红包", "/发红包 人数 总金额", "使用自己的摸鱼币发出随机运气红包"),
     ("/抢红包", "/抢红包", "领取当前随机运气红包"),
@@ -2871,6 +2899,7 @@ class CoreRepository:
                     onboarding_bonus=_DEFAULT_ONBOARDING_BONUS,
                     checkin_reward=_DEFAULT_CHECKIN_REWARD,
                     weekly_attendance_reward=_DEFAULT_WEEKLY_ATTENDANCE_REWARD,
+                    company_story_novel_url=None,
                 )
                 session.add(record)
                 session.flush()
@@ -22647,6 +22676,7 @@ class CoreRepository:
         onboarding_bonus: int,
         checkin_reward: int,
         weekly_attendance_reward: int,
+        company_story_novel_url: str | None | object = _UNSET,
     ) -> GameSettingsRecord:
         currency_name = currency_name.strip()
         if not 1 <= len(currency_name) <= 12:
@@ -22657,6 +22687,11 @@ class CoreRepository:
             raise ValueError("打卡奖励需在 0 至 999 之间")
         if not 0 <= weekly_attendance_reward <= 999:
             raise ValueError("每周全勤奖需在 0 至 999 之间")
+        normalized_novel_url = _UNSET
+        if company_story_novel_url is not _UNSET:
+            normalized_novel_url = _normalize_company_story_novel_url(
+                company_story_novel_url
+            )
         with self._session() as session:
             record = session.get(GameSettingsRecord, 1)
             if record is None:
@@ -22666,6 +22701,8 @@ class CoreRepository:
             record.onboarding_bonus = onboarding_bonus
             record.checkin_reward = checkin_reward
             record.weekly_attendance_reward = weekly_attendance_reward
+            if normalized_novel_url is not _UNSET:
+                record.company_story_novel_url = normalized_novel_url
             session.flush()
             return record
 
@@ -26203,6 +26240,7 @@ class CoreRepository:
         destination_chatroom_id: str | None = None,
         delivery_kind: str = "group",
         defer_for_performance: bool = False,
+        content_type: str = "text",
     ) -> OutboundRecord:
         if recall_after_seconds is not None and recall_after_seconds < 1:
             raise ValueError("撤回秒数必须为正整数")
@@ -26241,6 +26279,7 @@ class CoreRepository:
                 first_reply_index = latest_reply_index + 1
             uses_bot_group_sender = (
                 self._preserve_long_group_messages
+                and content_type == "text"
                 and recall_after_seconds is None
                 and delivery_kind == "group"
                 and requires_bot_group_sender(reply)
@@ -26250,7 +26289,7 @@ class CoreRepository:
                 if uses_bot_group_sender
                 else _outbound_reference_snapshot(inbound, destination_chatroom_id)
             )
-            replies = [reply] if self._keeps_group_reply_intact(
+            replies = [reply] if content_type != "text" or self._keeps_group_reply_intact(
                 reply,
                 recall_after_seconds=recall_after_seconds,
                 destination_chatroom_id=destination_chatroom_id,
@@ -26264,6 +26303,7 @@ class CoreRepository:
                         group_chat_id if delivery_kind == "group" else None
                     ),
                     text=text,
+                    content_type=content_type,
                     reply_index=first_reply_index + index,
                     recall_after_seconds=recall_after_seconds,
                     destination_chatroom_id=destination_chatroom_id,

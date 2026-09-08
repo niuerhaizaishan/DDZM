@@ -36,6 +36,7 @@ class FakeGateway:
     account_display_name: str | None = None
     sent: list[str] = field(default_factory=list)
     sent_to: list[tuple[str, str]] = field(default_factory=list)
+    sent_shares: list[tuple[str, str, str]] = field(default_factory=list)
     sent_images: list[tuple[str, str]] = field(default_factory=list)
     uploaded_images: list[tuple[str, str]] = field(default_factory=list)
     upload_error: Exception | None = None
@@ -105,6 +106,21 @@ class FakeGateway:
             raise self.send_error
         self.sent_to.append((chatroom_id, text))
         return f"direct-{len(self.sent_to)}"
+
+    def send_share(self, share_type, resource_id, *, message_id=None, reference=None):
+        self.sent_message_ids.append(message_id)
+        self.sent_references.append(reference)
+        self.sent_shares.append(("group-1", share_type, resource_id))
+        return f"share-{len(self.sent_shares)}"
+
+    def send_share_to(
+        self, chatroom_id, share_type, resource_id, *, message_id=None,
+        reference=None,
+    ):
+        self.sent_message_ids.append(message_id)
+        self.sent_references.append(reference)
+        self.sent_shares.append((chatroom_id, share_type, resource_id))
+        return f"share-{len(self.sent_shares)}"
 
     def send_image(self, image_url, *, alt="image", message_id=None, reference=None):
         self.sent_message_ids.append(message_id)
@@ -577,6 +593,7 @@ def test_worker_dispatches_the_random_event_submission_entry_from_a_new_direct_r
         "/登陆暗网",
         "/登录暗网",
         "/暗网",
+        "/公司的故事集",
     ),
 )
 def test_worker_dispatches_dark_market_commands_from_a_new_direct_room(context, content):
@@ -1015,6 +1032,27 @@ def test_worker_sends_dark_market_list_without_artificial_prefix(context):
     assert core.confirmed_event.wait(timeout=1)
     _, text = gateway.sent_to[0]
     assert text == "#1 旧钥匙\n#2 铜镜"
+
+
+def test_worker_sends_novel_outbound_as_a_share_card(context):
+    worker, gateway, _, _, _, _ = context
+    outbound = OutboundClaim(
+        OUTBOUND_ID,
+        "in-1",
+        "66408bb3-60a0-40e1-a434-ee40efee4d27",
+        LEASE,
+        content_type="novel",
+        destination_chatroom_id="direct-a",
+        delivery_key="direct-a",
+        delivery_kind="direct",
+    )
+
+    worker._send_outbound(gateway, outbound)
+
+    assert gateway.sent_shares == [
+        ("direct-a", "novel", "66408bb3-60a0-40e1-a434-ee40efee4d27")
+    ]
+    assert gateway.sent_to == []
 
 
 def test_worker_reconnects_socket_on_main_loop_after_outbound_timeout(context):

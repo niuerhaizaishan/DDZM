@@ -261,7 +261,7 @@ class OutboundClaimResponse(ApiModel):
     inbound_message_id: UUID | None
     group_chat_id: UUID | None
     text: str
-    content_type: Literal["text", "image"]
+    content_type: Literal["text", "image", "novel"]
     image_url: str | None
     image_alt: str | None
     lease_token: UUID
@@ -651,6 +651,7 @@ class GameSettingsResponse(ApiModel):
     onboarding_bonus: int
     checkin_reward: int
     weekly_attendance_reward: int
+    company_story_novel_url: str | None
     reset_time_label: str = "北京时间 00:00"
 
 
@@ -659,6 +660,7 @@ class SetGameSettingsRequest(ApiModel):
     onboarding_bonus: int = Field(ge=0, le=999)
     checkin_reward: int = Field(ge=0, le=999)
     weekly_attendance_reward: int = Field(ge=0, le=999)
+    company_story_novel_url: str | None = Field(default=None, max_length=4096)
 
 
 class ProfileSettingsResponse(ApiModel):

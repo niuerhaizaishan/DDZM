@@ -185,6 +185,7 @@ class GameSettingsRecord(Base):
     onboarding_bonus: Mapped[int] = mapped_column(Integer, nullable=False)
     checkin_reward: Mapped[int] = mapped_column(Integer, nullable=False)
     weekly_attendance_reward: Mapped[int] = mapped_column(Integer, nullable=False)
+    company_story_novel_url: Mapped[str | None] = mapped_column(String(4096))
 
 
 class ProfileSettingsRecord(Base):

@@ -798,6 +798,26 @@ def test_send_image_uses_platform_image_content(gateway):
     }
 
 
+def test_send_novel_share_uses_structured_share_content(gateway):
+    adapter, socket, _ = gateway
+
+    platform_message_id = adapter.send_share_to(
+        "direct-1",
+        "novel",
+        "66408bb3-60a0-40e1-a434-ee40efee4d27",
+        message_id="novel-outbound-1",
+    )
+
+    assert platform_message_id == "novel-outbound-1"
+    send_call = next(call for call in socket.calls if call[0] == "message:send")
+    assert send_call[1]["chatroomId"] == "direct-1"
+    assert send_call[1]["message"]["content"] == {
+        "type": "share",
+        "shareType": "novel",
+        "resourceId": "66408bb3-60a0-40e1-a434-ee40efee4d27",
+    }
+
+
 def test_upload_image_delegates_to_authenticated_room_uploader(tmp_path):
     observed = {}
     image_path = tmp_path / "profile.png"

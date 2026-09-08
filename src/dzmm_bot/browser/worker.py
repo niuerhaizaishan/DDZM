@@ -45,6 +45,7 @@ _DIRECT_ENTRY_COMMANDS = {
     "/我的公演预约",
     "/取消公演预约",
     "/延期",
+    "/公司的故事集",
 }
 _OUTBOUND_BATCH_SIZE = 20
 _OUTBOUND_BATCH_BUDGET_SECONDS = 2.0
@@ -560,6 +561,26 @@ class BrowserWorker:
         platform_message_id = str(outbound.id)
         reference = self._outbound_reference(outbound)
         text = outbound.text
+        if outbound.content_type == "novel":
+            if outbound.destination_chatroom_id is not None:
+                send_share = lambda: gateway.send_share_to(
+                    outbound.destination_chatroom_id,
+                    "novel",
+                    text,
+                    message_id=platform_message_id,
+                    reference=reference,
+                )
+                if outbound.delivery_kind == "direct":
+                    return self._send_direct_with_interval(send_share)
+                return self._send_with_main_account_tokens(send_share)
+            return self._send_with_main_account_tokens(
+                lambda: gateway.send_share(
+                    "novel",
+                    text,
+                    message_id=platform_message_id,
+                    reference=reference,
+                )
+            )
         if outbound.content_type == "image":
             if outbound.image_url is None:
                 raise RuntimeError("image outbound missing URL")

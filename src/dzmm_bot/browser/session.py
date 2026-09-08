@@ -50,6 +50,16 @@ class ChatGateway(Protocol):
         reference: MessageReference | None = None,
     ) -> str: ...
 
+    def send_share(
+        self, share_type: str, resource_id: str, *, message_id: str | None = None,
+        reference: MessageReference | None = None,
+    ) -> str: ...
+
+    def send_share_to(
+        self, chatroom_id: str, share_type: str, resource_id: str,
+        *, message_id: str | None = None, reference: MessageReference | None = None,
+    ) -> str: ...
+
     def send_image(
         self, image_url: str, *, alt: str = "image", message_id: str | None = None,
         reference: MessageReference | None = None,

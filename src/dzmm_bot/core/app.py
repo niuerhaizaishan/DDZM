@@ -1426,6 +1426,11 @@ def create_app(
                 request.onboarding_bonus,
                 request.checkin_reward,
                 request.weekly_attendance_reward,
+                **(
+                    {"company_story_novel_url": request.company_story_novel_url}
+                    if "company_story_novel_url" in request.model_fields_set
+                    else {}
+                ),
             )
         except ValueError as error:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error))
@@ -3425,6 +3430,7 @@ def _game_settings_response(record) -> GameSettingsResponse:
         onboarding_bonus=record.onboarding_bonus,
         checkin_reward=record.checkin_reward,
         weekly_attendance_reward=record.weekly_attendance_reward,
+        company_story_novel_url=record.company_story_novel_url,
     )
 
 

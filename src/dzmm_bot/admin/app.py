@@ -897,19 +897,14 @@ def create_app(
         )
         if not all(key in request for key in required):
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid settings")
-        optional = (
-            "submission_enabled",
-            "submission_draft_timeout_minutes",
-            "submission_max_participants",
-            "submission_default_target_rounds",
-            "submission_default_event_reward",
-            "submission_approval_reward",
-        )
+        settings = {key: request[key] for key in required}
+        if "company_story_novel_url" in request:
+            settings["company_story_novel_url"] = request["company_story_novel_url"]
         return versioned_configuration_response(
             identity,
             idempotency_key,
             if_match,
-            lambda: _relay_core(lambda: core.set_game_settings({key: request[key] for key in required})),
+            lambda: _relay_core(lambda: core.set_game_settings(settings)),
             scope="game-settings",
         )
 

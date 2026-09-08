@@ -533,6 +533,7 @@ def test_dark_market_commands_complete_listing_bid_and_query_in_group_and_direct
     assert last is not None
     assert "上架成功" in "".join(_replies_for(factory, last.message_id))
 
+
     bid = _direct_receive(
         service,
         "dark-bid",
@@ -582,6 +583,85 @@ def test_dark_market_commands_complete_listing_bid_and_query_in_group_and_direct
         service, "dark-group-list", "buyer", "/查看暗网", now, market.chatroom_id
     )
     assert _outbounds_for(factory, group_list.message_id) == []
+
+
+def test_company_story_collection_enqueues_configured_novel_for_group_and_direct():
+    from dzmm_bot.core.schema import OutboundRecord
+
+    service, repository, factory = _service()
+    now = datetime(2026, 9, 8, 10, 0, tzinfo=BEIJING)
+    group = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=company-story-group", now
+    )
+    repository.upsert_direct_chats([("reader", "company-story-direct")], now)
+    repository.set_game_settings(
+        "摸鱼币",
+        0,
+        5,
+        5,
+        company_story_novel_url=(
+            "https://www.aikda.com/novel/66408bb3-60a0-40e1-a434-ee40efee4d27"
+        ),
+    )
+
+    group_result = _group_receive(
+        service,
+        "company-story-group-command",
+        "reader",
+        "/公司的故事集",
+        now,
+        group.chatroom_id,
+    )
+    direct_result = _direct_receive(
+        service,
+        "company-story-direct-command",
+        "reader",
+        "/公司的故事集",
+        now,
+        "company-story-direct",
+    )
+
+    with factory() as session:
+        group_outbound = list(
+            session.scalars(
+                select(OutboundRecord).where(
+                    OutboundRecord.inbound_message_id == group_result.message_id
+                )
+            )
+        )
+        direct_outbound = list(
+            session.scalars(
+                select(OutboundRecord).where(
+                    OutboundRecord.inbound_message_id == direct_result.message_id
+                )
+            )
+        )
+
+    assert [(item.content_type, item.text, item.delivery_kind) for item in group_outbound] == [
+        ("novel", "66408bb3-60a0-40e1-a434-ee40efee4d27", "group")
+    ]
+    assert [(item.content_type, item.text, item.delivery_kind) for item in direct_outbound] == [
+        ("novel", "66408bb3-60a0-40e1-a434-ee40efee4d27", "direct")
+    ]
+
+
+def test_company_story_collection_reports_when_no_novel_is_configured():
+    service, repository, factory = _service()
+    now = datetime(2026, 9, 8, 10, 0, tzinfo=BEIJING)
+    group = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=company-story-unconfigured", now
+    )
+
+    _group_receive(
+        service,
+        "company-story-unconfigured-command",
+        "reader",
+        "/公司的故事集",
+        now,
+        group.chatroom_id,
+    )
+
+    assert _latest_reply(factory) == "公司故事集暂未配置，请联系管理员。"
 
 
 def test_dark_market_list_query_reuses_a_pending_group_delivery():

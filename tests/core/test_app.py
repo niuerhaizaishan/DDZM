@@ -1558,7 +1558,7 @@ def test_game_management_lists_commands_employees_and_shop_items(client, headers
 
     assert commands.status_code == 200
     assert {record["command"] for record in commands.json()} == {
-            "/入职", "/我的物品", "/购买", "/使用", "/邀请参与", "/取消使用", "/同意使用", "/拒绝使用", "/打卡", "/余额", "/修改名称", "/编辑档案", "/编辑档案形象", "/我的档案", "/发奖金", "/发红包", "/抢红包", "/打赏", "/我", "/商店", "/帮助", "/当前游戏", "/加入", "/退出", "/开始", "/跳过", "/摸鱼躲猫猫", "/记忆考核", "/答案", "/继续", "/收手", "/投降", "/队伍1", "/队伍2", "/队伍1人员", "/队伍2人员", "/公会赛场次", "/开始对战", "/上场", "/谁是卧底", "/开始投票", "/投票", "/退出谁是卧底", "/结束游戏", "/甩锅游戏", "/甩锅", "/退出甩锅", "/蹦蹦数字炸弹", "/报数", "/德州扑克", "/看牌", "/过牌", "/跟注", "/加注", "/全下", "/弃牌", "/上架暗网", "/取消上架", "/确认", "/报价", "/公开", "/不公开", "/查看暗网", "/确认收货", "/投诉", "/预约公演", "/我的公演预约", "/取消公演预约", "/公演日程", "/延期", "/end", "/部门", "/部门人数", "/我的部门人数", "/加入部门", "/切换部门", "/部门申请列表", "/同意部门", "/全部同意部门", "/拒绝部门", "/全部拒绝部门", "/职位", "/晋升", "/晋升申请列表", "/同意", "/全部同意", "/拒绝", "/全部拒绝", "/投稿", "/我的投稿", "/撤回投稿", "/上一步", "/取消投稿", "/确认取消投稿", "/确认投稿", "/继续添加", "/事件完成", "/修改身份", "/删除身份", "/修改事件", "/删除事件"
+            "/入职", "/我的物品", "/购买", "/使用", "/邀请参与", "/取消使用", "/同意使用", "/拒绝使用", "/打卡", "/余额", "/修改名称", "/编辑档案", "/编辑档案形象", "/我的档案", "/公司的故事集", "/发奖金", "/发红包", "/抢红包", "/打赏", "/我", "/商店", "/帮助", "/当前游戏", "/加入", "/退出", "/开始", "/跳过", "/摸鱼躲猫猫", "/记忆考核", "/答案", "/继续", "/收手", "/投降", "/队伍1", "/队伍2", "/队伍1人员", "/队伍2人员", "/公会赛场次", "/开始对战", "/上场", "/谁是卧底", "/开始投票", "/投票", "/退出谁是卧底", "/结束游戏", "/甩锅游戏", "/甩锅", "/退出甩锅", "/蹦蹦数字炸弹", "/报数", "/德州扑克", "/看牌", "/过牌", "/跟注", "/加注", "/全下", "/弃牌", "/上架暗网", "/取消上架", "/确认", "/报价", "/公开", "/不公开", "/查看暗网", "/确认收货", "/投诉", "/预约公演", "/我的公演预约", "/取消公演预约", "/公演日程", "/延期", "/end", "/部门", "/部门人数", "/我的部门人数", "/加入部门", "/切换部门", "/部门申请列表", "/同意部门", "/全部同意部门", "/拒绝部门", "/全部拒绝部门", "/职位", "/晋升", "/晋升申请列表", "/同意", "/全部同意", "/拒绝", "/全部拒绝", "/投稿", "/我的投稿", "/撤回投稿", "/上一步", "/取消投稿", "/确认取消投稿", "/确认投稿", "/继续添加", "/事件完成", "/修改身份", "/删除身份", "/修改事件", "/删除事件"
             }
     command_records = {record["command"]: record for record in commands.json()}
     for command in ("/部门人数", "/我的部门人数"):
@@ -1840,6 +1840,7 @@ def test_game_settings_can_be_read_and_updated(client, headers):
         "onboarding_bonus": 0,
         "checkin_reward": 5,
         "weekly_attendance_reward": 5,
+        "company_story_novel_url": None,
         "reset_time_label": "北京时间 00:00",
     }
     assert updated.json() == {
@@ -1847,8 +1848,28 @@ def test_game_settings_can_be_read_and_updated(client, headers):
         "onboarding_bonus": 3,
         "checkin_reward": 7,
         "weekly_attendance_reward": 9,
+        "company_story_novel_url": None,
         "reset_time_label": "北京时间 00:00",
     }
+
+
+def test_game_settings_store_company_story_novel_url(client, headers):
+    novel_url = "https://www.aikda.com/novel/66408bb3-60a0-40e1-a434-ee40efee4d27"
+
+    response = client.patch(
+        "/internal/game/settings",
+        headers=headers,
+        json={
+            "currency_name": "摸鱼币",
+            "onboarding_bonus": 0,
+            "checkin_reward": 5,
+            "weekly_attendance_reward": 5,
+            "company_story_novel_url": novel_url,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["company_story_novel_url"] == novel_url
 
 
 def test_activity_settings_can_be_read_and_updated(client, headers):
@@ -2319,6 +2340,27 @@ def test_image_outbound_claim_serializes_image_content(app_context, headers, pay
     assert claimed["id"] == str(outbound.id)
     assert (claimed["content_type"], claimed["text"], claimed["image_url"], claimed["image_alt"]) == (
         "image", "", "https://cdn.example.com/profile.png", "档案形象",
+    )
+
+
+def test_novel_outbound_claim_serializes_novel_content(app_context, headers, payload):
+    inbound = app_context.client.post(
+        "/internal/inbound", headers=headers, json=payload
+    ).json()
+    outbound = app_context.repository.enqueue_outbound(
+        inbound["message_id"],
+        "66408bb3-60a0-40e1-a434-ee40efee4d27",
+        content_type="novel",
+    )
+
+    claimed = app_context.client.post(
+        "/internal/outbound/claim",
+        headers=headers,
+        json={"worker_id": "worker-a", "now": NOW.isoformat(), "lease_seconds": 30},
+    ).json()
+
+    assert (claimed["id"], claimed["content_type"], claimed["text"]) == (
+        str(outbound.id), "novel", "66408bb3-60a0-40e1-a434-ee40efee4d27",
     )
 
 
