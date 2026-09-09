@@ -62,8 +62,8 @@ DZMM_CORE_TOKEN=<...>
 
 # 普通账号浏览器通道
 DZMM_BROWSER_PROFILE=/var/lib/dzmm-browser/profile
-DZMM_LOGIN_URL=https://www.aikda.com/sign-in
-DZMM_CHAT_URL=https://www.aikda.com/chat?c=<TARGET_GROUP_CHATROOM_ID>
+DZMM_LOGIN_URL=https://www.ivorune.xyz/sign-in
+DZMM_CHAT_URL=https://www.ivorune.xyz/chat?c=<TARGET_GROUP_CHATROOM_ID>
 
 # 可选：官方 Bot 长消息通道
 DZMM_BOT_API_TOKEN=<BOT_API_TOKEN>
@@ -167,7 +167,7 @@ Bot 程序：使用 API Token 调用官方 API
 观察到的管理入口为：
 
 ```text
-https://www.dzmm.ai/studio/bots
+https://www.ivorune.xyz/studio/bots
 ```
 
 页面和域名可能随平台演进调整；优先使用 Bot 管理页面完成创建、令牌查看/轮换、Webhook URL 和可见性修改。
@@ -237,7 +237,7 @@ len(text) > 1000 or text.count("\n") > 10
 当前客户端使用：
 
 ```http
-POST https://www.dzmm.ai/api/bot/send-message
+POST https://www.ivorune.xyz/api/bot/send-message
 X-Bot-Token: <BOT_API_TOKEN>
 Content-Type: application/json
 ```

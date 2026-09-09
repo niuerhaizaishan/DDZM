@@ -505,7 +505,7 @@ _DEFAULT_RANDOM_EVENT_SIGNUP_NOTICE_TEMPLATE = (
     "请使用 /加入 身份 报名，报名将在 {报名截止分钟} 分钟后截止。"
 )
 _COMPANY_STORY_NOVEL_URL_PATTERN = re.compile(
-    r"https?://(?:www\.)?(?:aikda\.com|dzmm\.ai)/novel/"
+    r"https?://(?:www\.)?ivorune\.xyz/novel/"
     r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
     r"(?:[?#]\S*)?",
     re.IGNORECASE,

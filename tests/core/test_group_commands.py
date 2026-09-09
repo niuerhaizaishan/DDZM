@@ -600,7 +600,7 @@ def test_company_story_collection_enqueues_configured_novel_for_group_and_direct
         5,
         5,
         company_story_novel_url=(
-            "https://www.aikda.com/novel/66408bb3-60a0-40e1-a434-ee40efee4d27"
+            "https://www.ivorune.xyz/novel/66408bb3-60a0-40e1-a434-ee40efee4d27"
         ),
     )
 

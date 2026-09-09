@@ -1854,7 +1854,7 @@ def test_game_settings_can_be_read_and_updated(client, headers):
 
 
 def test_game_settings_store_company_story_novel_url(client, headers):
-    novel_url = "https://www.aikda.com/novel/66408bb3-60a0-40e1-a434-ee40efee4d27"
+    novel_url = "https://www.ivorune.xyz/novel/66408bb3-60a0-40e1-a434-ee40efee4d27"
 
     response = client.patch(
         "/internal/game/settings",

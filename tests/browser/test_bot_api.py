@@ -19,7 +19,7 @@ def test_bot_sender_posts_a_group_message_with_bot_token():
     sender = DzmmBotSender(
         "bot-token",
         client=httpx.Client(
-            base_url="https://www.dzmm.ai",
+            base_url="https://www.ivorune.xyz",
             transport=httpx.MockTransport(handle),
         ),
     )
@@ -39,7 +39,7 @@ def test_bot_sender_surfaces_the_platform_error():
     sender = DzmmBotSender(
         "bot-token",
         client=httpx.Client(
-            base_url="https://www.dzmm.ai",
+            base_url="https://www.ivorune.xyz",
             transport=httpx.MockTransport(
                 lambda request: httpx.Response(
                     403, json={"ok": False, "error": "bot is not installed"}
@@ -55,11 +55,11 @@ def test_bot_sender_surfaces_the_platform_error():
 def test_chatroom_id_is_read_from_the_configured_chat_url():
     from dzmm_bot.browser.bot_api import chatroom_id_from_url
 
-    assert chatroom_id_from_url("https://www.dzmm.ai/chat?c=group-1") == "group-1"
+    assert chatroom_id_from_url("https://www.ivorune.xyz/chat?c=group-1") == "group-1"
 
 
 def test_chatroom_url_requires_the_group_query_parameter():
     from dzmm_bot.browser.bot_api import chatroom_id_from_url
 
     with pytest.raises(ValueError, match="c parameter"):
-        chatroom_id_from_url("https://www.dzmm.ai/chat")
+        chatroom_id_from_url("https://www.ivorune.xyz/chat")

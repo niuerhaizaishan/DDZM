@@ -12,7 +12,7 @@ class DzmmBotSender:
         if not api_token:
             raise ValueError("Bot API token must be nonempty")
         self._client = client or httpx.Client(
-            base_url="https://www.dzmm.ai",
+            base_url="https://www.ivorune.xyz",
             headers={"X-Bot-Token": api_token},
             timeout=20,
         )
