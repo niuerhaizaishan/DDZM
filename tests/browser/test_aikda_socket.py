@@ -705,7 +705,7 @@ def test_socket_audits_end_game_event_before_ingestion(gateway, caplog):
     adapter, socket, _ = gateway
     adapter.read_new()
 
-    with caplog.at_level(logging.INFO, logger="dzmm_bot.browser.aikda_socket"):
+    with caplog.at_level(logging.WARNING, logger="dzmm_bot.browser.aikda_socket"):
         socket.trigger(
             "message:new",
             {

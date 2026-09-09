@@ -487,7 +487,7 @@ class AikdaSocketGateway:
                 else None
             )
             if command is not None:
-                _LOGGER.info(
+                _LOGGER.warning(
                     "socket inbound event room=%s message=%s sender=%s type=%s command=%s",
                     payload.get("chatroomId"),
                     message.get("message_id"),
