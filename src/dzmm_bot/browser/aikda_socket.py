@@ -479,6 +479,22 @@ class AikdaSocketGateway:
     def _on_message(self, payload: dict[str, Any]) -> None:
         message = payload.get("message")
         if isinstance(message, dict):
+            content = message.get("content")
+            text = content.get("text") if isinstance(content, dict) else None
+            command = (
+                text.strip().split(maxsplit=1)[0]
+                if isinstance(text, str) and text.strip().startswith("/")
+                else None
+            )
+            if command is not None:
+                _LOGGER.info(
+                    "socket inbound event room=%s message=%s sender=%s type=%s command=%s",
+                    payload.get("chatroomId"),
+                    message.get("message_id"),
+                    message.get("sent_by"),
+                    content.get("type"),
+                    command,
+                )
             self._accept_message(payload.get("chatroomId"), message)
 
     def _on_joined(self, _payload: dict[str, Any] | None = None) -> None:

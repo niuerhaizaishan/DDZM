@@ -1,5 +1,6 @@
 from collections import deque
 from datetime import UTC, datetime, timedelta
+import logging
 from threading import Event, Lock, Thread
 from time import monotonic, sleep
 from uuid import UUID
@@ -698,6 +699,26 @@ def test_self_events_are_ignored_and_unknown_rooms_are_emitted_as_direct(gateway
     assert [item.platform_message_id for item in received] == ["m-other"]
     assert received[0].source_type == "direct"
     assert received[0].chatroom_id == "room-2"
+
+
+def test_socket_audits_end_game_event_before_ingestion(gateway, caplog):
+    adapter, socket, _ = gateway
+    adapter.read_new()
+
+    with caplog.at_level(logging.INFO, logger="dzmm_bot.browser.aikda_socket"):
+        socket.trigger(
+            "message:new",
+            {
+                "chatroomId": "room-1",
+                "message": message("end-1", "u-1", "/结束游戏"),
+            },
+        )
+
+    assert any(
+        record.message
+        == "socket inbound event room=room-1 message=end-1 sender=u-1 type=text command=/结束游戏"
+        for record in caplog.records
+    )
 
 
 def test_self_message_arriving_during_connection_is_ignored(gateway):
