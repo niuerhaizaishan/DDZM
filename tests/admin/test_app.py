@@ -2892,6 +2892,7 @@ def test_admin_configures_random_event_settings_and_creates_scene(client, header
             "submission_max_participants": 88,
             "submission_default_target_rounds": 12,
             "submission_default_event_reward": 7,
+            "global_completion_reward": 10,
             "submission_approval_reward": 11,
             "tipping_duration_seconds": 180,
         },
@@ -2912,6 +2913,7 @@ def test_admin_configures_random_event_settings_and_creates_scene(client, header
     assert settings.status_code == 200
     assert settings.json()["version"] == 1
     assert core.random_event_settings["submission_draft_timeout_minutes"] == 45
+    assert core.random_event_settings["global_completion_reward"] == 10
     assert core.random_event_settings["tipping_duration_seconds"] == 180
     assert scene.status_code == 201
     assert scene.json()["name"] == "茶水间"

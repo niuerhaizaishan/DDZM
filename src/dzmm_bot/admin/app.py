@@ -1766,6 +1766,7 @@ def create_app(
             "submission_max_participants",
             "submission_default_target_rounds",
             "submission_default_event_reward",
+            "global_completion_reward",
             "submission_approval_reward",
             "tipping_duration_seconds",
         )
