@@ -7433,6 +7433,24 @@ def test_king_game_phase_timeout_redraws_without_revealing(repository):
     assert started.king_platform_id != result[0].king_platform_id or True
 
 
+def test_king_game_participant_can_end_the_active_game(repository):
+    now = datetime(2026, 9, 3, 12, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group("https://www.aikda.com/chat?c=king-end", now)
+    for platform_id in ("host", "u2", "u3"):
+        repository.create_user(platform_id, platform_id, now, 0)
+    repository.start_king_game("host", now, PRIMARY_GROUP_CHAT_ID)
+    repository.join_king_game("u2", now, PRIMARY_GROUP_CHAT_ID)
+    repository.join_king_game("u3", now, PRIMARY_GROUP_CHAT_ID)
+    repository.begin_king_game("host", now, PRIMARY_GROUP_CHAT_ID)
+
+    result = repository.end_king_game("u2", now, PRIMARY_GROUP_CHAT_ID)
+
+    assert result.status == "completed"
+    assert repository.active_gameplay_summary(
+        "u2", now, PRIMARY_GROUP_CHAT_ID
+    ).game_type is None
+
+
 def test_king_game_defers_a_revealed_player_leave_until_the_next_round(repository):
     now = datetime(2026, 9, 3, 12, 0, tzinfo=BEIJING)
     repository.bootstrap_primary_group("https://www.aikda.com/chat?c=king-leave", now)

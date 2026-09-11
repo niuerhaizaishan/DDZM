@@ -176,6 +176,26 @@ def test_king_game_group_command_flow():
     assert "第 2 轮" in _latest_reply(factory)
 
 
+def test_king_game_participant_can_end_from_group_command():
+    service, repository, factory = _service()
+    now = datetime(2026, 9, 3, 12, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group("https://www.aikda.com/chat?c=king-end-command", now)
+    for platform_id, name in (("host", "主持"), ("u2", "二号"), ("u3", "三号")):
+        _group_receive(
+            service, f"join-{platform_id}", platform_id, f"/入职 {name}", now,
+            "king-end-command",
+        )
+    _group_receive(service, "create", "host", "/国王游戏", now, "king-end-command")
+    _group_receive(service, "join-2", "u2", "/加入", now, "king-end-command")
+    _group_receive(service, "join-3", "u3", "/加入", now, "king-end-command")
+    _group_receive(service, "begin", "host", "/开始", now, "king-end-command")
+
+    _group_receive(service, "end", "u2", "/结束游戏", now, "king-end-command")
+
+    assert _latest_reply(factory) == "【国王游戏】参与者已结束本局游戏。"
+    assert repository.active_gameplay_summary("u2", now).game_type is None
+
+
 def test_king_game_join_during_a_round_takes_effect_next_round():
     service, repository, factory = _service()
     now = datetime(2026, 9, 3, 12, 0, tzinfo=BEIJING)

@@ -12043,7 +12043,7 @@ class CoreRepository:
                 game = self._active_king_game(session, group_chat_id)
                 if game is None:
                     return KingGameResult("no_game")
-                actor = self._user_for_platform(session, platform_id)
+                actor = self._king_game_user(session, platform_id)
                 if actor is None or not self._is_active_king_game_player(session, game.id, actor.id):
                     return self._king_game_result_locked(session, game, "not_participant")
                 self._finish_king_game_locked(game, "completed", "participant_ended", now)
