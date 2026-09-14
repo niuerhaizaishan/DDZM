@@ -58,10 +58,14 @@
 - Modify: `src/dzmm_bot/core/repository.py`
 - Create: `tests/core/test_company_lottery_repository.py`
 
-- [ ] 写失败测试：购票扣款原子性、`inbound_message_id` 幂等、同组合重复拒绝、每日 5 注上限按北京时间自然日重置、停售后拒绝、投注额即时入奖池账本、账本 `balance_after` 与实际余额一致。
-- [ ] 运行 `.venv/bin/pytest -q tests/core/test_company_lottery_repository.py -k 'buy or limit or idempotent'`，确认失败。
-- [ ] 实现 `get_company_lottery_settings`、`current_company_lottery_round`、`ensure_company_lottery_round`、`_buy`（手选与机选共用内核）、`buy_company_lottery_tickets`、`buy_quick_picks`、`company_lottery_balances`、`_pool_append`。
-- [ ] 补写并运行余额不足零副作用、跨群独立测试。
+- [x] 写失败测试：购票扣款原子性、`inbound_message_id` 幂等、同组合重复拒绝、每日 5 注上限按北京时间自然日重置、停售后拒绝、投注额即时入奖池账本、账本 `balance_after` 与实际余额一致。
+- [x] 运行 `.venv/bin/pytest -q tests/core/test_company_lottery_repository.py -k 'buy or limit or idempotent'`，确认失败。
+- [x] 实现 `get_company_lottery_settings`、`current_company_lottery_round`、`ensure_company_lottery_round`、`_company_lottery_purchase`（手选与机选共用内核）、`buy_company_lottery_tickets`、`buy_quick_picks`、`company_lottery_balances`、`_company_lottery_pool_append`。
+- [x] 补写并运行余额不足零副作用、跨群独立测试（22 passed）。
+
+> 实施时修正了一处设计缺陷：`company_lottery_bets.inbound_message_id` 原本是唯一约束，
+> 但一条消息可以买多注、多行共用同一个入站 ID，会直接插入失败。改为非唯一索引 +
+> 在购票内核里显式做「同消息重复投递」检查，手选与机选都能正确幂等。
 
 ### Task 4: 引导购票草稿
 

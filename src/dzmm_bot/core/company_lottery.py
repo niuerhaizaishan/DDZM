@@ -141,6 +141,10 @@ def commit_hash(ticket: Ticket, salt: str) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def new_salt() -> str:
+    return secrets.token_hex(16)
+
+
 def quick_tickets(*, quantity: int,
                   red_pool: int = DEFAULT_RED_POOL,
                   red_count: int = DEFAULT_RED_COUNT,

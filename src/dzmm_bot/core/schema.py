@@ -3130,10 +3130,10 @@ class CompanyLotteryRoundRecord(Base):
 class CompanyLotteryBetRecord(Base):
     __tablename__ = "company_lottery_bets"
     __table_args__ = (
-        UniqueConstraint("inbound_message_id"),
         UniqueConstraint("round_id", "user_id", "ticket_key"),
         Index("ix_company_lottery_bets_round_user", "round_id", "user_id"),
         Index("ix_company_lottery_bets_created_at", "created_at"),
+        Index("ix_company_lottery_bets_inbound", "inbound_message_id"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)

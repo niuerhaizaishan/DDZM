@@ -128,7 +128,6 @@ def _create_bets() -> None:
         sa.ForeignKeyConstraint(["round_id"], ["company_lottery_rounds.id"]),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"]),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("inbound_message_id"),
         sa.UniqueConstraint("round_id", "user_id", "ticket_key"),
     )
     op.create_index(
@@ -138,6 +137,11 @@ def _create_bets() -> None:
     )
     op.create_index(
         "ix_company_lottery_bets_created_at", "company_lottery_bets", ["created_at"]
+    )
+    op.create_index(
+        "ix_company_lottery_bets_inbound",
+        "company_lottery_bets",
+        ["inbound_message_id"],
     )
 
 
