@@ -72,6 +72,7 @@ from .company_lottery import (
     quick_tickets,
     round_timing,
     settle_round,
+    should_notify_close,
     total_combinations,
 )
 from .dark_market import (
@@ -22484,6 +22485,7 @@ class CoreRepository:
         self.run_performance_jobs(now)
         self.run_dark_market_jobs(now)
         self.run_shop_card_jobs(now)
+        self.run_company_lottery_jobs(now)
         with self.transaction():
             with self._session() as session:
                 self._lock_gameplay_gate(session)
@@ -28056,6 +28058,81 @@ class CoreRepository:
 
     # ----------------------------------------------------------- 公司双色球·福利
 
+    def run_company_lottery_jobs(self, now: datetime) -> None:
+        """停售提醒、停售、开奖与全员福利。由 run_daily_jobs 周期性调用。"""
+        now = now.astimezone(BEIJING)
+        settings = self.get_company_lottery_settings()
+        if not settings.enabled:
+            return
+
+        for group in self.list_group_chats():
+            self._run_company_lottery_group_jobs(group.id, settings, now)
+
+    def _run_company_lottery_group_jobs(
+        self,
+        group_chat_id: UUID,
+        settings: CompanyLotterySettings,
+        now: datetime,
+    ) -> None:
+        destination = self.group_chat_destination(group_chat_id)
+        if destination is None:
+            return
+
+        # 冷启动的群第一次跑任务时把期次开出来
+        self.ensure_company_lottery_round(group_chat_id, now)
+
+        view = self.current_company_lottery_round(group_chat_id)
+        if (
+            view is not None
+            and view.state == "open"
+            and self._company_lottery_should_remind(group_chat_id, view.close_at, settings, now)
+        ):
+            self.enqueue_system_outbound(
+                _render_lottery_close_notice(view, settings),
+                group_chat_id=group_chat_id,
+                destination_chatroom_id=destination,
+            )
+
+        self.close_company_lottery_round(group_chat_id, now)
+
+        drawn = self.draw_company_lottery_round(group_chat_id, now)
+        if drawn is not None:
+            self.enqueue_system_outbound(
+                _render_lottery_draw(drawn, settings),
+                group_chat_id=group_chat_id,
+                destination_chatroom_id=destination,
+            )
+
+        welfare = self.settle_company_lottery_welfare(group_chat_id, now)
+        if welfare.status == "paid":
+            self.enqueue_system_outbound(
+                _render_lottery_welfare(welfare),
+                group_chat_id=group_chat_id,
+                destination_chatroom_id=destination,
+            )
+
+    def _company_lottery_should_remind(
+        self,
+        group_chat_id: UUID,
+        close_at: datetime,
+        settings: CompanyLotterySettings,
+        now: datetime,
+    ) -> bool:
+        """只在进入提醒窗口、且群里足够冷清时才提醒，避免刷屏。"""
+        with self._session() as session:
+            latest = session.scalar(
+                select(func.max(InboundRecord.received_at)).where(
+                    InboundRecord.group_chat_id == group_chat_id
+                )
+            )
+        idle = 10**9 if latest is None else int((now - latest).total_seconds())
+        return should_notify_close(
+            now=now,
+            close_at=close_at,
+            notify_offset_minutes=settings.notify_offset_minutes,
+            seconds_since_last_message=idle,
+        )
+
     def count_registered_employees(
         self, *, min_tenure_hours: int = 0, now: datetime | None = None
     ) -> int:
@@ -28483,6 +28560,97 @@ def _company_lottery_settings(
         welfare_enabled=record.welfare_enabled,
         welfare_per_person=record.welfare_per_person,
         welfare_min_tenure_hours=record.welfare_min_tenure_hours,
+    )
+
+
+_COMPANY_LOTTERY_TIER_LABELS: dict[str, str] = {
+    "head": "🏆 一等奖",
+    "second": "🥈 二等奖",
+    "third": "🥉 三等奖",
+    "fourth": "🎖 四等奖",
+    "fifth": "　 五等奖",
+}
+
+_COMPANY_LOTTERY_TIER_ORDER: tuple[str, ...] = (
+    "head",
+    "second",
+    "third",
+    "fourth",
+    "fifth",
+)
+
+_COMPANY_LOTTERY_NAME_LIMIT = 5
+
+
+def _company_lottery_winner_lines(
+    winners: Sequence[CompanyLotteryWinner],
+) -> list[str]:
+    grouped: dict[str, list[CompanyLotteryWinner]] = {}
+    for winner in winners:
+        grouped.setdefault(winner.tier, []).append(winner)
+
+    lines: list[str] = []
+    for tier in _COMPANY_LOTTERY_TIER_ORDER:
+        entries = grouped.get(tier)
+        if not entries:
+            continue
+        label = _COMPANY_LOTTERY_TIER_LABELS[tier]
+        amount = entries[0].amount
+        names = " ".join(entry.display_name for entry in entries[:_COMPANY_LOTTERY_NAME_LIMIT])
+        if len(entries) > _COMPANY_LOTTERY_NAME_LIMIT:
+            names = f"{names} 等 {len(entries)} 人"
+        lines.append(f"{label} {amount} —— {names}")
+    return lines
+
+
+def _render_lottery_close_notice(
+    view: CompanyLotteryRoundView, settings: CompanyLotterySettings
+) -> str:
+    return (
+        f"⏰ 第 {view.round_number} 期还有 {settings.notify_offset_minutes} 分钟停售\n"
+        f"已售 {view.tickets_sold} 注 ｜ 奖池 {view.pool_balance} 币\n"
+        "现在买还来得及 → /购买彩票 机选"
+    )
+
+
+def _render_lottery_draw(
+    result: CompanyLotteryDrawResult, settings: CompanyLotterySettings
+) -> str:
+    lines = [
+        "【公司双色球开奖】",
+        f"本期奖池：{result.pool_balance} 摸鱼币",
+        f"单人中奖上限：{settings.per_person_cap} 摸鱼币",
+        "━━━━━━━━━━━━━━━━━━",
+        result.answer.display(),
+        f"本期售出 {result.tickets_sold} 注 ｜ 流水 {result.gross_amount} 币",
+    ]
+
+    if result.winner_count:
+        lines.append(f"中奖 {result.winner_count} 注 ｜ 实付 {result.paid_total} 币")
+        lines.extend(_company_lottery_winner_lines(result.winners))
+    else:
+        lines.append("本期无人中奖，奖池继续滚存")
+
+    if result.haircut is not None:
+        lines.append(f"⚠️ 本期可付款不足，奖金按 {result.haircut:.0%} 折算")
+    if result.capped_users:
+        lines.append(f"（{len(result.capped_users)} 人触及单人中奖上限）")
+
+    lines.append(
+        f"奖池 {result.pool_balance} 币 ｜ 调节金 {result.adjustment_balance} 币"
+    )
+    lines.append(f"第 {result.next_round_number} 期已开卖 → /购买彩票 机选")
+    return "\n".join(lines)
+
+
+def _render_lottery_welfare(result: CompanyLotteryWelfareResult) -> str:
+    return (
+        "🎉 公司福利发放\n"
+        f"调节金累计达 {result.fund_before} 摸鱼币"
+        f"（当前 {result.employee_count} 名员工）\n"
+        f"全员各获得 {result.per_person} 摸鱼币\n"
+        "\n"
+        f"调节金剩余 {result.fund_after} 摸鱼币，继续累积"
     )
 
 
