@@ -32,7 +32,7 @@ from .service import CommandReply
 
 _BEIJING = ZoneInfo("Asia/Shanghai")
 _COMMANDS = {
-    "/入职", "/我的物品", "/购买", "/使用", "/邀请参与", "/取消使用", "/同意使用", "/拒绝使用", "/打卡", "/余额", "/修改名称", "/编辑档案", "/编辑档案形象", "/我的档案", "/公司的故事集", "/发奖金", "/发红包", "/抢红包", "/打赏", "/我", "/商店", "/帮助", "/当前游戏", "/加入", "/退出", "/开始", "/摸鱼躲猫猫", "/记忆考核", "/答案", "/继续", "/收手", "/投降", "/队伍1", "/队伍2", "/队伍1人员", "/队伍2人员", "/公会赛场次", "/开始对战", "/上场", "/部门", "/部门人数", "/我的部门人数", "/加入部门", "/切换部门", "/部门申请列表", "/同意部门", "/全部同意部门", "/拒绝部门", "/全部拒绝部门", "/职位", "/晋升", "/晋升申请列表", "/同意", "/全部同意", "/拒绝", "/全部拒绝", "/谁是卧底", "/开始投票", "/投票", "/退出谁是卧底", "/结束游戏", "/甩锅游戏", "/甩锅", "/退出甩锅", "/我有你没有", "/发言", "/扣", "/不扣", "/国王游戏", "/蹦蹦数字炸弹", "/报数", "/跳过", "/德州扑克", "/看牌", "/过牌", "/跟注", "/加注", "/全下", "/弃牌", "/上架暗网", "/取消上架", "/确认", "/报价", "/公开", "/不公开", "/查看暗网", "/确认收货", "/投诉", "/预约公演", "/我的公演预约", "/取消公演预约", "/公演日程", "/延期", "/end",
+    "/入职", "/我的物品", "/购买", "/使用", "/邀请参与", "/取消使用", "/同意使用", "/拒绝使用", "/打卡", "/余额", "/修改名称", "/编辑档案", "/编辑档案形象", "/我的档案", "/公司的故事集", "/发奖金", "/发红包", "/抢红包", "/打赏", "/我", "/商店", "/帮助", "/当前游戏", "/加入", "/退出", "/开始", "/摸鱼躲猫猫", "/记忆考核", "/答案", "/继续", "/收手", "/投降", "/队伍1", "/队伍2", "/队伍1人员", "/队伍2人员", "/公会赛场次", "/开始对战", "/上场", "/部门", "/部门人数", "/我的部门人数", "/加入部门", "/切换部门", "/部门申请列表", "/同意部门", "/全部同意部门", "/拒绝部门", "/全部拒绝部门", "/职位", "/晋升", "/晋升申请列表", "/同意", "/全部同意", "/拒绝", "/全部拒绝", "/谁是卧底", "/开始投票", "/投票", "/退出谁是卧底", "/结束游戏", "/甩锅游戏", "/甩锅", "/退出甩锅", "/我有你没有", "/发言", "/扣", "/不扣", "/国王游戏", "/国王游戏数据", "/蹦蹦数字炸弹", "/报数", "/跳过", "/德州扑克", "/看牌", "/过牌", "/跟注", "/加注", "/全下", "/弃牌", "/上架暗网", "/取消上架", "/确认", "/报价", "/公开", "/不公开", "/查看暗网", "/确认收货", "/投诉", "/预约公演", "/我的公演预约", "/取消公演预约", "/公演日程", "/延期", "/end",
 }
 
 _DARK_MARKET_QUERY_ALIASES = {
@@ -312,6 +312,8 @@ class GroupCommandHandler:
             )
         if command == "/国王游戏":
             return self._king_game_start(message, received_at, group_chat_id)
+        if command == "/国王游戏数据":
+            return self._king_game_statistics(message, group_chat_id)
         if command == "/看牌":
             if message.source_type != "direct":
                 return self._reply("/看牌", "group_only", received_at)
@@ -1451,11 +1453,37 @@ class GroupCommandHandler:
             message.sender_platform_id, received_at, group_chat_id
         )
         if result.status == "completed":
-            return "【国王游戏】参与者已结束本局游戏。"
+            return "【国王游戏】参与者已结束本局游戏。\n" + self._king_game_statistics_message(
+                result.statistics
+            )
         return {
             "no_game": "当前没有可结束的国王游戏。",
             "not_participant": "只有本局参与者可以结束游戏。",
         }.get(result.status, "当前不能结束国王游戏。")
+
+    def _king_game_statistics(self, message, group_chat_id):
+        if message.source_type != "group" or group_chat_id is None:
+            return "请在国王游戏所在群发送 /国王游戏数据。"
+        statistics = self._repository.king_game_statistics(group_chat_id)
+        if statistics is None:
+            return "当前没有国王游戏对局。"
+        return self._king_game_statistics_message(statistics)
+
+    @staticmethod
+    def _king_game_statistics_message(statistics) -> str:
+        def line(label, leaders) -> str:
+            if not leaders:
+                return f"{label}：暂无"
+            return f"{label}：" + "、".join(
+                f"{name}（{count} 次）" for name, count in leaders
+            )
+
+        return "\n".join((
+            "【国王游戏数据】",
+            line("国王次数最多", statistics.king_leaders),
+            line("受罚次数最多", statistics.penalty_leaders),
+            line("回旋镖次数最多", statistics.boomerang_leaders),
+        ))
 
     def _king_game_turn_message(self, result) -> str:
         timeout = self._repository.get_king_game_settings().king_phase_timeout_seconds
@@ -4060,6 +4088,18 @@ class GroupCommandHandler:
                     ("/不扣", "其余存活玩家 /不扣：自己也有该经历，保留心数"),
                     ("/退出", "/退出：退出当前对局"),
                     ("/结束游戏", "/结束游戏：仅发起者可结束本局"),
+                ),
+            ),
+            "国王游戏": (
+                "【国王游戏】",
+                (
+                    ("/国王游戏", "/国王游戏：创建报名局"),
+                    ("/加入", "/加入：报名；开局后加入者在下一轮生效"),
+                    ("/开始", "/开始：至少 3 人后由发起者抽取本轮国王"),
+                    ("/公开", "/公开 编号 [编号...]：仅本轮国王公开指定编号"),
+                    ("/继续", "/继续：任一参与者进入下一轮"),
+                    ("/国王游戏数据", "/国王游戏数据：查看当前局国王、受罚和回旋镖实时统计"),
+                    ("/结束游戏", "/结束游戏：任一参与者结束本局并公布统计"),
                 ),
             ),
             "暗网交易所": (

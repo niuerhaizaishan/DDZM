@@ -192,8 +192,59 @@ def test_king_game_participant_can_end_from_group_command():
 
     _group_receive(service, "end", "u2", "/结束游戏", now, "king-end-command")
 
-    assert _latest_reply(factory) == "【国王游戏】参与者已结束本局游戏。"
+    assert _latest_reply(factory).startswith("【国王游戏】参与者已结束本局游戏。\n【国王游戏数据】")
     assert repository.active_gameplay_summary("u2", now).game_type is None
+
+
+def test_king_game_data_reports_live_and_final_round_statistics():
+    service, repository, factory = _service()
+    now = datetime(2026, 9, 14, 12, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group("https://www.aikda.com/chat?c=king-data", now)
+    for platform_id, name in (("host", "主持"), ("u2", "二号"), ("u3", "三号")):
+        _group_receive(
+            service, f"join-{platform_id}", platform_id, f"/入职 {name}", now,
+            "king-data",
+        )
+    _group_receive(service, "create", "host", "/国王游戏", now, "king-data")
+    _group_receive(service, "join-2", "u2", "/加入", now, "king-data")
+    _group_receive(service, "join-3", "u3", "/加入", now, "king-data")
+    _group_receive(service, "begin", "host", "/开始", now, "king-data")
+    with repository._session() as session:
+        from dzmm_bot.core.schema import KingGameRecord, KingGameRoundRecord, UserRecord
+
+        game = session.scalar(select(KingGameRecord))
+        assert game is not None
+        king = session.get(UserRecord, game.current_king_user_id)
+        round_record = session.scalar(
+            select(KingGameRoundRecord).where(KingGameRoundRecord.game_id == game.id)
+        )
+        assert king is not None
+        assert round_record is not None
+        king_number = round_record.number_map[str(king.id)]
+
+    _group_receive(service, "reveal", king.platform_id, f"/公开 {king_number}", now, "king-data")
+    _group_receive(service, "data", "u2", "/国王游戏数据", now, "king-data")
+
+    expected = f"{king.display_name}（1 次）"
+    assert _latest_reply(factory) == (
+        "【国王游戏数据】\n"
+        f"国王次数最多：{expected}\n"
+        f"受罚次数最多：{expected}\n"
+        f"回旋镖次数最多：{expected}"
+    )
+
+    _group_receive(service, "help", "u2", "/帮助 国王游戏", now, "king-data")
+    assert "/国王游戏数据：查看当前局国王、受罚和回旋镖实时统计" in _latest_reply(factory)
+
+    _group_receive(service, "end", "u2", "/结束游戏", now, "king-data")
+
+    assert _latest_reply(factory) == (
+        "【国王游戏】参与者已结束本局游戏。\n"
+        "【国王游戏数据】\n"
+        f"国王次数最多：{expected}\n"
+        f"受罚次数最多：{expected}\n"
+        f"回旋镖次数最多：{expected}"
+    )
 
 
 def test_king_game_join_during_a_round_takes_effect_next_round():

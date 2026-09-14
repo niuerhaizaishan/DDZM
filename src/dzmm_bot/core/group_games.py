@@ -66,6 +66,7 @@ GROUP_GAME_COMMANDS: dict[str, GroupGameType] = {
     "/扣": "never_have_i_ever",
     "/不扣": "never_have_i_ever",
     "/国王游戏": "king_game",
+    "/国王游戏数据": "king_game",
     "/公开": "king_game",
 }
 

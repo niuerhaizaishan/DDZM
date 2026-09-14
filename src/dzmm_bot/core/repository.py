@@ -1012,6 +1012,13 @@ class KingGamePlayerView:
 
 
 @dataclass(frozen=True)
+class KingGameStatistics:
+    king_leaders: tuple[tuple[str, int], ...] = ()
+    penalty_leaders: tuple[tuple[str, int], ...] = ()
+    boomerang_leaders: tuple[tuple[str, int], ...] = ()
+
+
+@dataclass(frozen=True)
 class KingGameResult:
     status: str
     game_id: UUID | None = None
@@ -1023,6 +1030,7 @@ class KingGameResult:
     number_map: tuple[tuple[int, str], ...] = ()
     deadline: datetime | None = None
     end_after_round: bool = False
+    statistics: KingGameStatistics | None = None
 
 
 @dataclass(frozen=True)
@@ -2031,6 +2039,7 @@ _COMMAND_DEFINITIONS = (
     ("/扣", "/扣", "在我有你没有中选择扣除一颗心"),
     ("/不扣", "/不扣", "在我有你没有中选择保留心数"),
     ("/国王游戏", "/国王游戏", "创建国王游戏报名局"),
+    ("/国王游戏数据", "/国王游戏数据", "查看当前国王游戏实时统计"),
     ("/公开", "/公开 编号 [编号...]", "国王游戏中公开本轮编号；暗网成交后也可私聊用于公开身份"),
     ("/蹦蹦数字炸弹", "/蹦蹦数字炸弹；/蹦蹦数字炸弹 积分赛", "创建普通报名局，或创建固定8人、12轮积分赛"),
     ("/报数", "/报数 数字（仅私聊）", "提交蹦蹦数字炸弹本轮 1–100 整数"),
@@ -11772,6 +11781,20 @@ class CoreRepository:
                 king_phase_timeout_seconds=record.king_phase_timeout_seconds,
             )
 
+    def king_game_statistics(
+        self, group_chat_id: UUID = PRIMARY_GROUP_CHAT_ID
+    ) -> KingGameStatistics | None:
+        with self._session() as session:
+            game = session.scalar(
+                select(KingGameRecord).where(
+                    KingGameRecord.group_chat_id == group_chat_id,
+                    KingGameRecord.active_key == "global",
+                )
+            )
+            if game is None:
+                return None
+            return self._king_game_statistics_locked(session, game)
+
     def start_king_game(
         self,
         platform_id: str,
@@ -12046,8 +12069,11 @@ class CoreRepository:
                 actor = self._king_game_user(session, platform_id)
                 if actor is None or not self._is_active_king_game_player(session, game.id, actor.id):
                     return self._king_game_result_locked(session, game, "not_participant")
+                statistics = self._king_game_statistics_locked(session, game)
                 self._finish_king_game_locked(game, "completed", "participant_ended", now)
-                return self._king_game_result_locked(session, game, "completed")
+                return self._king_game_result_locked(
+                    session, game, "completed", statistics=statistics
+                )
 
     def run_king_game_jobs(self, now: datetime) -> tuple[KingGameResult, ...]:
         now = now.astimezone(BEIJING)
@@ -12199,8 +12225,71 @@ class CoreRepository:
         game.finished_at = now
         game.finish_reason = reason
 
+    def _king_game_statistics_locked(
+        self, session: Session, game: KingGameRecord
+    ) -> KingGameStatistics:
+        names = dict(
+            session.execute(
+                select(UserRecord.id, UserRecord.display_name)
+                .join(
+                    KingGamePlayerRecord,
+                    KingGamePlayerRecord.user_id == UserRecord.id,
+                )
+                .where(KingGamePlayerRecord.game_id == game.id)
+            ).all()
+        )
+        king_counts: dict[UUID, int] = {}
+        penalty_counts: dict[UUID, int] = {}
+        boomerang_counts: dict[UUID, int] = {}
+        rounds = session.scalars(
+            select(KingGameRoundRecord)
+            .where(KingGameRoundRecord.game_id == game.id)
+            .order_by(KingGameRoundRecord.sequence)
+        )
+        for round_record in rounds:
+            king_counts[round_record.king_user_id] = (
+                king_counts.get(round_record.king_user_id, 0) + 1
+            )
+            if not round_record.revealed_numbers:
+                continue
+            selected_numbers = set(round_record.revealed_numbers)
+            for user_id, number in round_record.number_map.items():
+                if number in selected_numbers:
+                    player_id = UUID(user_id)
+                    penalty_counts[player_id] = penalty_counts.get(player_id, 0) + 1
+            king_number = round_record.number_map.get(str(round_record.king_user_id))
+            if king_number in selected_numbers:
+                boomerang_counts[round_record.king_user_id] = (
+                    boomerang_counts.get(round_record.king_user_id, 0) + 1
+                )
+
+        def leaders(counts: dict[UUID, int]) -> tuple[tuple[str, int], ...]:
+            if not counts:
+                return ()
+            highest = max(counts.values())
+            return tuple(
+                sorted(
+                    (
+                        (names.get(user_id, "未知员工"), count)
+                        for user_id, count in counts.items()
+                        if count == highest
+                    ),
+                    key=lambda entry: entry[0],
+                )
+            )
+
+        return KingGameStatistics(
+            king_leaders=leaders(king_counts),
+            penalty_leaders=leaders(penalty_counts),
+            boomerang_leaders=leaders(boomerang_counts),
+        )
+
     def _king_game_result_locked(
-        self, session: Session, game: KingGameRecord, status: str
+        self,
+        session: Session,
+        game: KingGameRecord,
+        status: str,
+        statistics: KingGameStatistics | None = None,
     ) -> KingGameResult:
         players = self._active_king_game_players(
             session, game.id, "signup" if game.state == "signup" else "active"
@@ -12231,6 +12320,7 @@ class CoreRepository:
             number_map=number_map,
             deadline=game.signup_deadline if game.state == "signup" else game.king_phase_deadline,
             end_after_round=game.end_after_round,
+            statistics=statistics,
         )
 
     def get_never_have_i_ever_settings(self) -> NeverHaveIEverSettings:
