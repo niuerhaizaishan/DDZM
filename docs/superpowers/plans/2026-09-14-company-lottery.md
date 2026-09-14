@@ -110,10 +110,15 @@
 - Modify: `src/dzmm_bot/core/app.py`
 - Modify: `tests/core/test_company_lottery_repository.py`
 
-- [ ] 写失败测试：调节金未达门槛不触发、达到门槛发一轮、超出后余数保留且不连发、每位已入职员工余额 +1、福利表与明细表与账本三方对账一致、员工数为 0 不触发、事务中途失败全量回滚、并发调用只发一轮。
-- [ ] 运行 `.venv/bin/pytest -q tests/core/test_company_lottery_repository.py -k 'welfare'`，确认失败。
-- [ ] 实现 `count_registered_employees`、`settle_company_lottery_welfare`；在开奖 tick 末尾调用并渲染发放公告。
-- [ ] 重新运行福利相关测试。
+- [x] 写失败测试：调节金未达门槛不触发、达到门槛发一轮、超出后余数保留且不连发、每位已入职员工余额 +1、福利表与明细表与账本三方对账一致、员工数为 0 不触发、事务中途失败全量回滚、并发调用只发一轮。
+- [x] 运行 `.venv/bin/pytest -q tests/core/test_company_lottery_repository.py -k 'welfare'`，确认失败。
+- [x] 实现 `count_registered_employees`、`settle_company_lottery_welfare`。
+- [ ] 在开奖 tick 末尾调用并渲染发放公告。
+- [x] 重新运行福利相关测试（12 passed）。
+
+> 门槛恒取「当前已注册员工总数」，因此新增员工后下一次判定即按新人数计算。
+> 发放全程一个事务，测试用 monkeypatch 让第二个员工的加币抛错，断言余额、
+> 调节金、福利表与明细表全部回滚干净。
 
 ### Task 7: 群命令与回复文案
 

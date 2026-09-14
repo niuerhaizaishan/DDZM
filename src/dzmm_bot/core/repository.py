@@ -65,6 +65,7 @@ from .company_lottery import (
     PrizeTier,
     Ticket,
     commit_hash,
+    check_welfare,
     draw_numbers,
     judge,
     new_salt,
@@ -2240,6 +2241,16 @@ class CompanyLotteryDrawResult:
     pool_balance: int
     adjustment_balance: int
     next_round_number: int
+
+
+@dataclass(frozen=True)
+class CompanyLotteryWelfareResult:
+    status: str
+    employee_count: int = 0
+    per_person: int = 0
+    paid_total: int = 0
+    fund_before: int = 0
+    fund_after: int = 0
 
 
 class CoreRepository:
@@ -28042,6 +28053,119 @@ class CoreRepository:
                     ),
                     next_round_number=next_round.round_number,
                 )
+
+    # ----------------------------------------------------------- 公司双色球·福利
+
+    def count_registered_employees(
+        self, *, min_tenure_hours: int = 0, now: datetime | None = None
+    ) -> int:
+        """当前已注册员工总数，也就是全员福利的发放门槛。"""
+        with self._session() as session:
+            return len(
+                self._company_lottery_employee_ids(session, min_tenure_hours, now)
+            )
+
+    def settle_company_lottery_welfare(
+        self, group_chat_id: UUID, now: datetime
+    ) -> CompanyLotteryWelfareResult:
+        """调节金攒够员工总数就全员发一轮；不足则什么都不做。
+
+        读取余额、判定门槛、全员加币、写发放明细、扣调节金在同一个事务里完成，
+        中途失败整体回滚，下次开奖后再试。
+        """
+        with self.transaction():
+            with self._session() as session:
+                settings = _company_lottery_settings(
+                    self._company_lottery_settings_record(session)
+                )
+                if not settings.welfare_enabled:
+                    return CompanyLotteryWelfareResult(status="disabled")
+
+                fund = self._company_lottery_pool_balance(
+                    session, group_chat_id, "adjustment"
+                )
+                user_ids = self._company_lottery_employee_ids(
+                    session, settings.welfare_min_tenure_hours, now
+                )
+                check = check_welfare(
+                    fund=fund,
+                    employee_count=len(user_ids),
+                    per_person=settings.welfare_per_person,
+                )
+                if not check.triggered:
+                    return CompanyLotteryWelfareResult(
+                        status="not_due",
+                        employee_count=check.employee_count,
+                        per_person=check.per_person,
+                        fund_before=check.fund_before,
+                        fund_after=check.fund_after,
+                    )
+
+                latest_round = session.scalar(
+                    select(CompanyLotteryRoundRecord)
+                    .where(CompanyLotteryRoundRecord.group_chat_id == group_chat_id)
+                    .order_by(CompanyLotteryRoundRecord.round_number.desc())
+                    .limit(1)
+                )
+                welfare = CompanyLotteryWelfareRecord(
+                    group_chat_id=group_chat_id,
+                    round_id=None if latest_round is None else latest_round.id,
+                    employee_count=check.employee_count,
+                    per_person=check.per_person,
+                    paid_total=check.paid_total,
+                    fund_before=check.fund_before,
+                    fund_after=check.fund_after,
+                    created_at=now,
+                )
+                session.add(welfare)
+                session.flush()
+
+                for user_id in user_ids:
+                    user = session.get(UserRecord, user_id)
+                    if user is None:
+                        continue
+                    self._apply_balance_change(
+                        user, check.per_person, "公司双色球全员福利", now
+                    )
+                    session.add(
+                        CompanyLotteryWelfarePayoutRecord(
+                            welfare_id=welfare.id,
+                            user_id=user_id,
+                            amount=check.per_person,
+                            created_at=now,
+                        )
+                    )
+
+                self._company_lottery_pool_append(
+                    session,
+                    group_chat_id,
+                    welfare.round_id,
+                    "adjustment",
+                    "welfare",
+                    -check.paid_total,
+                    now,
+                    note=f"全员福利 {check.employee_count} 人",
+                )
+
+                return CompanyLotteryWelfareResult(
+                    status="paid",
+                    employee_count=check.employee_count,
+                    per_person=check.per_person,
+                    paid_total=check.paid_total,
+                    fund_before=check.fund_before,
+                    fund_after=check.fund_after,
+                )
+
+    @staticmethod
+    def _company_lottery_employee_ids(
+        session: Session, min_tenure_hours: int, now: datetime | None
+    ) -> list[UUID]:
+        statement = select(UserRecord.id)
+        if min_tenure_hours > 0 and now is not None:
+            statement = statement.where(
+                UserRecord.joined_at <= now - timedelta(hours=min_tenure_hours)
+            )
+        return list(session.scalars(statement.order_by(UserRecord.employee_number)))
 
     def _company_lottery_purchase(
         self,

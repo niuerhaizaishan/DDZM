@@ -11,6 +11,8 @@ from dzmm_bot.core.schema import (
     CompanyLotteryBetRecord,
     CompanyLotteryPoolLedgerRecord,
     CompanyLotteryRoundRecord,
+    CompanyLotteryWelfarePayoutRecord,
+    CompanyLotteryWelfareRecord,
     GroupChatRecord,
     PRIMARY_GROUP_CHAT_ID,
     UserRecord,
@@ -78,13 +80,17 @@ def seeded(session_factory):
 
 
 def seed_pool(repository, group_id, amount=100):
+    seed_account(repository, group_id, "pool", amount)
+
+
+def seed_account(repository, group_id, account, amount):
     with repository.transaction():
         with repository._session() as session:
             repository._company_lottery_pool_append(
                 session,
                 group_id,
                 None,
-                "pool",
+                account,
                 "deposit",
                 amount,
                 datetime(2026, 9, 14, 11, 0, tzinfo=BEIJING),
@@ -1026,3 +1032,192 @@ def test_draw_reveals_the_answer_only_after_settlement(repository, seeded, now):
     assert settled.state == "drawn"
     assert settled.answer == expected
     assert settled.salt
+
+
+# --------------------------------------------------------------------------- 全员福利
+
+def test_employee_headcount_is_the_welfare_threshold(repository, seeded):
+    assert repository.count_registered_employees() == 2
+
+
+def test_welfare_does_nothing_below_the_threshold(repository, seeded, now):
+    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    seed_account(repository, PRIMARY_GROUP_CHAT_ID, "adjustment", 1)
+
+    result = repository.settle_company_lottery_welfare(PRIMARY_GROUP_CHAT_ID, now)
+
+    assert result.status == "not_due"
+    assert result.employee_count == 2
+    assert result.fund_after == 1
+    assert balance_of(repository, "p1") == 100
+    _, adjustment = repository.company_lottery_balances(PRIMARY_GROUP_CHAT_ID)
+    assert adjustment == 1
+
+
+def test_welfare_pays_every_employee_once(repository, seeded, now):
+    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    seed_account(repository, PRIMARY_GROUP_CHAT_ID, "adjustment", 2)
+
+    result = repository.settle_company_lottery_welfare(PRIMARY_GROUP_CHAT_ID, now)
+
+    assert result.status == "paid"
+    assert result.employee_count == 2
+    assert result.per_person == 1
+    assert result.paid_total == 2
+    assert result.fund_before == 2
+    assert result.fund_after == 0
+    assert balance_of(repository, "p1") == 101
+    assert balance_of(repository, "p2") == 101
+    _, adjustment = repository.company_lottery_balances(PRIMARY_GROUP_CHAT_ID)
+    assert adjustment == 0
+
+
+def test_welfare_keeps_the_remainder(repository, seeded, now):
+    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    seed_account(repository, PRIMARY_GROUP_CHAT_ID, "adjustment", 5)
+
+    result = repository.settle_company_lottery_welfare(PRIMARY_GROUP_CHAT_ID, now)
+
+    assert result.paid_total == 2
+    assert result.fund_after == 3
+    _, adjustment = repository.company_lottery_balances(PRIMARY_GROUP_CHAT_ID)
+    assert adjustment == 3
+
+
+def test_welfare_pays_only_one_round_even_with_a_large_fund(repository, seeded, now):
+    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    seed_account(repository, PRIMARY_GROUP_CHAT_ID, "adjustment", 100)
+
+    result = repository.settle_company_lottery_welfare(PRIMARY_GROUP_CHAT_ID, now)
+
+    assert result.paid_total == 2
+    assert result.fund_after == 98
+    assert balance_of(repository, "p1") == 101
+
+
+def test_welfare_threshold_follows_the_latest_headcount(repository, seeded, now):
+    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    seed_account(repository, PRIMARY_GROUP_CHAT_ID, "adjustment", 2)
+    with seeded.begin() as session:
+        add_user(session, "p3", "小刚", 3)
+
+    result = repository.settle_company_lottery_welfare(PRIMARY_GROUP_CHAT_ID, now)
+
+    assert result.status == "not_due"
+    assert result.employee_count == 3
+    assert balance_of(repository, "p1") == 100
+
+
+def test_welfare_can_skip_recent_hires(repository, session_factory, now):
+    with session_factory.begin() as session:
+        add_group(session, PRIMARY_GROUP_CHAT_ID, "主群聊")
+        add_user(session, "veteran", "老员工", 1)
+        add_user(session, "rookie", "新员工", 2)
+        session.scalar(
+            select(UserRecord).where(UserRecord.platform_id == "rookie")
+        ).joined_at = now
+    repository.update_company_lottery_settings(welfare_min_tenure_hours=24)
+
+    assert repository.count_registered_employees(
+        min_tenure_hours=24, now=now
+    ) == 1
+
+    seed_account(repository, PRIMARY_GROUP_CHAT_ID, "adjustment", 1)
+    result = repository.settle_company_lottery_welfare(PRIMARY_GROUP_CHAT_ID, now)
+
+    assert result.status == "paid"
+    assert result.employee_count == 1
+    assert balance_of(repository, "veteran") == 101
+    assert balance_of(repository, "rookie") == 100
+
+
+def test_welfare_writes_ledger_and_payout_rows(repository, seeded, now):
+    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    seed_account(repository, PRIMARY_GROUP_CHAT_ID, "adjustment", 6)
+
+    result = repository.settle_company_lottery_welfare(PRIMARY_GROUP_CHAT_ID, now)
+
+    with repository._session() as session:
+        welfare_rows = session.scalars(select(CompanyLotteryWelfareRecord)).all()
+        payout_rows = session.scalars(
+            select(CompanyLotteryWelfarePayoutRecord)
+        ).all()
+
+    assert result.status == "paid"
+    assert len(welfare_rows) == 1
+    assert welfare_rows[0].paid_total == 2
+    assert welfare_rows[0].fund_before == 6
+    assert welfare_rows[0].fund_after == 4
+    assert len(payout_rows) == 2
+    assert {row.amount for row in payout_rows} == {1}
+
+
+def test_welfare_does_nothing_without_employees(repository, session_factory, now):
+    with session_factory.begin() as session:
+        add_group(session, PRIMARY_GROUP_CHAT_ID, "主群聊")
+    seed_account(repository, PRIMARY_GROUP_CHAT_ID, "adjustment", 50)
+
+    result = repository.settle_company_lottery_welfare(PRIMARY_GROUP_CHAT_ID, now)
+
+    assert result.status == "not_due"
+    assert result.employee_count == 0
+    _, adjustment = repository.company_lottery_balances(PRIMARY_GROUP_CHAT_ID)
+    assert adjustment == 50
+
+
+def test_welfare_can_be_disabled(repository, seeded, now):
+    repository.update_company_lottery_settings(welfare_enabled=False)
+    seed_account(repository, PRIMARY_GROUP_CHAT_ID, "adjustment", 10)
+
+    result = repository.settle_company_lottery_welfare(PRIMARY_GROUP_CHAT_ID, now)
+
+    assert result.status == "disabled"
+    assert balance_of(repository, "p1") == 100
+
+
+def test_welfare_rolls_back_entirely_on_failure(
+    repository, seeded, now, monkeypatch
+):
+    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    seed_account(repository, PRIMARY_GROUP_CHAT_ID, "adjustment", 10)
+
+    calls = {"count": 0}
+    original = repository._apply_balance_change
+
+    def flaky(user, amount, source, occurred_at, **kwargs):
+        calls["count"] += 1
+        if calls["count"] > 1:
+            raise RuntimeError("模拟发放中途失败")
+        return original(user, amount, source, occurred_at, **kwargs)
+
+    monkeypatch.setattr(repository, "_apply_balance_change", flaky)
+
+    with pytest.raises(RuntimeError):
+        repository.settle_company_lottery_welfare(PRIMARY_GROUP_CHAT_ID, now)
+
+    assert balance_of(repository, "p1") == 100
+    assert balance_of(repository, "p2") == 100
+    _, adjustment = repository.company_lottery_balances(PRIMARY_GROUP_CHAT_ID)
+    assert adjustment == 10
+
+    with repository._session() as session:
+        welfare_rows = session.scalars(select(CompanyLotteryWelfareRecord)).all()
+        payout_rows = session.scalars(
+            select(CompanyLotteryWelfarePayoutRecord)
+        ).all()
+    assert welfare_rows == []
+    assert payout_rows == []
+
+
+def test_welfare_is_scoped_per_group(repository, seeded, now):
+    seed_account(repository, PRIMARY_GROUP_CHAT_ID, "adjustment", 2)
+    seed_account(repository, SECOND_GROUP_CHAT_ID, "adjustment", 0)
+
+    result = repository.settle_company_lottery_welfare(PRIMARY_GROUP_CHAT_ID, now)
+
+    assert result.status == "paid"
+    _, adjustment = repository.company_lottery_balances(SECOND_GROUP_CHAT_ID)
+    assert adjustment == 0
+
+    second = repository.settle_company_lottery_welfare(SECOND_GROUP_CHAT_ID, now)
+    assert second.status == "not_due"
