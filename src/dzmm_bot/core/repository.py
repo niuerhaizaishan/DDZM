@@ -2110,6 +2110,12 @@ _COMMAND_DEFINITIONS = (
     ("/删除身份", "/删除身份 编号 [编号...]", "删除随机事件投稿中的身份"),
     ("/修改事件", "/修改事件 编号", "修改随机事件投稿中的指定事件"),
     ("/删除事件", "/删除事件 编号 [编号...]", "删除随机事件投稿中的事件"),
+    ("/购买彩票", "/购买彩票 红 红 红 红 + 蓝", "购买公司双色球，或用 机选 随机选号"),
+    ("/彩票", "/彩票", "查看当期公司双色球的期次、奖池与奖级"),
+    ("/我的彩票", "/我的彩票", "查看自己的购票记录、累计投入与收益"),
+    ("/确认彩票", "/确认彩票", "确认逐注填写的购票草稿"),
+    ("/取消彩票", "/取消彩票", "放弃逐注填写的购票草稿"),
+    ("/彩票验证", "/彩票验证 期号", "核验指定期次的开奖号码与哈希"),
 )
 
 
@@ -2122,6 +2128,7 @@ class CompanyLotterySettings:
     ticket_price: int
     prizes: dict[PrizeTier, int]
     pool_ceiling: int
+    pool_seed: int
     per_person_cap: int
     max_tickets_per_day: int
     max_tickets_per_round: int
@@ -2189,6 +2196,7 @@ class CompanyLotteryPurchaseResult:
     remaining: int | None = None
     needed: int | None = None
     is_quick_pick: bool = False
+    close_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -27524,7 +27532,7 @@ class CoreRepository:
 
     def buy_company_lottery_tickets(
         self,
-        inbound_message_id: UUID,
+        inbound_message_id: UUID | str,
         platform_id: str,
         tickets: Sequence[Ticket],
         group_chat_id: UUID,
@@ -27543,7 +27551,7 @@ class CoreRepository:
 
     def buy_quick_picks(
         self,
-        inbound_message_id: UUID,
+        inbound_message_id: UUID | str,
         platform_id: str,
         quantity: int,
         group_chat_id: UUID,
@@ -27696,6 +27704,31 @@ class CoreRepository:
                     expires_at=draft.expires_at,
                 )
 
+    def company_lottery_draft_status(self, platform_id: str, now: datetime) -> str:
+        """草稿状态：`none` / `active` / `expired`；已过期的草稿就地删除。
+
+        与 load 分开是为了让「刚发号码就超时」这种情况能给出明确提示，
+        而不是被当成闲聊静默丢弃。
+        """
+        with self.transaction():
+            with self._session() as session:
+                user = session.scalar(
+                    select(UserRecord).where(UserRecord.platform_id == platform_id)
+                )
+                if user is None:
+                    return "none"
+                draft = session.scalar(
+                    select(CompanyLotteryDraftRecord).where(
+                        CompanyLotteryDraftRecord.user_id == user.id
+                    )
+                )
+                if draft is None:
+                    return "none"
+                if draft.expires_at > now:
+                    return "active"
+                session.delete(draft)
+                return "expired"
+
     def append_company_lottery_draft(
         self, platform_id: str, ticket: Ticket, now: datetime
     ) -> CompanyLotteryDraftResult:
@@ -27727,7 +27760,7 @@ class CoreRepository:
 
     def confirm_company_lottery_draft(
         self,
-        inbound_message_id: UUID,
+        inbound_message_id: UUID | str,
         platform_id: str,
         group_chat_id: UUID,
         now: datetime,
@@ -28234,6 +28267,28 @@ class CoreRepository:
                 )
 
     @staticmethod
+    @staticmethod
+    def _company_lottery_inbound_id(
+        session: Session,
+        inbound_message_id: UUID | str,
+        platform_id: str,
+        group_chat_id: UUID,
+    ) -> UUID:
+        """命令层传平台消息号，仓储层解析成入站记录主键。"""
+        if isinstance(inbound_message_id, UUID):
+            return inbound_message_id
+        inbound_id = session.scalar(
+            select(InboundRecord.id).where(
+                InboundRecord.platform_message_id == inbound_message_id,
+                InboundRecord.sender_platform_id == platform_id,
+                InboundRecord.group_chat_id == group_chat_id,
+            )
+        )
+        if inbound_id is None:
+            raise ValueError("公司双色球入站消息不存在")
+        return inbound_id
+
+    @staticmethod
     def _company_lottery_employee_ids(
         session: Session, min_tenure_hours: int, now: datetime | None
     ) -> list[UUID]:
@@ -28246,7 +28301,7 @@ class CoreRepository:
 
     def _company_lottery_purchase(
         self,
-        inbound_message_id: UUID,
+        inbound_message_id: UUID | str,
         platform_id: str,
         group_chat_id: UUID,
         now: datetime,
@@ -28265,9 +28320,12 @@ class CoreRepository:
                     return CompanyLotteryPurchaseResult(status="disabled")
 
                 # 同一条消息重复投递：直接返回，不重复扣款
+                inbound_id = self._company_lottery_inbound_id(
+                    session, inbound_message_id, platform_id, group_chat_id
+                )
                 replay = session.scalar(
                     select(CompanyLotteryBetRecord.id)
-                    .where(CompanyLotteryBetRecord.inbound_message_id == inbound_message_id)
+                    .where(CompanyLotteryBetRecord.inbound_message_id == inbound_id)
                     .limit(1)
                 )
                 if replay is not None:
@@ -28282,7 +28340,10 @@ class CoreRepository:
                     .with_for_update()
                 )
                 if round_row is None or round_row.close_at <= now:
-                    return CompanyLotteryPurchaseResult(status="closed")
+                    return CompanyLotteryPurchaseResult(
+                        status="closed",
+                        close_at=None if round_row is None else round_row.close_at,
+                    )
 
                 user = session.scalar(
                     select(UserRecord).where(UserRecord.platform_id == platform_id)
@@ -28357,7 +28418,7 @@ class CoreRepository:
                             ticket_key=ticket.as_key(),
                             cost=settings.ticket_price,
                             is_quick_pick=is_quick or is_quick_pick,
-                            inbound_message_id=inbound_message_id,
+                            inbound_message_id=inbound_id,
                             created_at=now,
                         )
                     )
@@ -28382,6 +28443,7 @@ class CoreRepository:
                     balance=user.balance,
                     remaining=remaining - len(fresh),
                     is_quick_pick=is_quick or is_quick_pick,
+                    close_at=round_row.close_at,
                 )
 
     @staticmethod
@@ -28461,6 +28523,23 @@ class CoreRepository:
         )
         return int(total or 0)
 
+    @staticmethod
+    def _company_lottery_pool_has_history(
+        session: Session, group_chat_id: UUID, account: str
+    ) -> bool:
+        """该群这个账本是否已经有任何流水（用于判断是不是首期）。"""
+        return (
+            session.scalar(
+                select(CompanyLotteryPoolLedgerRecord.id)
+                .where(
+                    CompanyLotteryPoolLedgerRecord.group_chat_id == group_chat_id,
+                    CompanyLotteryPoolLedgerRecord.account == account,
+                )
+                .limit(1)
+            )
+            is not None
+        )
+
     def _company_lottery_pool_append(
         self,
         session: Session,
@@ -28502,6 +28581,18 @@ class CoreRepository:
             blue_pool=settings.blue_pool,
         )
         salt = new_salt()
+        # 首期由系统注入启动奖池：迁移只能覆盖上线时已存在的群，新群在开第一期时补上。
+        if not self._company_lottery_pool_has_history(session, group_chat_id, "pool"):
+            self._company_lottery_pool_append(
+                session,
+                group_chat_id,
+                None,
+                "pool",
+                "deposit",
+                settings.pool_seed,
+                now,
+                "首期启动奖池",
+            )
         close_at, draw_at = round_timing(
             now=now,
             draw_hour=settings.draw_hour,
@@ -28549,6 +28640,7 @@ def _company_lottery_settings(
             PrizeTier.FIFTH: record.fifth_prize,
         },
         pool_ceiling=record.pool_ceiling,
+        pool_seed=record.pool_seed,
         per_person_cap=record.per_person_cap,
         max_tickets_per_day=record.max_tickets_per_day,
         max_tickets_per_round=record.max_tickets_per_round,

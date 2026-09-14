@@ -2,7 +2,7 @@ from datetime import datetime
 from uuid import UUID
 
 import pytest
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import create_engine, delete, func, select
 from sqlalchemy.orm import sessionmaker
 
 from dzmm_bot.core.company_lottery import BEIJING, Ticket
@@ -88,17 +88,25 @@ def seed_pool(repository, group_id, amount=100):
 
 
 def seed_account(repository, group_id, account, amount):
+    """把某个账本重置成指定余额，覆盖首期自动注入的启动奖池。"""
     with repository.transaction():
         with repository._session() as session:
-            repository._company_lottery_pool_append(
-                session,
-                group_id,
-                None,
-                account,
-                "deposit",
-                amount,
-                datetime(2026, 9, 14, 11, 0, tzinfo=BEIJING),
+            session.execute(
+                delete(CompanyLotteryPoolLedgerRecord).where(
+                    CompanyLotteryPoolLedgerRecord.group_chat_id == group_id,
+                    CompanyLotteryPoolLedgerRecord.account == account,
+                )
             )
+            if amount:
+                repository._company_lottery_pool_append(
+                    session,
+                    group_id,
+                    None,
+                    account,
+                    "deposit",
+                    amount,
+                    datetime(2026, 9, 14, 11, 0, tzinfo=BEIJING),
+                )
 
 
 def ticket(reds, blue):
@@ -114,6 +122,7 @@ def test_settings_have_designed_defaults(repository):
     assert (settings.red_pool, settings.red_count, settings.blue_pool) == (10, 4, 6)
     assert settings.ticket_price == 2
     assert settings.pool_ceiling == 200
+    assert settings.pool_seed == 100
     assert settings.per_person_cap == 100
     assert settings.max_tickets_per_day == 5
     assert settings.combinations == 1_260
@@ -450,6 +459,7 @@ def test_quick_pick_result_is_marked_on_the_bet(repository, seeded, now):
 
 def test_sales_land_in_the_pool_ledger(repository, seeded, now):
     repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    seed_pool(repository, PRIMARY_GROUP_CHAT_ID, 0)
     repository.buy_company_lottery_tickets(
         UUID("00000000-0000-0000-0000-0000000000f1"),
         "p1",
@@ -480,6 +490,33 @@ def test_sales_land_in_the_pool_ledger(repository, seeded, now):
     assert max(balances) == 6
     assert round_row.tickets_sold == 3
     assert round_row.gross_amount == 6
+
+
+def test_first_round_injects_the_starting_pool_once(repository, seeded, now):
+    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+
+    assert repository.company_lottery_balances(PRIMARY_GROUP_CHAT_ID) == (100, 0)
+
+    # 开第二期时不能再注入一次
+    repository.draw_company_lottery_round(PRIMARY_GROUP_CHAT_ID, DRAW_AT)
+
+    assert repository.company_lottery_balances(PRIMARY_GROUP_CHAT_ID) == (100, 0)
+    with repository._session() as session:
+        deposits = session.scalars(
+            select(CompanyLotteryPoolLedgerRecord.amount).where(
+                CompanyLotteryPoolLedgerRecord.group_chat_id == PRIMARY_GROUP_CHAT_ID,
+                CompanyLotteryPoolLedgerRecord.account == "pool",
+                CompanyLotteryPoolLedgerRecord.kind == "deposit",
+            )
+        ).all()
+    assert list(deposits) == [100]
+
+
+def test_pool_seed_is_configurable(repository, seeded, now):
+    repository.update_company_lottery_settings(pool_seed=40)
+    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+
+    assert repository.company_lottery_balances(PRIMARY_GROUP_CHAT_ID) == (40, 0)
 
 
 def test_pool_balance_matches_the_ledger_sum(repository, seeded, now):
@@ -516,6 +553,8 @@ def test_rounds_and_pools_are_scoped_per_group(repository, seeded, now):
     assert second.round_number == 1
     assert first.id != second.id
 
+    seed_pool(repository, PRIMARY_GROUP_CHAT_ID, 0)
+    seed_pool(repository, SECOND_GROUP_CHAT_ID, 0)
     repository.buy_company_lottery_tickets(
         UUID("00000000-0000-0000-0000-000000000101"),
         "p1",
@@ -848,7 +887,7 @@ def test_draw_pays_the_head_prize(repository, seeded, now):
 def test_draw_pays_a_fifth_prize_for_a_blue_hit(repository, seeded, now):
     view = repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
     answer = answer_for(repository, view.id)
-    near_miss = Ticket(reds=(9, 10, 8, 7), blue=answer.blue)
+    near_miss = Ticket(reds=losing_ticket(answer).reds, blue=answer.blue)
     repository.buy_company_lottery_tickets(
         UUID("00000000-0000-0000-0000-000000000302"),
         "p1",
@@ -937,7 +976,7 @@ def test_draw_merges_and_caps_per_employee(repository, seeded, now):
 
     result = repository.draw_company_lottery_round(PRIMARY_GROUP_CHAT_ID, DRAW_AT)
 
-    # 两张中奖票面值 200，合并后封顶 100
+    # 一等奖 100 + 二等奖 50 = 150，合并后按单人 100 封顶
     assert result.payable == 100
     assert result.paid_total == 100
     assert result.capped_users == (result.capped_users[0],)
@@ -947,6 +986,7 @@ def test_draw_merges_and_caps_per_employee(repository, seeded, now):
 
 def test_draw_haircuts_when_the_pool_is_short(repository, seeded, now):
     view = repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    seed_pool(repository, PRIMARY_GROUP_CHAT_ID, 0)
     repository.buy_company_lottery_tickets(
         UUID("00000000-0000-0000-0000-000000000306"),
         "p1",

@@ -16,6 +16,7 @@ depends_on: str | Sequence[str] | None = None
 
 POOL_SEED = 100
 PRIMARY_GROUP_CHAT_ID = "00000000-0000-0000-0000-000000000001"
+LOTTERY_KNOWLEDGE_CARD_ID = UUID("1f4b0c62-5a17-4a6e-8f2d-6c9e3ab5d704")
 
 
 def _create_settings() -> None:
@@ -33,6 +34,7 @@ def _create_settings() -> None:
         sa.Column("fourth_prize", sa.Integer(), nullable=False),
         sa.Column("fifth_prize", sa.Integer(), nullable=False),
         sa.Column("pool_ceiling", sa.Integer(), nullable=False),
+        sa.Column("pool_seed", sa.Integer(), nullable=False),
         sa.Column("per_person_cap", sa.Integer(), nullable=False),
         sa.Column("max_tickets_per_day", sa.Integer(), nullable=False),
         sa.Column("max_tickets_per_round", sa.Integer(), nullable=False),
@@ -246,6 +248,7 @@ def _seed_settings() -> None:
         sa.column("fourth_prize", sa.Integer()),
         sa.column("fifth_prize", sa.Integer()),
         sa.column("pool_ceiling", sa.Integer()),
+        sa.column("pool_seed", sa.Integer()),
         sa.column("per_person_cap", sa.Integer()),
         sa.column("max_tickets_per_day", sa.Integer()),
         sa.column("max_tickets_per_round", sa.Integer()),
@@ -275,6 +278,7 @@ def _seed_settings() -> None:
             fourth_prize=5,
             fifth_prize=1,
             pool_ceiling=200,
+            pool_seed=POOL_SEED,
             per_person_cap=100,
             max_tickets_per_day=5,
             max_tickets_per_round=2000,
@@ -332,6 +336,50 @@ def _seed_pool() -> None:
         )
 
 
+def _seed_knowledge_card() -> None:
+    """知识卡：规则说明须如实写明长期期望返回约 1.19 摸鱼币。"""
+    if not sa.inspect(op.get_bind()).has_table("ai_knowledge_cards"):
+        return
+    cards = sa.table(
+        "ai_knowledge_cards",
+        sa.column("id", sa.Uuid()),
+        sa.column("topic", sa.String()),
+        sa.column("title", sa.String()),
+        sa.column("keywords", sa.JSON()),
+        sa.column("content", sa.Text()),
+        sa.column("enabled", sa.Boolean()),
+        sa.column("priority", sa.Integer()),
+        sa.column("created_at", sa.DateTime(timezone=True)),
+        sa.column("updated_at", sa.DateTime(timezone=True)),
+    )
+    now = datetime.now().astimezone()
+    op.bulk_insert(
+        cards,
+        [
+            {
+                "id": LOTTERY_KNOWLEDGE_CARD_ID,
+                "topic": "company_lottery",
+                "title": "公司双色球",
+                "keywords": ["公司双色球", "彩票", "购买彩票", "机选", "开奖", "奖池"],
+                "content": (
+                    "公司双色球每期红球从 01-10 选 4 个不重复号码、蓝球从 01-06 选 1 个，"
+                    "共 1,260 种组合。发送 /购买彩票 03 07 09 10 + 05 手选一注，"
+                    "/购买彩票 机选 [注数] 随机买，/购买彩票 N 注 可逐注填写后再 /确认彩票；"
+                    "/彩票 看本期规则与概率，/我的彩票 看自己的投注与收益，/彩票验证 期号 可核对已开奖号码与哈希。"
+                    "每注 2 摸鱼币，每人每个自然日最多 5 注；开奖前 10 分钟停售，每晚 22:00 开奖。"
+                    "奖级固定：一等奖 100、二等奖 50、三等奖 15、四等奖 5、五等奖 1，"
+                    "任意中奖概率 26.59%，每注长期期望返回约 1.19 摸鱼币，整体是回收货币而不是发钱。"
+                    "奖池上限 200 摸鱼币，超出部分转入调节金；调节金累计到当前员工总数时全员各发 1 摸鱼币。"
+                ),
+                "enabled": True,
+                "priority": 100,
+                "created_at": now,
+                "updated_at": now,
+            }
+        ],
+    )
+
+
 def upgrade() -> None:
     _create_settings()
     _create_rounds()
@@ -341,9 +389,15 @@ def upgrade() -> None:
     _create_welfare()
     _seed_settings()
     _seed_pool()
+    _seed_knowledge_card()
 
 
 def downgrade() -> None:
+    if sa.inspect(op.get_bind()).has_table("ai_knowledge_cards"):
+        cards = sa.table("ai_knowledge_cards", sa.column("id", sa.Uuid()))
+        op.get_bind().execute(
+            cards.delete().where(cards.c.id == LOTTERY_KNOWLEDGE_CARD_ID)
+        )
     op.drop_index(
         "ix_company_lottery_welfare_payouts_user",
         table_name="company_lottery_welfare_payouts",

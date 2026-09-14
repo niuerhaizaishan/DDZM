@@ -43,6 +43,11 @@ def test_route_ai_topics_uses_exact_command_aliases():
     assert route_ai_topics("/预约公演", ()) == ("performance",)
     assert route_ai_topics("我有你没有怎么玩", ()) == ("never_have_i_ever",)
     assert route_ai_topics("/我有你没有", ()) == ("never_have_i_ever",)
+    assert route_ai_topics("公司双色球怎么机选", ()) == ("company_lottery",)
+    assert route_ai_topics("彩票奖池和调节金是什么", ()) == ("company_lottery",)
+    # 「购买」是商店的泛化关键词，带参数的购票指令会同时命中两个主题，这里只要求不丢彩票
+    assert "company_lottery" in route_ai_topics("/购买彩票 03 07 09 10 + 05", ())
+    assert route_ai_topics("/我的彩票", ()) == ("company_lottery",)
 
 
 def test_routing_and_selection_are_normalized_bounded_and_deterministic():

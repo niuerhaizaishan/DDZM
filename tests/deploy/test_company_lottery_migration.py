@@ -63,6 +63,7 @@ def test_company_lottery_migration_seeds_pool_and_settings(tmp_path, monkeypatch
     assert row["ticket_price"] == 2
     assert row["head_prize"] == 100
     assert row["pool_ceiling"] == 200
+    assert row["pool_seed"] == 100
     assert row["per_person_cap"] == 100
     assert row["max_tickets_per_day"] == 5
     assert row["welfare_per_person"] == 1

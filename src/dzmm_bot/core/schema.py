@@ -3015,6 +3015,9 @@ class CompanyLotterySettingsRecord(Base):
     fifth_prize: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
     pool_ceiling: Mapped[int] = mapped_column(Integer, default=200, nullable=False)
+    pool_seed: Mapped[int] = mapped_column(
+        Integer, default=100, server_default="100", nullable=False
+    )
     per_person_cap: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
     max_tickets_per_day: Mapped[int] = mapped_column(
         Integer, default=5, server_default="5", nullable=False

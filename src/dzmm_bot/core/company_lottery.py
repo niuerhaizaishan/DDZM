@@ -31,6 +31,7 @@ DEFAULT_POOL_CEILING = 200
 DEFAULT_PER_PERSON_CAP = 100
 DEFAULT_MAX_TICKETS_PER_DAY = 5
 DEFAULT_WELFARE_PER_PERSON = 1
+DEFAULT_POOL_SEED = 100
 
 
 class PrizeTier(StrEnum):
@@ -354,8 +355,14 @@ def should_notify_close(*, now: datetime, close_at: datetime,
 def parse_single(content: str, *, red_pool: int = DEFAULT_RED_POOL,
                  red_count: int = DEFAULT_RED_COUNT,
                  blue_pool: int = DEFAULT_BLUE_POOL) -> Ticket:
-    """解析 `/购买彩票 03 07 09 10 + 05` 形式的手选号码。"""
-    tokens = [token for token in _SPLIT.split(content.strip()) if token][1:]
+    """解析 `/购买彩票 03 07 09 10 + 05` 形式的手选号码。
+
+    引导购票时发的是裸号码（`03 07 09 10 + 05`），所以只在前导 token 是指令
+    （以 `/` 开头）时才丢掉它，两种写法共用同一套校验。
+    """
+    tokens = [token for token in _SPLIT.split(content.strip()) if token]
+    if tokens and tokens[0].startswith("/"):
+        tokens = tokens[1:]
     if not tokens or not all(token.isdigit() for token in tokens):
         raise TicketParseError("format")
 

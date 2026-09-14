@@ -93,7 +93,7 @@
 - [x] 写失败测试：开奖幂等、同员工合并后封顶 100、折算发生在封顶之后、奖池溢出转调节金、`capped_count` 与 `winner_count` 落库、开奖后自动开下一期且 `commit_hash` 与号码盐一致、开奖前查询接口不返回号码。
 - [x] 运行 `.venv/bin/pytest -q tests/core/test_company_lottery_repository.py -k 'draw or cap or haircut'`，确认失败。
 - [x] 实现 `close_company_lottery_round`、`draw_company_lottery_round`、`_open_company_lottery_round`。
-- [ ] 在 `app.py` 的 tick 中加入停售通知、停售与开奖，并渲染开奖公告。
+- [x] 在 `run_company_lottery_jobs`（由 `run_daily_jobs` 触发）中完成停售提醒、停售与开奖，并渲染开奖公告。
 - [x] 重新运行开奖相关测试（47 passed）。
 
 > 调度挂点确认：`run_daily_jobs(now)` 由 `/internal/daily-jobs/run` 触发，是既有的
@@ -119,7 +119,7 @@
 - [x] 写失败测试：调节金未达门槛不触发、达到门槛发一轮、超出后余数保留且不连发、每位已入职员工余额 +1、福利表与明细表与账本三方对账一致、员工数为 0 不触发、事务中途失败全量回滚、并发调用只发一轮。
 - [x] 运行 `.venv/bin/pytest -q tests/core/test_company_lottery_repository.py -k 'welfare'`，确认失败。
 - [x] 实现 `count_registered_employees`、`settle_company_lottery_welfare`。
-- [ ] 在开奖 tick 末尾调用并渲染发放公告。
+- [x] 在开奖 tick 末尾调用 `settle_company_lottery_welfare` 并渲染发放公告。
 - [x] 重新运行福利相关测试（12 passed）。
 
 > 门槛恒取「当前已注册员工总数」，因此新增员工后下一次判定即按新人数计算。
@@ -133,12 +133,12 @@
 - Modify: `src/dzmm_bot/core/commands.py`
 - Modify: `src/dzmm_bot/core/reply_templates.py`
 - Modify: `src/dzmm_bot/core/ai_knowledge.py`
-- Modify: `tests/core/test_group_commands.py`
+- Create: `tests/core/test_company_lottery_commands.py`
 
-- [ ] 写失败命令测试，覆盖 `/购买彩票` 手选、机选、机选多注、引导购票、草稿内机选、`/确认彩票`、`/取消彩票`、`/彩票`、`/我的彩票`、`/彩票验证`，以及未入职、停售、超额、余额不足、号码越界、红球重复的回复场景。
-- [ ] 运行 `.venv/bin/pytest -q tests/core/test_group_commands.py -k 'lottery'`，确认失败。
-- [ ] 注册指令与文案模板，实现 `_company_lottery` handler 与草稿续填分支；补写帮助与知识卡说明。
-- [ ] 重新运行命令测试。
+- [x] 写失败命令测试（落在新文件 `tests/core/test_company_lottery_commands.py`），覆盖 `/购买彩票` 手选、机选、机选多注、引导购票、草稿内机选、`/确认彩票`、`/取消彩票`、`/彩票`、`/我的彩票`、`/彩票验证`，以及未入职、停售、超时、号码越界、红球个数不符的回复场景。
+- [x] 运行 `.venv/bin/pytest -q tests/core/test_company_lottery_commands.py`，确认失败。
+- [x] 注册指令与文案模板，实现 `_company_lottery` handler 与草稿续填分支；补写 `/帮助 彩票` 指引与 `ai_knowledge` 知识卡（迁移内种入，含长期期望返回约 1.19 摸鱼币的如实说明）。
+- [x] 重新运行命令测试（29 passed）。
 
 ### Task 8: 后台配置与报表
 
