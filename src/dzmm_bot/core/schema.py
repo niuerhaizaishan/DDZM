@@ -3084,6 +3084,8 @@ class CompanyLotteryRoundRecord(Base):
     open_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
     close_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
     draw_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    # 停售提醒本期只发一次；Worker 每秒跑一次任务，靠这一列去重
+    reminded_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
 
     commit_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     red_1: Mapped[int | None] = mapped_column(Integer)

@@ -1368,6 +1368,20 @@ def test_run_jobs_reminds_before_the_close(repository, seeded, now):
     assert "/购买彩票 机选" in texts[0]
 
 
+def test_close_reminder_is_sent_once_per_round(repository, seeded, now):
+    """Worker 每秒跑一次任务，冷清的群不能被同一条停售提醒刷屏。"""
+    from datetime import timedelta
+
+    repository.run_company_lottery_jobs(now)
+
+    close_minute = datetime(2026, 9, 14, 21, 45, tzinfo=BEIJING)
+    for second in range(0, 5 * 60, 20):
+        repository.run_company_lottery_jobs(close_minute + timedelta(seconds=second))
+
+    reminders = [text for text in outbound_texts(repository) if "停售" in text]
+    assert len(reminders) == 1
+
+
 def test_run_jobs_skips_the_reminder_when_the_group_is_busy(repository, seeded, now):
     repository.run_company_lottery_jobs(now)
     with repository._session() as session:

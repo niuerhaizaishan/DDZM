@@ -62,6 +62,7 @@ def _create_rounds() -> None:
         sa.Column("open_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("close_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("draw_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("reminded_at", sa.DateTime(timezone=True)),
         sa.Column("commit_hash", sa.String(length=64), nullable=False),
         sa.Column("red_1", sa.Integer()),
         sa.Column("red_2", sa.Integer()),

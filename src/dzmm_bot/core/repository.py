@@ -28416,16 +28416,8 @@ class CoreRepository:
         self.ensure_company_lottery_round(group_chat_id, now)
 
         view = self.current_company_lottery_round(group_chat_id)
-        if (
-            view is not None
-            and view.state == "open"
-            and self._company_lottery_should_remind(group_chat_id, view.close_at, settings, now)
-        ):
-            self.enqueue_system_outbound(
-                _render_lottery_close_notice(view, settings),
-                group_chat_id=group_chat_id,
-                destination_chatroom_id=destination,
-            )
+        if view is not None and view.state == "open":
+            self._remind_company_lottery_close(group_chat_id, settings, now)
 
         self.close_company_lottery_round(group_chat_id, now)
 
@@ -28445,27 +28437,59 @@ class CoreRepository:
                 destination_chatroom_id=destination,
             )
 
-    def _company_lottery_should_remind(
+    def _remind_company_lottery_close(
         self,
         group_chat_id: UUID,
-        close_at: datetime,
         settings: CompanyLotterySettings,
         now: datetime,
-    ) -> bool:
-        """只在进入提醒窗口、且群里足够冷清时才提醒，避免刷屏。"""
-        with self._session() as session:
-            latest = session.scalar(
-                select(func.max(InboundRecord.received_at)).where(
-                    InboundRecord.group_chat_id == group_chat_id
+    ) -> None:
+        """停售提醒：进入提醒窗口、群里足够冷清、且本期还没提醒过时才发。
+
+        Worker 每秒都会跑一次任务，所以「本期是否已提醒」必须落库占位
+        （`reminded_at`），否则同一个冷清群会被同一条提醒刷屏。群里刚有人说话时
+        只跳过本次，不占位，等下一次 tick 再判。
+        """
+        destination = self.group_chat_destination(group_chat_id)
+        if destination is None:
+            return
+        with self.transaction():
+            with self._session() as session:
+                round_row = session.scalar(
+                    select(CompanyLotteryRoundRecord)
+                    .where(
+                        CompanyLotteryRoundRecord.group_chat_id == group_chat_id,
+                        CompanyLotteryRoundRecord.state == "open",
+                    )
+                    .with_for_update()
                 )
-            )
-        idle = 10**9 if latest is None else int((now - latest).total_seconds())
-        return should_notify_close(
-            now=now,
-            close_at=close_at,
-            notify_offset_minutes=settings.notify_offset_minutes,
-            seconds_since_last_message=idle,
-        )
+                if round_row is None or round_row.reminded_at is not None:
+                    return
+
+                latest = session.scalar(
+                    select(func.max(InboundRecord.received_at)).where(
+                        InboundRecord.group_chat_id == group_chat_id
+                    )
+                )
+                idle = (
+                    10**9 if latest is None else int((now - latest).total_seconds())
+                )
+                if not should_notify_close(
+                    now=now,
+                    close_at=round_row.close_at,
+                    notify_offset_minutes=settings.notify_offset_minutes,
+                    seconds_since_last_message=idle,
+                ):
+                    return
+
+                round_row.reminded_at = now
+                self.enqueue_system_outbound(
+                    _render_lottery_close_notice(
+                        self._company_lottery_round_view(session, round_row, None),
+                        settings,
+                    ),
+                    group_chat_id=group_chat_id,
+                    destination_chatroom_id=destination,
+                )
 
     def count_registered_employees(
         self, *, min_tenure_hours: int = 0, now: datetime | None = None
