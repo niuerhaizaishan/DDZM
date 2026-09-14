@@ -74,10 +74,13 @@
 - Modify: `src/dzmm_bot/core/repository.py`
 - Modify: `tests/core/test_company_lottery_repository.py`
 
-- [ ] 写失败测试：启动草稿并设定目标注数、逐注追加、草稿内发「机选」生成合法号码、手选机选混用、草稿内重复拒绝、15 分钟超时作废不扣款、取消不扣款、确认一次性扣款并落多行注单。
-- [ ] 运行 `.venv/bin/pytest -q tests/core/test_company_lottery_repository.py -k 'draft'`，确认失败。
-- [ ] 实现 `start_company_lottery_draft`、`append_company_lottery_draft`、`append_quick_pick_to_draft`、`load_company_lottery_draft`、`cancel_company_lottery_draft`、`confirm_company_lottery_draft`。
-- [ ] 重新运行草稿相关测试。
+- [x] 写失败测试：启动草稿并设定目标注数、逐注追加、草稿内发「机选」生成合法号码、手选机选混用、草稿内重复拒绝、15 分钟超时作废不扣款、取消不扣款、确认一次性扣款并落多行注单。
+- [x] 运行 `.venv/bin/pytest -q tests/core/test_company_lottery_repository.py -k 'draft'`，确认失败。
+- [x] 实现 `start_company_lottery_draft`、`append_company_lottery_draft`、`append_quick_pick_to_draft`、`load_company_lottery_draft`、`cancel_company_lottery_draft`、`confirm_company_lottery_draft`。
+- [x] 重新运行草稿相关测试（35 passed）。
+
+> 目标注数会被当日剩余额度截断：当天已买 1 注时发 `/购买彩票 5 注`，草稿目标是 4。
+> 只有确认购买才扣款；超时与取消都不动余额。
 
 ### Task 5: 开奖结算与调度
 

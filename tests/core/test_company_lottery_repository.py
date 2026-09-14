@@ -543,3 +543,229 @@ def test_own_history_is_cross_group(repository, seeded, now):
 
     assert len(history.bets) == 2
     assert history.total_cost == 4
+
+
+# --------------------------------------------------------------------------- 引导购票
+
+def test_draft_starts_and_reports_its_target(repository, seeded, now):
+    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+
+    result = repository.start_company_lottery_draft(
+        "p1", 5, PRIMARY_GROUP_CHAT_ID, now
+    )
+
+    assert result.status == "started"
+    assert result.target == 5
+    assert result.collected == 0
+    assert result.remaining == 5
+
+
+def test_draft_target_is_capped_by_the_daily_limit(repository, seeded, now):
+    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    repository.buy_company_lottery_tickets(
+        UUID("00000000-0000-0000-0000-000000000201"),
+        "p1",
+        [ticket((1, 2, 3, 4), 1)],
+        PRIMARY_GROUP_CHAT_ID,
+        now,
+    )
+
+    result = repository.start_company_lottery_draft(
+        "p1", 5, PRIMARY_GROUP_CHAT_ID, now
+    )
+
+    assert result.status == "started"
+    assert result.target == 4
+
+
+def test_draft_collects_manual_tickets_until_ready(repository, seeded, now):
+    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    repository.start_company_lottery_draft("p1", 2, PRIMARY_GROUP_CHAT_ID, now)
+
+    first = repository.append_company_lottery_draft(
+        "p1", ticket((1, 2, 3, 4), 1), now
+    )
+    second = repository.append_company_lottery_draft(
+        "p1", ticket((5, 6, 7, 8), 2), now
+    )
+
+    assert first.status == "appended"
+    assert first.collected == 1
+    assert second.status == "ready"
+    assert second.collected == 2
+
+    draft = repository.load_company_lottery_draft("p1", now)
+    assert draft is not None
+    assert draft.complete is True
+
+
+def test_draft_accepts_quick_picks_mixed_with_manual(repository, seeded, now):
+    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    repository.start_company_lottery_draft("p1", 2, PRIMARY_GROUP_CHAT_ID, now)
+    manual = ticket((1, 2, 3, 4), 1)
+    repository.append_company_lottery_draft("p1", manual, now)
+
+    quick = repository.append_quick_pick_to_draft("p1", now)
+
+    assert quick.is_quick_pick is True
+    assert quick.latest is not None
+    assert quick.latest.as_key() != manual.as_key()
+
+    draft = repository.load_company_lottery_draft("p1", now)
+    assert draft is not None
+    assert draft.quick_flags == (False, True)
+
+
+def test_draft_rejects_a_duplicate_ticket(repository, seeded, now):
+    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    repository.start_company_lottery_draft("p1", 3, PRIMARY_GROUP_CHAT_ID, now)
+    choice = ticket((1, 2, 3, 4), 1)
+    repository.append_company_lottery_draft("p1", choice, now)
+
+    again = repository.append_company_lottery_draft("p1", choice, now)
+
+    assert again.status == "duplicate"
+    assert again.collected == 1
+
+
+def test_draft_rejects_a_ticket_already_owned_this_round(repository, seeded, now):
+    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    owned = ticket((1, 2, 3, 4), 1)
+    repository.buy_company_lottery_tickets(
+        UUID("00000000-0000-0000-0000-000000000202"),
+        "p1",
+        [owned],
+        PRIMARY_GROUP_CHAT_ID,
+        now,
+    )
+    repository.start_company_lottery_draft("p1", 3, PRIMARY_GROUP_CHAT_ID, now)
+
+    again = repository.append_company_lottery_draft("p1", owned, now)
+
+    assert again.status == "duplicate"
+
+
+def test_draft_expires_after_the_timeout(repository, seeded, now):
+    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    repository.start_company_lottery_draft("p1", 3, PRIMARY_GROUP_CHAT_ID, now)
+    repository.append_company_lottery_draft("p1", ticket((1, 2, 3, 4), 1), now)
+
+    later = datetime(2026, 9, 14, 12, 16, tzinfo=BEIJING)
+
+    assert repository.load_company_lottery_draft("p1", later) is None
+    late_append = repository.append_company_lottery_draft(
+        "p1", ticket((5, 6, 7, 8), 2), later
+    )
+    assert late_append.status == "no_draft"
+
+
+def test_cancelling_a_draft_never_touches_the_balance(repository, seeded, now):
+    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    repository.start_company_lottery_draft("p1", 3, PRIMARY_GROUP_CHAT_ID, now)
+    repository.append_company_lottery_draft("p1", ticket((1, 2, 3, 4), 1), now)
+
+    cancelled = repository.cancel_company_lottery_draft("p1")
+
+    assert cancelled is True
+    assert repository.load_company_lottery_draft("p1", now) is None
+    with repository._session() as session:
+        user = session.scalar(select(UserRecord).where(UserRecord.platform_id == "p1"))
+        bets = session.scalar(select(func.count()).select_from(CompanyLotteryBetRecord))
+    assert user.balance == 100
+    assert bets == 0
+
+
+def test_confirming_a_draft_buys_every_ticket_in_one_go(repository, seeded, now):
+    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    repository.start_company_lottery_draft("p1", 3, PRIMARY_GROUP_CHAT_ID, now)
+    repository.append_company_lottery_draft("p1", ticket((1, 2, 3, 4), 1), now)
+    repository.append_company_lottery_draft("p1", ticket((5, 6, 7, 8), 2), now)
+    repository.append_company_lottery_draft("p1", ticket((1, 5, 6, 7), 3), now)
+
+    result = repository.confirm_company_lottery_draft(
+        UUID("00000000-0000-0000-0000-000000000203"),
+        "p1",
+        PRIMARY_GROUP_CHAT_ID,
+        now,
+    )
+
+    assert result.status == "bought"
+    assert result.purchase is not None
+    assert result.purchase.cost == 6
+    assert result.purchase.balance == 94
+    assert len(result.purchase.tickets) == 3
+    assert repository.load_company_lottery_draft("p1", now) is None
+
+    with repository._session() as session:
+        bets = session.scalar(select(func.count()).select_from(CompanyLotteryBetRecord))
+    assert bets == 3
+
+
+def test_confirming_an_all_quick_draft_marks_bets_as_quick(repository, seeded, now):
+    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    repository.start_company_lottery_draft("p1", 2, PRIMARY_GROUP_CHAT_ID, now)
+    repository.append_quick_pick_to_draft("p1", now)
+    repository.append_quick_pick_to_draft("p1", now)
+
+    result = repository.confirm_company_lottery_draft(
+        UUID("00000000-0000-0000-0000-000000000204"),
+        "p1",
+        PRIMARY_GROUP_CHAT_ID,
+        now,
+    )
+
+    assert result.status == "bought"
+    assert result.purchase.is_quick_pick is True
+
+    history = repository.own_company_lottery_bets("p1")
+    assert all(bet.is_quick_pick for bet in history.bets)
+
+
+def test_confirming_without_a_draft_reports_no_draft(repository, seeded, now):
+    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+
+    result = repository.confirm_company_lottery_draft(
+        UUID("00000000-0000-0000-0000-000000000205"),
+        "p1",
+        PRIMARY_GROUP_CHAT_ID,
+        now,
+    )
+
+    assert result.status == "no_draft"
+
+
+def test_confirming_a_draft_respects_the_current_balance(repository, session_factory, now):
+    with session_factory.begin() as session:
+        add_group(session, PRIMARY_GROUP_CHAT_ID, "主群聊")
+        add_user(session, "p3", "小刚", 3, balance=3)
+    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    repository.start_company_lottery_draft("p3", 3, PRIMARY_GROUP_CHAT_ID, now)
+    repository.append_company_lottery_draft("p3", ticket((1, 2, 3, 4), 1), now)
+    repository.append_company_lottery_draft("p3", ticket((5, 6, 7, 8), 2), now)
+
+    result = repository.confirm_company_lottery_draft(
+        UUID("00000000-0000-0000-0000-000000000206"),
+        "p3",
+        PRIMARY_GROUP_CHAT_ID,
+        now,
+    )
+
+    assert result.status == "insufficient_balance"
+    with repository._session() as session:
+        bets = session.scalar(select(func.count()).select_from(CompanyLotteryBetRecord))
+        user = session.scalar(select(UserRecord).where(UserRecord.platform_id == "p3"))
+    assert bets == 0
+    assert user.balance == 3
+
+
+def test_starting_a_draft_again_replaces_the_previous_one(repository, seeded, now):
+    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    repository.start_company_lottery_draft("p1", 5, PRIMARY_GROUP_CHAT_ID, now)
+    repository.append_company_lottery_draft("p1", ticket((1, 2, 3, 4), 1), now)
+
+    repository.start_company_lottery_draft("p1", 2, PRIMARY_GROUP_CHAT_ID, now)
+
+    draft = repository.load_company_lottery_draft("p1", now)
+    assert draft is not None
+    assert draft.target_count == 2
+    assert draft.collected == 0

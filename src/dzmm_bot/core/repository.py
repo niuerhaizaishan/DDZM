@@ -2185,6 +2185,34 @@ class CompanyLotteryPurchaseResult:
     is_quick_pick: bool = False
 
 
+@dataclass(frozen=True)
+class CompanyLotteryDraftView:
+    round_number: int
+    target_count: int
+    tickets: tuple[Ticket, ...]
+    quick_flags: tuple[bool, ...]
+    expires_at: datetime
+
+    @property
+    def collected(self) -> int:
+        return len(self.tickets)
+
+    @property
+    def complete(self) -> bool:
+        return self.collected >= self.target_count
+
+
+@dataclass(frozen=True)
+class CompanyLotteryDraftResult:
+    status: str
+    target: int = 0
+    collected: int = 0
+    latest: Ticket | None = None
+    is_quick_pick: bool = False
+    remaining: int | None = None
+    purchase: CompanyLotteryPurchaseResult | None = None
+
+
 class CoreRepository:
     def __init__(
         self,
@@ -27459,6 +27487,8 @@ class CoreRepository:
         tickets: Sequence[Ticket],
         group_chat_id: UUID,
         now: datetime,
+        *,
+        is_quick_pick: bool = False,
     ) -> CompanyLotteryPurchaseResult:
         return self._company_lottery_purchase(
             inbound_message_id,
@@ -27466,6 +27496,7 @@ class CoreRepository:
             group_chat_id,
             now,
             tickets=tuple(tickets),
+            is_quick_pick=is_quick_pick,
         )
 
     def buy_quick_picks(
@@ -27530,6 +27561,264 @@ class CoreRepository:
                 bets=views, total_cost=int(totals[0]), total_prize=int(totals[1])
             )
 
+    # ------------------------------------------------------- 公司双色球·购票草稿
+
+    def start_company_lottery_draft(
+        self, platform_id: str, target_count: int, group_chat_id: UUID, now: datetime
+    ) -> CompanyLotteryDraftResult:
+        with self.transaction():
+            with self._session() as session:
+                settings = _company_lottery_settings(
+                    self._company_lottery_settings_record(session)
+                )
+                if not settings.enabled:
+                    return CompanyLotteryDraftResult(status="disabled")
+
+                round_row = session.scalar(
+                    select(CompanyLotteryRoundRecord)
+                    .where(
+                        CompanyLotteryRoundRecord.group_chat_id == group_chat_id,
+                        CompanyLotteryRoundRecord.state == "open",
+                    )
+                    .with_for_update()
+                )
+                if round_row is None or round_row.close_at <= now:
+                    return CompanyLotteryDraftResult(status="closed")
+
+                user = session.scalar(
+                    select(UserRecord).where(UserRecord.platform_id == platform_id)
+                )
+                if user is None:
+                    return CompanyLotteryDraftResult(status="not_joined")
+
+                remaining = settings.max_tickets_per_day - self._company_lottery_today_count(
+                    session, user.id, now
+                )
+                if remaining <= 0:
+                    return CompanyLotteryDraftResult(status="limit", remaining=0)
+
+                target = min(max(target_count, 1), remaining)
+                session.execute(
+                    delete(CompanyLotteryDraftRecord).where(
+                        CompanyLotteryDraftRecord.user_id == user.id
+                    )
+                )
+                session.add(
+                    CompanyLotteryDraftRecord(
+                        user_id=user.id,
+                        group_chat_id=group_chat_id,
+                        round_id=round_row.id,
+                        target_count=target,
+                        tickets=[],
+                        last_activity_at=now,
+                        expires_at=now + timedelta(minutes=settings.draft_timeout_minutes),
+                    )
+                )
+                return CompanyLotteryDraftResult(
+                    status="started", target=target, collected=0, remaining=remaining
+                )
+
+    def load_company_lottery_draft(
+        self, platform_id: str, now: datetime
+    ) -> CompanyLotteryDraftView | None:
+        """读取草稿；已过期则就地删除并返回 None。"""
+        with self.transaction():
+            with self._session() as session:
+                user = session.scalar(
+                    select(UserRecord).where(UserRecord.platform_id == platform_id)
+                )
+                if user is None:
+                    return None
+                draft = session.scalar(
+                    select(CompanyLotteryDraftRecord).where(
+                        CompanyLotteryDraftRecord.user_id == user.id
+                    )
+                )
+                if draft is None:
+                    return None
+                if draft.expires_at <= now:
+                    session.delete(draft)
+                    return None
+
+                round_row = session.get(CompanyLotteryRoundRecord, draft.round_id)
+                return CompanyLotteryDraftView(
+                    round_number=0 if round_row is None else round_row.round_number,
+                    target_count=draft.target_count,
+                    tickets=tuple(
+                        Ticket(reds=tuple(entry["reds"]), blue=entry["blue"])
+                        for entry in draft.tickets
+                    ),
+                    quick_flags=tuple(
+                        bool(entry.get("quick")) for entry in draft.tickets
+                    ),
+                    expires_at=draft.expires_at,
+                )
+
+    def append_company_lottery_draft(
+        self, platform_id: str, ticket: Ticket, now: datetime
+    ) -> CompanyLotteryDraftResult:
+        return self._append_company_lottery_draft(
+            platform_id, now, ticket=ticket, is_quick=False
+        )
+
+    def append_quick_pick_to_draft(
+        self, platform_id: str, now: datetime
+    ) -> CompanyLotteryDraftResult:
+        return self._append_company_lottery_draft(
+            platform_id, now, ticket=None, is_quick=True
+        )
+
+    def cancel_company_lottery_draft(self, platform_id: str) -> bool:
+        with self.transaction():
+            with self._session() as session:
+                user = session.scalar(
+                    select(UserRecord).where(UserRecord.platform_id == platform_id)
+                )
+                if user is None:
+                    return False
+                deleted = session.execute(
+                    delete(CompanyLotteryDraftRecord).where(
+                        CompanyLotteryDraftRecord.user_id == user.id
+                    )
+                ).rowcount
+                return bool(deleted)
+
+    def confirm_company_lottery_draft(
+        self,
+        inbound_message_id: UUID,
+        platform_id: str,
+        group_chat_id: UUID,
+        now: datetime,
+    ) -> CompanyLotteryDraftResult:
+        view = self.load_company_lottery_draft(platform_id, now)
+        if view is None:
+            return CompanyLotteryDraftResult(status="no_draft")
+        if not view.tickets:
+            return CompanyLotteryDraftResult(status="empty_draft")
+
+        purchase = self._company_lottery_purchase(
+            inbound_message_id,
+            platform_id,
+            group_chat_id,
+            now,
+            tickets=view.tickets,
+            is_quick_pick=all(view.quick_flags),
+        )
+        if purchase.status == "bought":
+            self.cancel_company_lottery_draft(platform_id)
+        return CompanyLotteryDraftResult(
+            status=purchase.status,
+            target=view.target_count,
+            collected=view.collected,
+            purchase=purchase,
+        )
+
+    def _append_company_lottery_draft(
+        self,
+        platform_id: str,
+        now: datetime,
+        *,
+        ticket: Ticket | None,
+        is_quick: bool,
+    ) -> CompanyLotteryDraftResult:
+        with self.transaction():
+            with self._session() as session:
+                settings = _company_lottery_settings(
+                    self._company_lottery_settings_record(session)
+                )
+                user = session.scalar(
+                    select(UserRecord).where(UserRecord.platform_id == platform_id)
+                )
+                if user is None:
+                    return CompanyLotteryDraftResult(status="not_joined")
+
+                draft = session.scalar(
+                    select(CompanyLotteryDraftRecord)
+                    .where(CompanyLotteryDraftRecord.user_id == user.id)
+                    .with_for_update()
+                )
+                if draft is None:
+                    return CompanyLotteryDraftResult(status="no_draft")
+                if draft.expires_at <= now:
+                    session.delete(draft)
+                    return CompanyLotteryDraftResult(status="expired")
+
+                entries = list(draft.tickets)
+                taken = {entry["key"] for entry in entries} | self._company_lottery_ticket_keys(
+                    session, draft.round_id, user.id
+                )
+
+                if is_quick:
+                    drawn = quick_tickets(
+                        quantity=1,
+                        red_pool=settings.red_pool,
+                        red_count=settings.red_count,
+                        blue_pool=settings.blue_pool,
+                        exclude=taken,
+                    )[0]
+                else:
+                    assert ticket is not None
+                    if ticket.as_key() in taken:
+                        return CompanyLotteryDraftResult(
+                            status="duplicate", target=draft.target_count,
+                            collected=len(entries),
+                        )
+                    drawn = ticket
+
+                entries.append(
+                    {
+                        "key": drawn.as_key(),
+                        "reds": list(drawn.reds),
+                        "blue": drawn.blue,
+                        "quick": is_quick,
+                    }
+                )
+                draft.tickets = entries
+                draft.last_activity_at = now
+                draft.expires_at = now + timedelta(
+                    minutes=settings.draft_timeout_minutes
+                )
+                session.flush()
+
+                return CompanyLotteryDraftResult(
+                    status="ready" if len(entries) >= draft.target_count else "appended",
+                    target=draft.target_count,
+                    collected=len(entries),
+                    latest=drawn,
+                    is_quick_pick=is_quick,
+                )
+
+    def _company_lottery_today_count(
+        self, session: Session, user_id: UUID, now: datetime
+    ) -> int:
+        day_start = now.astimezone(BEIJING).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        return int(
+            session.scalar(
+                select(func.count())
+                .select_from(CompanyLotteryBetRecord)
+                .where(
+                    CompanyLotteryBetRecord.user_id == user_id,
+                    CompanyLotteryBetRecord.created_at >= day_start,
+                )
+            )
+            or 0
+        )
+
+    @staticmethod
+    def _company_lottery_ticket_keys(
+        session: Session, round_id: UUID, user_id: UUID
+    ) -> set[str]:
+        return set(
+            session.scalars(
+                select(CompanyLotteryBetRecord.ticket_key).where(
+                    CompanyLotteryBetRecord.round_id == round_id,
+                    CompanyLotteryBetRecord.user_id == user_id,
+                )
+            )
+        )
+
     def _company_lottery_purchase(
         self,
         inbound_message_id: UUID,
@@ -27539,8 +27828,9 @@ class CoreRepository:
         *,
         tickets: tuple[Ticket, ...] | None = None,
         quick_quantity: int | None = None,
+        is_quick_pick: bool = False,
     ) -> CompanyLotteryPurchaseResult:
-        is_quick_pick = quick_quantity is not None
+        is_quick = quick_quantity is not None
         with self.transaction():
             with self._session() as session:
                 settings = _company_lottery_settings(
@@ -27584,7 +27874,7 @@ class CoreRepository:
                     )
                 )
 
-                wanted = int(quick_quantity) if is_quick_pick else len(tickets or ())
+                wanted = int(quick_quantity) if is_quick else len(tickets or ())
                 day_start = now.astimezone(BEIJING).replace(
                     hour=0, minute=0, second=0, microsecond=0
                 )
@@ -27608,7 +27898,7 @@ class CoreRepository:
                 if round_row.tickets_sold + wanted > settings.max_tickets_per_round:
                     return CompanyLotteryPurchaseResult(status="round_full")
 
-                if is_quick_pick:
+                if is_quick:
                     fresh = tuple(
                         quick_tickets(
                             quantity=wanted,
@@ -27641,7 +27931,7 @@ class CoreRepository:
                             blue=ticket.blue,
                             ticket_key=ticket.as_key(),
                             cost=settings.ticket_price,
-                            is_quick_pick=is_quick_pick,
+                            is_quick_pick=is_quick or is_quick_pick,
                             inbound_message_id=inbound_message_id,
                             created_at=now,
                         )
@@ -27666,7 +27956,7 @@ class CoreRepository:
                     cost=cost,
                     balance=user.balance,
                     remaining=remaining - len(fresh),
-                    is_quick_pick=is_quick_pick,
+                    is_quick_pick=is_quick or is_quick_pick,
                 )
 
     @staticmethod
