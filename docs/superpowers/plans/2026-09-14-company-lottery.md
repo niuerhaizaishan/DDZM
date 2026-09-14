@@ -90,10 +90,17 @@
 - Modify: `src/dzmm_bot/core/app.py`
 - Modify: `tests/core/test_company_lottery_repository.py`
 
-- [ ] 写失败测试：开奖幂等、同员工合并后封顶 100、折算发生在封顶之后、奖池溢出转调节金、`capped_count` 与 `winner_count` 落库、开奖后自动开下一期且 `commit_hash` 与号码盐一致、开奖前查询接口不返回号码。
-- [ ] 运行 `.venv/bin/pytest -q tests/core/test_company_lottery_repository.py -k 'draw or cap or haircut'`，确认失败。
-- [ ] 实现 `close_company_lottery_round`、`draw_company_lottery_round`、`_open_next_company_lottery_round`；在 `app.py` 的 tick 中加入停售通知、停售与开奖，并渲染开奖公告。
-- [ ] 重新运行开奖相关测试。
+- [x] 写失败测试：开奖幂等、同员工合并后封顶 100、折算发生在封顶之后、奖池溢出转调节金、`capped_count` 与 `winner_count` 落库、开奖后自动开下一期且 `commit_hash` 与号码盐一致、开奖前查询接口不返回号码。
+- [x] 运行 `.venv/bin/pytest -q tests/core/test_company_lottery_repository.py -k 'draw or cap or haircut'`，确认失败。
+- [x] 实现 `close_company_lottery_round`、`draw_company_lottery_round`、`_open_company_lottery_round`。
+- [ ] 在 `app.py` 的 tick 中加入停售通知、停售与开奖，并渲染开奖公告。
+- [x] 重新运行开奖相关测试（47 passed）。
+
+> 两处实现要点：一是购票时销售额已逐笔进池，结算时必须把期初余额拆成
+> `pool_opening = 池内余额 − 本期销售额` 再交给 `settle_round`，否则会重复计入；
+> 二是同一员工多张中奖票按面值比例分摊实得时会产生整除尾差，尾差补给该员工
+> 最后一张中奖票，保证分币不凭空消失（测试 `test_draw_merges_and_caps_per_employee`
+> 断言实发合计恰为 100）。
 
 ### Task 6: 全员福利发放
 
