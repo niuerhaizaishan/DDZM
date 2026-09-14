@@ -69,6 +69,7 @@
                   <button id="nav-blame-bomb" class="nav-item" data-view="blame-bomb" type="button">甩锅游戏</button>
                   <button id="nav-texas-holdem" class="nav-item" data-view="texas-holdem" type="button">德州扑克</button>
                   <button id="nav-dark-market" class="nav-item" data-view="dark-market" type="button">暗网交易所</button>
+                  <button id="nav-company-lottery" class="nav-item" data-view="company-lottery" type="button">公司双色球</button>
                   <button id="nav-performances" class="nav-item" data-view="performances" type="button">公演预约</button>
                   <button id="nav-ai-assistant" class="nav-item" data-view="ai-assistant" type="button">AI 总监事</button>
                 </div>
@@ -187,6 +188,27 @@
                 <div class="list-toolbar"><div class="list-toolbar-controls"><label>状态<select id="dark-market-status-filter"><option value="">全部</option><option value="active">竞价中</option><option value="awaiting_receipt">待确认收货</option><option value="complaint_pending">投诉审核中</option><option value="sold">已成交</option><option value="complained">投诉成立</option><option value="unsold">已流拍</option><option value="force_delisted">强制下架</option></select></label></div><label>每页<select id="dark-market-page-size"><option value="10">10</option><option value="20" selected>20</option><option value="50">50</option></select></label></div>
                 <div id="dark-market-listings" class="data-list" aria-live="polite"></div>
                 <nav id="dark-market-pagination" class="pagination" aria-label="暗网交易记录分页"></nav>
+              </section>
+
+              <section id="company-lottery-view" class="dashboard-view panel" hidden>
+                <p class="eyebrow">号码型彩票</p>
+                <div class="panel-heading"><div><h2>公司双色球</h2><p class="muted">红球池选 4 + 蓝球池选 1，默认共 1,260 种组合；销售额先入奖池，超出上限转入调节金。</p></div><button id="edit-company-lottery-settings" class="primary" type="button">编辑彩票规则</button></div>
+                <div id="company-lottery-settings-card" class="settings-card" aria-live="polite"></div>
+                <hr>
+                <div class="list-toolbar"><div class="list-toolbar-controls"><label>选择群聊<select id="company-lottery-group-chat-id"></select></label></div><button id="refresh-company-lottery" class="secondary" type="button">刷新报表</button></div>
+                <div class="panel-heading"><div><h2>现场操作</h2><p class="muted">手动开奖只对已经过了停售时刻的期次生效，并会照常发送开奖公告与全员福利。</p></div></div>
+                <div class="list-toolbar"><div class="list-toolbar-controls"><label>注入账户<select id="company-lottery-pool-account"><option value="pool">奖池</option><option value="adjustment">调节金</option></select></label><label>金额<input id="company-lottery-pool-amount" type="number" min="1" max="1000000" step="1" value="100"></label></div><button id="company-lottery-draw" class="secondary" type="button">手动开奖</button><button id="company-lottery-pool-deposit" class="secondary" type="button">手动注资</button></div>
+                <div class="panel-heading"><div><h2>期次记录</h2><p class="muted">开奖前不展示号码；开奖后展示号码、盐与派奖结果。</p></div></div>
+                <div id="company-lottery-rounds" class="data-list" aria-live="polite"></div>
+                <hr>
+                <div class="panel-heading"><div><h2>奖池与调节金流水</h2><p class="muted">每个群独立记账，逐笔留痕。</p></div></div>
+                <div id="company-lottery-ledger" class="data-list" aria-live="polite"></div>
+                <hr>
+                <div class="panel-heading"><div><h2>中奖明细</h2><p class="muted">面值为应发金额，实发金额在封顶与折算之后确定。</p></div></div>
+                <div id="company-lottery-prizes" class="data-list" aria-live="polite"></div>
+                <hr>
+                <div class="panel-heading"><div><h2>员工累计投入与收益</h2><p class="muted">按员工汇总的累计投入、累计中奖与净收益。</p></div></div>
+                <div id="company-lottery-employees" class="data-list" aria-live="polite"></div>
               </section>
 
               <section id="settings-view" class="dashboard-view panel" hidden>
@@ -502,6 +524,38 @@
         <div class="template-modal-heading"><div><p class="eyebrow">完整交易记录</p><h2 id="dark-market-detail-title">暗网商品详情</h2></div><button class="text-button" data-close-dark-market-detail-modal type="button">关闭</button></div>
         <div id="dark-market-detail" class="data-list"></div>
         <div class="template-modal-actions"><button class="secondary" data-close-dark-market-detail-modal type="button">关闭</button></div>
+      </section>
+    </div>
+    <div id="company-lottery-settings-modal" class="template-modal" role="dialog" aria-modal="true" aria-labelledby="company-lottery-settings-modal-title" hidden>
+      <div class="template-modal-backdrop" data-close-company-lottery-settings-modal></div>
+      <section class="template-modal-card">
+        <div class="template-modal-heading"><div><p class="eyebrow">号码型彩票</p><h2 id="company-lottery-settings-modal-title">编辑公司双色球</h2><p class="muted">停用只阻止新的购票与草稿；已开启的期次照常停售、开奖与派奖。</p></div><button class="text-button" data-close-company-lottery-settings-modal type="button">关闭</button></div>
+        <label><input id="company-lottery-enabled" type="checkbox"> 启用公司双色球</label>
+        <div class="event-input-grid">
+          <label>红球池上限<input id="company-lottery-red-pool" type="number" min="5" max="99" required></label>
+          <label>红球选球数<input id="company-lottery-red-count" type="number" min="1" max="10" required></label>
+          <label>蓝球池上限<input id="company-lottery-blue-pool" type="number" min="1" max="99" required></label>
+          <label>单注价格<input id="company-lottery-ticket-price" type="number" min="1" max="1000" required></label>
+          <label>一等奖<input id="company-lottery-head-prize" type="number" min="0" max="1000000" required></label>
+          <label>二等奖<input id="company-lottery-second-prize" type="number" min="0" max="1000000" required></label>
+          <label>三等奖<input id="company-lottery-third-prize" type="number" min="0" max="1000000" required></label>
+          <label>四等奖<input id="company-lottery-fourth-prize" type="number" min="0" max="1000000" required></label>
+          <label>五等奖<input id="company-lottery-fifth-prize" type="number" min="0" max="1000000" required></label>
+          <label>奖池上限<input id="company-lottery-pool-ceiling" type="number" min="0" max="1000000" required></label>
+          <label>启动奖池（仅首期注入）<input id="company-lottery-pool-seed" type="number" min="0" max="1000000" required></label>
+          <label>单人单期中奖上限<input id="company-lottery-per-person-cap" type="number" min="0" max="1000000" required></label>
+          <label>每人每日注数上限<input id="company-lottery-max-tickets-per-day" type="number" min="1" max="1000" required></label>
+          <label>单期总注数上限<input id="company-lottery-max-tickets-per-round" type="number" min="1" max="100000" required></label>
+          <label>开奖小时<input id="company-lottery-draw-hour" type="number" min="0" max="23" required></label>
+          <label>开奖分钟<input id="company-lottery-draw-minute" type="number" min="0" max="59" required></label>
+          <label>提前停售（分钟）<input id="company-lottery-close-offset-minutes" type="number" min="1" max="720" required></label>
+          <label>停售提醒（分钟）<input id="company-lottery-notify-offset-minutes" type="number" min="1" max="720" required></label>
+          <label>草稿超时（分钟）<input id="company-lottery-draft-timeout-minutes" type="number" min="1" max="240" required></label>
+          <label>全员福利每人金额<input id="company-lottery-welfare-per-person" type="number" min="0" max="1000" required></label>
+          <label>福利入职时长门槛（小时）<input id="company-lottery-welfare-min-tenure-hours" type="number" min="0" max="8760" required></label>
+        </div>
+        <label><input id="company-lottery-welfare-enabled" type="checkbox"> 启用调节金全员福利</label>
+        <div class="template-modal-actions"><button class="secondary" data-close-company-lottery-settings-modal type="button">取消</button><button id="save-company-lottery-settings" class="primary" type="button">保存设置</button></div>
       </section>
     </div>
     <div id="red-packet-settings-modal" class="template-modal" role="dialog" aria-modal="true" aria-labelledby="red-packet-settings-modal-title" hidden>

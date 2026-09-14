@@ -1421,6 +1421,188 @@ def create_app(
             scope=f"dark-market-complaint:{listing_id}:{decision}",
         )
 
+    @app.get("/api/game/company-lottery/settings")
+    def company_lottery_settings(
+        _: Annotated[None, Depends(authorize)],
+    ) -> dict:
+        return {
+            **_relay_core(core.get_company_lottery_settings),
+            "version": repository.config_version(),
+        }
+
+    @app.patch("/api/game/company-lottery/settings")
+    def set_company_lottery_settings(
+        request: dict,
+        identity: Annotated[AdminIdentity, Depends(authorize)],
+        idempotency_key: Annotated[
+            str | None, Header(alias="Idempotency-Key")
+        ] = None,
+        if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+    ) -> JSONResponse:
+        required = {
+            "enabled",
+            "red_pool",
+            "red_count",
+            "blue_pool",
+            "ticket_price",
+            "head_prize",
+            "second_prize",
+            "third_prize",
+            "fourth_prize",
+            "fifth_prize",
+            "pool_ceiling",
+            "pool_seed",
+            "per_person_cap",
+            "max_tickets_per_day",
+            "max_tickets_per_round",
+            "draw_hour",
+            "draw_minute",
+            "close_offset_minutes",
+            "notify_offset_minutes",
+            "draft_timeout_minutes",
+            "welfare_enabled",
+            "welfare_per_person",
+            "welfare_min_tenure_hours",
+        }
+        if set(request) != required:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid settings"
+            )
+        int_ranges = {
+            "red_pool": (5, 99),
+            "red_count": (1, 10),
+            "blue_pool": (1, 99),
+            "ticket_price": (1, 1000),
+            "head_prize": (0, 1_000_000),
+            "second_prize": (0, 1_000_000),
+            "third_prize": (0, 1_000_000),
+            "fourth_prize": (0, 1_000_000),
+            "fifth_prize": (0, 1_000_000),
+            "pool_ceiling": (0, 1_000_000),
+            "pool_seed": (0, 1_000_000),
+            "per_person_cap": (0, 1_000_000),
+            "max_tickets_per_day": (1, 1000),
+            "max_tickets_per_round": (1, 100_000),
+            "draw_hour": (0, 23),
+            "draw_minute": (0, 59),
+            "close_offset_minutes": (1, 720),
+            "notify_offset_minutes": (1, 720),
+            "draft_timeout_minutes": (1, 240),
+            "welfare_per_person": (0, 1000),
+            "welfare_min_tenure_hours": (0, 8760),
+        }
+        invalid = not isinstance(request["enabled"], bool) or not isinstance(
+            request["welfare_enabled"], bool
+        )
+        for name, (low, high) in int_ranges.items():
+            value = request[name]
+            if (
+                not isinstance(value, int)
+                or isinstance(value, bool)
+                or not low <= value <= high
+            ):
+                invalid = True
+        if (
+            invalid
+            or request["red_count"] > request["red_pool"]
+            or request["notify_offset_minutes"] >= request["close_offset_minutes"]
+            or request["draw_hour"] * 60 + request["draw_minute"]
+            < request["close_offset_minutes"]
+        ):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid settings"
+            )
+
+        return versioned_configuration_response(
+            identity,
+            idempotency_key,
+            if_match,
+            lambda: _relay_core(
+                lambda: core.set_company_lottery_settings(dict(request))
+            ),
+            scope="company-lottery-settings",
+        )
+
+    @app.get("/api/game/company-lottery/overview")
+    def company_lottery_overview(
+        group_chat_id: str,
+        _: Annotated[None, Depends(authorize)],
+    ) -> dict:
+        if not group_chat_id:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid group"
+            )
+        return _relay_core(
+            lambda: core.get_company_lottery_overview(group_chat_id)
+        )
+
+    @app.post("/api/game/company-lottery/draw")
+    def draw_company_lottery_round(
+        group_chat_id: str,
+        identity: Annotated[AdminIdentity, Depends(authorize)],
+        idempotency_key: Annotated[
+            str | None, Header(alias="Idempotency-Key")
+        ] = None,
+    ) -> JSONResponse:
+        if not group_chat_id:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid group"
+            )
+        return idempotent_response(
+            identity,
+            idempotency_key,
+            lambda: (
+                200,
+                _relay_core(
+                    lambda: core.draw_company_lottery_round(
+                        group_chat_id,
+                        identity.username,
+                        beijing_now().isoformat(),
+                    )
+                ),
+            ),
+            scope=f"company-lottery-draw:{group_chat_id}",
+        )
+
+    @app.post("/api/game/company-lottery/pool")
+    def deposit_company_lottery_pool(
+        request: dict,
+        group_chat_id: str,
+        identity: Annotated[AdminIdentity, Depends(authorize)],
+        idempotency_key: Annotated[
+            str | None, Header(alias="Idempotency-Key")
+        ] = None,
+    ) -> JSONResponse:
+        if set(request) != {"account", "amount"}:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid deposit")
+        account = request["account"]
+        amount = request["amount"]
+        if (
+            not group_chat_id
+            or account not in {"pool", "adjustment"}
+            or not isinstance(amount, int)
+            or isinstance(amount, bool)
+            or not 1 <= amount <= 1_000_000
+        ):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid deposit")
+        return idempotent_response(
+            identity,
+            idempotency_key,
+            lambda: (
+                200,
+                _relay_core(
+                    lambda: core.deposit_company_lottery_pool(
+                        group_chat_id,
+                        account,
+                        amount,
+                        identity.username,
+                        beijing_now().isoformat(),
+                    )
+                ),
+            ),
+            scope=f"company-lottery-pool:{group_chat_id}:{account}:{amount}",
+        )
+
     @app.patch("/api/game/red-packet/settings")
     def set_red_packet_settings(
         request: dict,

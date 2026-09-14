@@ -165,6 +165,20 @@ class AdminCorePort(Protocol):
         self, listing_id: str, approve: bool, actor: str, now: str
     ) -> dict: ...
 
+    def get_company_lottery_settings(self) -> dict: ...
+
+    def set_company_lottery_settings(self, settings: dict) -> dict: ...
+
+    def get_company_lottery_overview(self, group_chat_id: str) -> dict: ...
+
+    def draw_company_lottery_round(
+        self, group_chat_id: str, actor: str, now: str
+    ) -> dict: ...
+
+    def deposit_company_lottery_pool(
+        self, group_chat_id: str, account: str, amount: int, actor: str, now: str
+    ) -> dict: ...
+
     def get_performance_settings(self) -> dict: ...
 
     def set_performance_settings(self, settings: dict) -> dict: ...
@@ -661,6 +675,49 @@ class CoreClient:
         response = self._client.post(
             f"/internal/game/dark-market/listings/{listing_id}/complaint/{decision}",
             json={"actor": actor, "now": now},
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def get_company_lottery_settings(self) -> dict:
+        return self._get("/internal/game/company-lottery/settings")
+
+    def set_company_lottery_settings(self, settings: dict) -> dict:
+        response = self._client.patch(
+            "/internal/game/company-lottery/settings", json=settings
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def get_company_lottery_overview(self, group_chat_id: str) -> dict:
+        return self._get(
+            "/internal/game/company-lottery/overview",
+            params={"group_chat_id": group_chat_id},
+        )
+
+    def draw_company_lottery_round(
+        self, group_chat_id: str, actor: str, now: str
+    ) -> dict:
+        response = self._client.post(
+            "/internal/game/company-lottery/draw",
+            params={"group_chat_id": group_chat_id},
+            json={"actor": actor, "now": now},
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def deposit_company_lottery_pool(
+        self, group_chat_id: str, account: str, amount: int, actor: str, now: str
+    ) -> dict:
+        response = self._client.post(
+            "/internal/game/company-lottery/pool",
+            params={"group_chat_id": group_chat_id},
+            json={
+                "actor": actor,
+                "now": now,
+                "account": account,
+                "amount": amount,
+            },
         )
         response.raise_for_status()
         return response.json()
