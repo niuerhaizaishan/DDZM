@@ -11,6 +11,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from dzmm_bot.runtime.contracts import InboundMessage
+from dzmm_bot.core.company_lottery import BEIJING, Ticket
 from dzmm_bot.core.schema import (
     AIActivityEventRecord,
     DirectChatRecord,
@@ -664,6 +665,178 @@ def test_dark_market_core_api_validates_settings_bounds(app_context, headers):
         assert app_context.client.patch(
             "/internal/game/dark-market/settings", headers=headers, json=invalid
         ).status_code == 422
+
+
+def test_company_lottery_settings_core_api_round_trip(app_context, headers):
+    initial = app_context.client.get(
+        "/internal/game/company-lottery/settings", headers=headers
+    )
+    assert initial.status_code == 200
+    body = initial.json()
+    assert body["enabled"] is True
+    assert (body["red_pool"], body["red_count"], body["blue_pool"]) == (10, 4, 6)
+    assert body["combinations"] == 1260
+    assert body["pool_seed"] == 100
+
+    payload = {key: value for key, value in body.items() if key != "combinations"}
+    payload.update(
+        {
+            "pool_seed": 40,
+            "per_person_cap": 50,
+            "fifth_prize": 2,
+            "welfare_per_person": 3,
+            "draw_hour": 21,
+            "draw_minute": 30,
+            "close_offset_minutes": 15,
+            "notify_offset_minutes": 5,
+        }
+    )
+    updated = app_context.client.patch(
+        "/internal/game/company-lottery/settings", headers=headers, json=payload
+    )
+
+    assert updated.status_code == 200
+    assert updated.json()["pool_seed"] == 40
+    assert updated.json()["fifth_prize"] == 2
+    assert updated.json()["welfare_per_person"] == 3
+    assert app_context.repository.get_company_lottery_settings().pool_seed == 40
+
+
+def test_company_lottery_settings_core_api_validates_bounds(client, headers):
+    assert client.get("/internal/game/company-lottery/settings").status_code == 401
+    assert (
+        client.get("/internal/game/company-lottery/settings", headers=headers).status_code
+        == 200
+    )
+    initial = client.get(
+        "/internal/game/company-lottery/settings", headers=headers
+    ).json()
+    base = {key: value for key, value in initial.items() if key != "combinations"}
+
+    for invalid in (
+        {**base, "red_count": 11},
+        {**base, "draw_hour": 24},
+        {**base, "draw_minute": 60},
+        {**base, "max_tickets_per_day": 0},
+        {**base, "close_offset_minutes": 0},
+        {**base, "blue_pool": 0},
+        # 停售提醒必须早于停售
+        {**base, "close_offset_minutes": 5, "notify_offset_minutes": 5},
+        # 红球选球数不能超过红球池
+        {**base, "red_pool": 5, "red_count": 6},
+    ):
+        assert (
+            client.patch(
+                "/internal/game/company-lottery/settings", headers=headers, json=invalid
+            ).status_code
+            == 422
+        )
+
+
+def _lottery_answer(repository, group_chat_id):
+    """直接读期次记录取出已承诺但未公布的号码，用于构造必中注单。"""
+    from dzmm_bot.core.schema import CompanyLotteryRoundRecord
+
+    view = repository.current_company_lottery_round(group_chat_id)
+    with repository._session() as session:
+        record = session.get(CompanyLotteryRoundRecord, view.id)
+    return Ticket(
+        reds=(record.red_1, record.red_2, record.red_3, record.red_4),
+        blue=record.blue,
+    )
+
+
+def test_company_lottery_overview_manual_draw_and_pool_deposit(app_context, headers):
+    repository = app_context.repository
+    group = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=lottery-api", NOW
+    )
+    repository.create_user("lottery-api-1", "接口甲", NOW, 100)
+    repository.create_user("lottery-api-2", "接口乙", NOW, 100)
+    repository.ensure_company_lottery_round(group.id, NOW)
+
+    overview = app_context.client.get(
+        f"/internal/game/company-lottery/overview?group_chat_id={group.id}",
+        headers=headers,
+    )
+    assert overview.status_code == 200
+    assert overview.json()["group_name"] == group.name
+    assert overview.json()["pool_balance"] == 100
+    assert overview.json()["employee_count"] == 2
+    assert overview.json()["current_round_number"] == 1
+    assert overview.json()["rounds"][0]["state"] == "open"
+    # 未开奖不泄露号码
+    assert overview.json()["rounds"][0]["answer"] is None
+
+    assert (
+        app_context.client.get(
+            f"/internal/game/company-lottery/overview"
+            f"?group_chat_id={UUID(int=0)}",
+            headers=headers,
+        ).status_code
+        == 404
+    )
+
+    draw_before_close = app_context.client.post(
+        f"/internal/game/company-lottery/draw?group_chat_id={group.id}",
+        headers=headers,
+        json={"actor": "超级管理员", "now": NOW.isoformat()},
+    )
+    assert draw_before_close.status_code == 409
+
+    repository.buy_company_lottery_tickets(
+        UUID(int=401),
+        "lottery-api-1",
+        [_lottery_answer(repository, group.id)],
+        group.id,
+        NOW,
+    )
+
+    closed_at = NOW.replace(hour=21, minute=55, tzinfo=BEIJING)
+    drawn = app_context.client.post(
+        f"/internal/game/company-lottery/draw?group_chat_id={group.id}",
+        headers=headers,
+        json={"actor": "超级管理员", "now": closed_at.isoformat()},
+    )
+    assert drawn.status_code == 200
+    assert drawn.json()["round_number"] == 1
+    assert drawn.json()["winner_count"] == 1
+    assert drawn.json()["paid_total"] == 100
+    assert drawn.json()["next_round_number"] == 2
+
+    after = app_context.client.get(
+        f"/internal/game/company-lottery/overview?group_chat_id={group.id}",
+        headers=headers,
+    ).json()
+    assert [item["round_number"] for item in after["rounds"]] == [2, 1]
+    assert after["current_round_number"] == 2
+    first_round = after["rounds"][1]
+    assert first_round["state"] == "drawn"
+    assert first_round["answer"] is not None
+    assert first_round["paid_total"] == 100
+    assert after["prizes"][0]["display_name"] == "接口甲"
+    assert after["prizes"][0]["tier"] == "head"
+    assert after["employees"][0] == {
+        "display_name": "接口甲",
+        "tickets": 1,
+        "cost": 2,
+        "prize": 100,
+        "net": 98,
+    }
+    assert any(entry["kind"] == "deposit" for entry in after["ledger"])
+
+    deposited = app_context.client.post(
+        f"/internal/game/company-lottery/pool?group_chat_id={group.id}",
+        headers=headers,
+        json={
+            "actor": "超级管理员",
+            "now": closed_at.isoformat(),
+            "account": "adjustment",
+            "amount": 7,
+        },
+    )
+    assert deposited.status_code == 200
+    assert deposited.json()["adjustment_balance"] == 7
 
 
 def test_red_packet_settings_core_api_validates_bounds(client, headers):

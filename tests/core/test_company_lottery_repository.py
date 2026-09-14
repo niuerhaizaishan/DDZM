@@ -519,6 +519,19 @@ def test_pool_seed_is_configurable(repository, seeded, now):
     assert repository.company_lottery_balances(PRIMARY_GROUP_CHAT_ID) == (40, 0)
 
 
+def test_round_schedule_is_beijing_time_even_for_a_utc_clock(repository, seeded):
+    """核心层 clock 给的是 UTC，停售与开奖必须仍落在北京时间整点。"""
+    from datetime import UTC
+
+    view = repository.ensure_company_lottery_round(
+        PRIMARY_GROUP_CHAT_ID, datetime(2026, 9, 14, 12, 0, tzinfo=UTC)
+    )
+
+    assert view.close_at.astimezone(BEIJING).strftime("%H:%M") == "21:50"
+    assert view.draw_at.astimezone(BEIJING).strftime("%H:%M") == "22:00"
+    assert view.draw_at.astimezone(BEIJING).date().isoformat() == "2026-09-14"
+
+
 def test_pool_balance_matches_the_ledger_sum(repository, seeded, now):
     repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
     repository.buy_company_lottery_tickets(

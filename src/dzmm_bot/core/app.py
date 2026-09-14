@@ -95,6 +95,17 @@ from .api_models import (
     DarkMarketRankLimitResponse,
     SetDarkMarketSettingsRequest,
     ReviewDarkMarketComplaintRequest,
+    CompanyLotterySettingsResponse,
+    SetCompanyLotterySettingsRequest,
+    CompanyLotteryRoundSummaryResponse,
+    CompanyLotteryLedgerEntryResponse,
+    CompanyLotteryPrizeResponse,
+    CompanyLotteryEmployeeTotalResponse,
+    CompanyLotteryOverviewResponse,
+    CompanyLotteryDrawResponse,
+    CompanyLotteryPoolBalancesResponse,
+    DrawCompanyLotteryRoundRequest,
+    DepositCompanyLotteryPoolRequest,
     ShopAdminActivityResponse,
     ShopSceneClaimResponse,
     DarkMarketListingResponse,
@@ -184,6 +195,7 @@ from .api_models import (
 )
 from .database import create_session_factory
 from .commands import GroupCommandHandler
+from .company_lottery import PrizeTier
 from .repository import (
     ActivityLevelRule,
     CoreRepository,
@@ -2182,6 +2194,101 @@ def create_app(
             raise HTTPException(status.HTTP_409_CONFLICT, "暗网投诉已经处理")
         return DarkMarketForceDelistResponse(status=result.status)
 
+    @app.get(
+        "/internal/game/company-lottery/settings",
+        response_model=CompanyLotterySettingsResponse,
+    )
+    def company_lottery_settings(
+        _: Annotated[None, Depends(authorize)],
+    ) -> CompanyLotterySettingsResponse:
+        return _company_lottery_settings_response(
+            repository.get_company_lottery_settings()
+        )
+
+    @app.patch(
+        "/internal/game/company-lottery/settings",
+        response_model=CompanyLotterySettingsResponse,
+    )
+    def set_company_lottery_settings(
+        request: SetCompanyLotterySettingsRequest,
+        _: Annotated[None, Depends(authorize)],
+    ) -> CompanyLotterySettingsResponse:
+        settings = repository.update_company_lottery_settings(**request.model_dump())
+        return _company_lottery_settings_response(settings)
+
+    @app.get(
+        "/internal/game/company-lottery/overview",
+        response_model=CompanyLotteryOverviewResponse,
+    )
+    def company_lottery_overview(
+        _: Annotated[None, Depends(authorize)],
+        group_chat_id: UUID,
+        round_limit: Annotated[int, Query(ge=1, le=200)] = 20,
+        ledger_limit: Annotated[int, Query(ge=1, le=200)] = 50,
+        prize_limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    ) -> CompanyLotteryOverviewResponse:
+        overview = repository.company_lottery_overview(
+            group_chat_id,
+            round_limit=round_limit,
+            ledger_limit=ledger_limit,
+            prize_limit=prize_limit,
+        )
+        if overview is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "群聊不存在")
+        return _company_lottery_overview_response(overview)
+
+    @app.post(
+        "/internal/game/company-lottery/draw",
+        response_model=CompanyLotteryDrawResponse,
+    )
+    def draw_company_lottery_round(
+        request: DrawCompanyLotteryRoundRequest,
+        _: Annotated[None, Depends(authorize)],
+        group_chat_id: UUID,
+    ) -> CompanyLotteryDrawResponse:
+        view = repository.current_company_lottery_round(group_chat_id)
+        if view is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "当前没有可开奖的期次")
+        if view.close_at > request.now:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, "本期尚未到停售时刻，不能提前开奖"
+            )
+        drawn = repository.draw_company_lottery_round_manually(
+            group_chat_id, request.now
+        )
+        if drawn is None:
+            raise HTTPException(status.HTTP_409_CONFLICT, "开奖失败，请稍后重试")
+        return CompanyLotteryDrawResponse(
+            round_number=drawn.round_number,
+            answer=drawn.answer.display(),
+            winner_count=drawn.winner_count,
+            paid_total=drawn.paid_total,
+            pool_balance=drawn.pool_balance,
+            adjustment_balance=drawn.adjustment_balance,
+            next_round_number=drawn.next_round_number,
+        )
+
+    @app.post(
+        "/internal/game/company-lottery/pool",
+        response_model=CompanyLotteryPoolBalancesResponse,
+    )
+    def deposit_company_lottery_pool(
+        request: DepositCompanyLotteryPoolRequest,
+        _: Annotated[None, Depends(authorize)],
+        group_chat_id: UUID,
+    ) -> CompanyLotteryPoolBalancesResponse:
+        if all(group.id != group_chat_id for group in repository.list_group_chats()):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "群聊不存在")
+        pool, adjustment = repository.deposit_company_lottery_pool(
+            group_chat_id,
+            request.amount,
+            request.now,
+            account=request.account,
+        )
+        return CompanyLotteryPoolBalancesResponse(
+            pool_balance=pool, adjustment_balance=adjustment
+        )
+
     @app.patch(
         "/internal/game/number-bomb/settings",
         response_model=NumberBombSettingsResponse,
@@ -3743,6 +3850,104 @@ def _random_event_schedule_response(schedule) -> RandomEventScheduleResponse:
         event_name=schedule.event_name,
         is_cross_day=schedule.is_cross_day,
         has_details=schedule.has_details,
+    )
+
+
+def _company_lottery_settings_response(settings) -> CompanyLotterySettingsResponse:
+    return CompanyLotterySettingsResponse(
+        enabled=settings.enabled,
+        red_pool=settings.red_pool,
+        red_count=settings.red_count,
+        blue_pool=settings.blue_pool,
+        ticket_price=settings.ticket_price,
+        head_prize=settings.prizes[PrizeTier.HEAD],
+        second_prize=settings.prizes[PrizeTier.SECOND],
+        third_prize=settings.prizes[PrizeTier.THIRD],
+        fourth_prize=settings.prizes[PrizeTier.FOURTH],
+        fifth_prize=settings.prizes[PrizeTier.FIFTH],
+        pool_ceiling=settings.pool_ceiling,
+        pool_seed=settings.pool_seed,
+        per_person_cap=settings.per_person_cap,
+        max_tickets_per_day=settings.max_tickets_per_day,
+        max_tickets_per_round=settings.max_tickets_per_round,
+        draw_hour=settings.draw_hour,
+        draw_minute=settings.draw_minute,
+        close_offset_minutes=settings.close_offset_minutes,
+        notify_offset_minutes=settings.notify_offset_minutes,
+        draft_timeout_minutes=settings.draft_timeout_minutes,
+        welfare_enabled=settings.welfare_enabled,
+        welfare_per_person=settings.welfare_per_person,
+        welfare_min_tenure_hours=settings.welfare_min_tenure_hours,
+        combinations=settings.combinations,
+    )
+
+
+def _company_lottery_overview_response(
+    overview,
+) -> CompanyLotteryOverviewResponse:
+    return CompanyLotteryOverviewResponse(
+        group_chat_id=overview.group_chat_id,
+        group_name=overview.group_name,
+        enabled=overview.enabled,
+        pool_balance=overview.pool_balance,
+        adjustment_balance=overview.adjustment_balance,
+        employee_count=overview.employee_count,
+        current_round_number=overview.current_round_number,
+        rounds=[
+            CompanyLotteryRoundSummaryResponse(
+                round_number=item.round_number,
+                state=item.state,
+                open_at=item.open_at,
+                close_at=item.close_at,
+                draw_at=item.draw_at,
+                drawn_at=item.drawn_at,
+                tickets_sold=item.tickets_sold,
+                gross_amount=item.gross_amount,
+                winner_count=item.winner_count,
+                payable=item.payable,
+                paid_total=item.paid_total,
+                pool_opening=item.pool_opening,
+                pool_overflow=item.pool_overflow,
+                pool_closing=item.pool_closing,
+                answer=item.answer,
+                salt=item.salt,
+            )
+            for item in overview.rounds
+        ],
+        ledger=[
+            CompanyLotteryLedgerEntryResponse(
+                created_at=item.created_at,
+                account=item.account,
+                kind=item.kind,
+                amount=item.amount,
+                balance_after=item.balance_after,
+                round_number=item.round_number,
+                note=item.note,
+            )
+            for item in overview.ledger
+        ],
+        prizes=[
+            CompanyLotteryPrizeResponse(
+                round_number=item.round_number,
+                display_name=item.display_name,
+                ticket=item.ticket,
+                tier=item.tier,
+                merited_amount=item.merited_amount,
+                prize_amount=item.prize_amount,
+                settled_at=item.settled_at,
+            )
+            for item in overview.prizes
+        ],
+        employees=[
+            CompanyLotteryEmployeeTotalResponse(
+                display_name=item.display_name,
+                tickets=item.tickets,
+                cost=item.cost,
+                prize=item.prize,
+                net=item.net,
+            )
+            for item in overview.employees
+        ],
     )
 
 

@@ -5,6 +5,16 @@ from dzmm_bot.core.ai_knowledge import (
 )
 
 
+def test_api_topic_literal_matches_the_routing_topics():
+    """API 的 Literal 曾经漏掉 performance / dark_market 等主题，导致列表接口 500。"""
+    from typing import get_args
+
+    from dzmm_bot.core.ai_knowledge import KNOWLEDGE_TOPICS
+    from dzmm_bot.core.api_models import AIKnowledgeTopic
+
+    assert set(get_args(AIKnowledgeTopic)) == set(KNOWLEDGE_TOPICS)
+
+
 def card(topic, keywords, *, priority=100, enabled=True, title=None):
     return AIKnowledgeCard(
         topic=topic,
