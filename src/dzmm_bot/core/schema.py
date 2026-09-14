@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
@@ -12,6 +13,7 @@ from sqlalchemy import (
     Index,
     Integer,
     JSON,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -2993,3 +2995,261 @@ class AdminConfigRevisionRecord(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
     version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+class CompanyLotterySettingsRecord(Base):
+    __tablename__ = "company_lottery_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    red_pool: Mapped[int] = mapped_column(Integer, default=10, nullable=False)
+    red_count: Mapped[int] = mapped_column(Integer, default=4, nullable=False)
+    blue_pool: Mapped[int] = mapped_column(Integer, default=6, nullable=False)
+
+    ticket_price: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
+    head_prize: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    second_prize: Mapped[int] = mapped_column(Integer, default=50, nullable=False)
+    third_prize: Mapped[int] = mapped_column(Integer, default=15, nullable=False)
+    fourth_prize: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
+    fifth_prize: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+    pool_ceiling: Mapped[int] = mapped_column(Integer, default=200, nullable=False)
+    per_person_cap: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    max_tickets_per_day: Mapped[int] = mapped_column(
+        Integer, default=5, server_default="5", nullable=False
+    )
+    max_tickets_per_round: Mapped[int] = mapped_column(
+        Integer, default=2000, server_default="2000", nullable=False
+    )
+
+    draw_hour: Mapped[int] = mapped_column(Integer, default=22, nullable=False)
+    draw_minute: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    close_offset_minutes: Mapped[int] = mapped_column(
+        Integer, default=10, server_default="10", nullable=False
+    )
+    notify_offset_minutes: Mapped[int] = mapped_column(
+        Integer, default=5, server_default="5", nullable=False
+    )
+    draft_timeout_minutes: Mapped[int] = mapped_column(
+        Integer, default=15, server_default="15", nullable=False
+    )
+
+    welfare_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=true(), nullable=False
+    )
+    welfare_per_person: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1", nullable=False
+    )
+    welfare_min_tenure_hours: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        BeijingDateTime, default=beijing_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        BeijingDateTime, default=beijing_now, onupdate=beijing_now, nullable=False
+    )
+
+
+class CompanyLotteryRoundRecord(Base):
+    __tablename__ = "company_lottery_rounds"
+    __table_args__ = (
+        UniqueConstraint("group_chat_id", "round_number"),
+        Index(
+            "ux_company_lottery_one_open",
+            "group_chat_id",
+            unique=True,
+            sqlite_where=text("state = 'open'"),
+            postgresql_where=text("state = 'open'"),
+        ),
+        Index("ix_company_lottery_rounds_state_draw", "state", "draw_at"),
+        CheckConstraint(
+            "state IN ('open', 'closed', 'drawn', 'cancelled')",
+            name="ck_company_lottery_round_state",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    group_chat_id: Mapped[UUID] = mapped_column(
+        ForeignKey("group_chats.id"), default=PRIMARY_GROUP_CHAT_ID, nullable=False
+    )
+    round_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    state: Mapped[str] = mapped_column(String(16), nullable=False)
+
+    open_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    close_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    draw_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+
+    commit_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    red_1: Mapped[int | None] = mapped_column(Integer)
+    red_2: Mapped[int | None] = mapped_column(Integer)
+    red_3: Mapped[int | None] = mapped_column(Integer)
+    red_4: Mapped[int | None] = mapped_column(Integer)
+    blue: Mapped[int | None] = mapped_column(Integer)
+    salt: Mapped[str | None] = mapped_column(String(64))
+
+    tickets_sold: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    gross_amount: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    pool_opening: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    pool_overflow: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    pool_available: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    pool_closing: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    payable: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    paid_total: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    haircut_ratio: Mapped[Decimal | None] = mapped_column(Numeric(5, 4))
+    capped_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    winner_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+
+    created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    closed_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    drawn_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+
+
+class CompanyLotteryBetRecord(Base):
+    __tablename__ = "company_lottery_bets"
+    __table_args__ = (
+        UniqueConstraint("inbound_message_id"),
+        UniqueConstraint("round_id", "user_id", "ticket_key"),
+        Index("ix_company_lottery_bets_round_user", "round_id", "user_id"),
+        Index("ix_company_lottery_bets_created_at", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    round_id: Mapped[UUID] = mapped_column(
+        ForeignKey("company_lottery_rounds.id"), nullable=False
+    )
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+
+    red_1: Mapped[int] = mapped_column(Integer, nullable=False)
+    red_2: Mapped[int] = mapped_column(Integer, nullable=False)
+    red_3: Mapped[int] = mapped_column(Integer, nullable=False)
+    red_4: Mapped[int] = mapped_column(Integer, nullable=False)
+    blue: Mapped[int] = mapped_column(Integer, nullable=False)
+    ticket_key: Mapped[str] = mapped_column(String(24), nullable=False)
+
+    cost: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_quick_pick: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false(), nullable=False
+    )
+    prize_tier: Mapped[str | None] = mapped_column(String(12))
+    prize_amount: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    merited_amount: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+
+    inbound_message_id: Mapped[UUID] = mapped_column(
+        ForeignKey("inbound_messages.id"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    settled_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+
+
+class CompanyLotteryDraftRecord(Base):
+    __tablename__ = "company_lottery_drafts"
+    __table_args__ = (UniqueConstraint("user_id"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    group_chat_id: Mapped[UUID] = mapped_column(
+        ForeignKey("group_chats.id"), nullable=False
+    )
+    round_id: Mapped[UUID] = mapped_column(
+        ForeignKey("company_lottery_rounds.id"), nullable=False
+    )
+    target_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    tickets: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, default=list, nullable=False
+    )
+    last_activity_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+
+
+class CompanyLotteryPoolLedgerRecord(Base):
+    __tablename__ = "company_lottery_pool_ledger"
+    __table_args__ = (
+        Index(
+            "ix_company_lottery_ledger_account",
+            "group_chat_id",
+            "account",
+            "created_at",
+        ),
+        CheckConstraint(
+            "account IN ('pool', 'adjustment')",
+            name="ck_company_lottery_ledger_account",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    group_chat_id: Mapped[UUID] = mapped_column(
+        ForeignKey("group_chats.id"), nullable=False
+    )
+    round_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("company_lottery_rounds.id")
+    )
+    account: Mapped[str] = mapped_column(String(16), nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    amount: Mapped[int] = mapped_column(Integer, nullable=False)
+    balance_after: Mapped[int] = mapped_column(Integer, nullable=False)
+    note: Mapped[str | None] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+
+
+class CompanyLotteryWelfareRecord(Base):
+    __tablename__ = "company_lottery_welfare"
+    __table_args__ = (
+        Index("ix_company_lottery_welfare_group", "group_chat_id", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    group_chat_id: Mapped[UUID] = mapped_column(
+        ForeignKey("group_chats.id"), nullable=False
+    )
+    round_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("company_lottery_rounds.id")
+    )
+    employee_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    per_person: Mapped[int] = mapped_column(Integer, nullable=False)
+    paid_total: Mapped[int] = mapped_column(Integer, nullable=False)
+    fund_before: Mapped[int] = mapped_column(Integer, nullable=False)
+    fund_after: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+
+
+class CompanyLotteryWelfarePayoutRecord(Base):
+    __tablename__ = "company_lottery_welfare_payouts"
+    __table_args__ = (
+        UniqueConstraint("welfare_id", "user_id"),
+        Index("ix_company_lottery_welfare_payouts_user", "user_id", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    welfare_id: Mapped[UUID] = mapped_column(
+        ForeignKey("company_lottery_welfare.id"), nullable=False
+    )
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    amount: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)

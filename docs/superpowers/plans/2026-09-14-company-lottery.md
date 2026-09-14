@@ -44,10 +44,12 @@
 - Create: `migrations/versions/20260914_74_company_lottery.py`
 - Create: `tests/deploy/test_company_lottery_migration.py`
 
-- [ ] 写失败测试，覆盖六张表存在、唯一索引与部分索引生效、配置行已插入、启动奖池 100 已写入账本。
-- [ ] 运行 `.venv/bin/pytest -q tests/deploy/test_company_lottery_migration.py`，确认缺少模型与迁移而失败。
-- [ ] 新增 `company_lottery_settings`、`company_lottery_rounds`、`company_lottery_bets`、`company_lottery_drafts`、`company_lottery_pool_ledger`、`company_lottery_welfare`、`company_lottery_welfare_payouts` 七张 ORM；迁移接在当前 `20260909_73_ivorune_platform_node` 后。
-- [ ] 重新运行上述测试。
+- [x] 写失败测试，覆盖六张表存在、唯一索引与部分索引生效、配置行已插入、启动奖池 100 已写入账本。
+- [x] 运行 `.venv/bin/pytest -q tests/deploy/test_company_lottery_migration.py`，确认缺少模型与迁移而失败。
+- [x] 新增 `company_lottery_settings`、`company_lottery_rounds`、`company_lottery_bets`、`company_lottery_drafts`、`company_lottery_pool_ledger`、`company_lottery_welfare`、`company_lottery_welfare_payouts` 七张 ORM；迁移接在当前 `20260909_73_ivorune_platform_node` 后。
+- [x] 重新运行上述测试（4 passed）。
+
+> 注意：`tests/deploy/` 在原始 HEAD 上已有 34 个失败用例（与本玩法无关，已用 `git checkout` 隔离验证）；本玩法新增的 4 个迁移用例全部通过。
 
 ### Task 3: 购票与双账户账本
 
