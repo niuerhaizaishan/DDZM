@@ -2318,8 +2318,6 @@ class CompanyLotteryEmployeeTotal:
 
 @dataclass(frozen=True)
 class CompanyLotteryOverview:
-    group_chat_id: UUID
-    group_name: str
     enabled: bool
     pool_balance: int
     adjustment_balance: int
@@ -27532,25 +27530,22 @@ class CoreRepository:
                 session.flush()
                 return _company_lottery_settings(record)
 
-    def company_lottery_balances(self, group_chat_id: UUID) -> tuple[int, int]:
-        """返回 (奖池余额, 调节金余额)。"""
+    def company_lottery_balances(self) -> tuple[int, int]:
+        """返回全公司共用的 (奖池余额, 调节金余额)。"""
         with self._session() as session:
             return (
-                self._company_lottery_pool_balance(session, group_chat_id, "pool"),
-                self._company_lottery_pool_balance(
-                    session, group_chat_id, "adjustment"
-                ),
+                self._company_lottery_pool_balance(session, "pool"),
+                self._company_lottery_pool_balance(session, "adjustment"),
             )
 
     def current_company_lottery_round(
-        self, group_chat_id: UUID, platform_id: str | None = None
+        self, platform_id: str | None = None
     ) -> CompanyLotteryRoundView | None:
-        """当前未结算的期次；已开奖的期次不返回。"""
+        """当前未结算的期次；已开奖的期次不返回。全公司同一时间只有一期。"""
         with self._session() as session:
             record = session.scalar(
                 select(CompanyLotteryRoundRecord)
                 .where(
-                    CompanyLotteryRoundRecord.group_chat_id == group_chat_id,
                     CompanyLotteryRoundRecord.state.in_(("open", "closed")),
                 )
                 .order_by(CompanyLotteryRoundRecord.round_number.desc())
@@ -27561,12 +27556,11 @@ class CoreRepository:
             return self._company_lottery_round_view(session, record, platform_id)
 
     def company_lottery_round_by_number(
-        self, group_chat_id: UUID, number: int
+        self, number: int
     ) -> CompanyLotteryRoundView | None:
         with self._session() as session:
             record = session.scalar(
                 select(CompanyLotteryRoundRecord).where(
-                    CompanyLotteryRoundRecord.group_chat_id == group_chat_id,
                     CompanyLotteryRoundRecord.round_number == number,
                 )
             )
@@ -27576,31 +27570,24 @@ class CoreRepository:
 
     def company_lottery_overview(
         self,
-        group_chat_id: UUID,
         *,
         round_limit: int = 20,
         ledger_limit: int = 50,
         prize_limit: int = 50,
-    ) -> CompanyLotteryOverview | None:
-        """后台报表：期次、流水、中奖明细与员工累计收益。群不存在时返回 None。"""
+    ) -> CompanyLotteryOverview:
+        """后台报表：全公司的期次、流水、中奖明细与员工累计收益。"""
         with self._session() as session:
-            group = session.get(GroupChatRecord, group_chat_id)
-            if group is None:
-                return None
             settings = _company_lottery_settings(
                 self._company_lottery_settings_record(session)
             )
             pool, adjustment = (
-                self._company_lottery_pool_balance(session, group_chat_id, "pool"),
-                self._company_lottery_pool_balance(
-                    session, group_chat_id, "adjustment"
-                ),
+                self._company_lottery_pool_balance(session, "pool"),
+                self._company_lottery_pool_balance(session, "adjustment"),
             )
 
             current = session.scalar(
                 select(CompanyLotteryRoundRecord.round_number)
                 .where(
-                    CompanyLotteryRoundRecord.group_chat_id == group_chat_id,
                     CompanyLotteryRoundRecord.state.in_(("open", "closed")),
                 )
                 .order_by(CompanyLotteryRoundRecord.round_number.desc())
@@ -27609,7 +27596,6 @@ class CoreRepository:
 
             rounds = session.scalars(
                 select(CompanyLotteryRoundRecord)
-                .where(CompanyLotteryRoundRecord.group_chat_id == group_chat_id)
                 .order_by(CompanyLotteryRoundRecord.round_number.desc())
                 .limit(round_limit)
             ).all()
@@ -27621,7 +27607,6 @@ class CoreRepository:
                     CompanyLotteryRoundRecord.id
                     == CompanyLotteryPoolLedgerRecord.round_id,
                 )
-                .where(CompanyLotteryPoolLedgerRecord.group_chat_id == group_chat_id)
                 .order_by(CompanyLotteryPoolLedgerRecord.created_at.desc())
                 .limit(ledger_limit)
             ).all()
@@ -27638,7 +27623,6 @@ class CoreRepository:
                     CompanyLotteryRoundRecord.id == CompanyLotteryBetRecord.round_id,
                 )
                 .where(
-                    CompanyLotteryRoundRecord.group_chat_id == group_chat_id,
                     CompanyLotteryBetRecord.prize_tier.is_not(None),
                     CompanyLotteryBetRecord.settled_at.is_not(None),
                 )
@@ -27657,11 +27641,6 @@ class CoreRepository:
                     func.coalesce(func.sum(CompanyLotteryBetRecord.prize_amount), 0),
                 )
                 .join(UserRecord, UserRecord.id == CompanyLotteryBetRecord.user_id)
-                .join(
-                    CompanyLotteryRoundRecord,
-                    CompanyLotteryRoundRecord.id == CompanyLotteryBetRecord.round_id,
-                )
-                .where(CompanyLotteryRoundRecord.group_chat_id == group_chat_id)
                 .group_by(UserRecord.display_name)
                 .order_by(func.coalesce(func.sum(CompanyLotteryBetRecord.prize_amount), 0).desc())
             ).all()
@@ -27669,8 +27648,6 @@ class CoreRepository:
             employee_count = len(self._company_lottery_employee_ids(session, 0, None))
 
             return CompanyLotteryOverview(
-                group_chat_id=group_chat_id,
-                group_name=group.name,
                 enabled=settings.enabled,
                 pool_balance=pool,
                 adjustment_balance=adjustment,
@@ -27742,41 +27719,45 @@ class CoreRepository:
                 ),
             )
 
+    def _company_lottery_announce(self, text: str) -> int:
+        """把公告广播到所有已配置的群；返回实际投递的群数。"""
+        delivered = 0
+        for group in self.list_group_chats():
+            destination = self.group_chat_destination(group.id)
+            if destination is None:
+                continue
+            self.enqueue_system_outbound(
+                text,
+                group_chat_id=group.id,
+                destination_chatroom_id=destination,
+            )
+            delivered += 1
+        return delivered
+
     def draw_company_lottery_round_manually(
-        self, group_chat_id: UUID, now: datetime
+        self, now: datetime
     ) -> CompanyLotteryDrawResult | None:
         """后台手动开奖：只对已过停售时刻的期次生效，公告与福利与定时任务一致。"""
         now = now.astimezone(BEIJING)
         settings = self.get_company_lottery_settings()
         if not settings.enabled:
             return None
-        view = self.current_company_lottery_round(group_chat_id)
+        view = self.current_company_lottery_round()
         if view is None or view.close_at > now:
             return None
 
-        destination = self.group_chat_destination(group_chat_id)
-        self.close_company_lottery_round(group_chat_id, now)
-        drawn = self.draw_company_lottery_round(group_chat_id, now, manual=True)
+        self.close_company_lottery_round(now)
+        drawn = self.draw_company_lottery_round(now, manual=True)
         if drawn is None:
             return None
-        if destination is not None:
-            self.enqueue_system_outbound(
-                _render_lottery_draw(drawn, settings),
-                group_chat_id=group_chat_id,
-                destination_chatroom_id=destination,
-            )
-        welfare = self.settle_company_lottery_welfare(group_chat_id, now)
-        if welfare.status == "paid" and destination is not None:
-            self.enqueue_system_outbound(
-                _render_lottery_welfare(welfare),
-                group_chat_id=group_chat_id,
-                destination_chatroom_id=destination,
-            )
+        self._company_lottery_announce(_render_lottery_draw(drawn, settings))
+        welfare = self.settle_company_lottery_welfare(now)
+        if welfare.status == "paid":
+            self._company_lottery_announce(_render_lottery_welfare(welfare))
         return drawn
 
     def deposit_company_lottery_pool(
         self,
-        group_chat_id: UUID,
         amount: int,
         now: datetime,
         *,
@@ -27788,7 +27769,6 @@ class CoreRepository:
                 with self._session() as session:
                     self._company_lottery_pool_append(
                         session,
-                        group_chat_id,
                         None,
                         account,
                         "manual",
@@ -27796,18 +27776,17 @@ class CoreRepository:
                         now,
                         "后台手动注入",
                     )
-        return self.company_lottery_balances(group_chat_id)
+        return self.company_lottery_balances()
 
     def ensure_company_lottery_round(
-        self, group_chat_id: UUID, now: datetime
+        self, now: datetime
     ) -> CompanyLotteryRoundView:
-        """确保群内有一个未结算的期次；没有就新开一期。"""
+        """确保全公司有一个未结算的期次；没有就新开一期。"""
         with self.transaction():
             with self._session() as session:
                 settings = self._company_lottery_settings_record(session)
                 latest = session.scalar(
                     select(CompanyLotteryRoundRecord)
-                    .where(CompanyLotteryRoundRecord.group_chat_id == group_chat_id)
                     .order_by(CompanyLotteryRoundRecord.round_number.desc())
                     .limit(1)
                 )
@@ -27817,7 +27796,6 @@ class CoreRepository:
                 record = self._open_company_lottery_round(
                     session,
                     settings,
-                    group_chat_id,
                     round_number=1 if latest is None else latest.round_number + 1,
                     now=now,
                 )
@@ -27828,7 +27806,6 @@ class CoreRepository:
         inbound_message_id: UUID | str,
         platform_id: str,
         tickets: Sequence[Ticket],
-        group_chat_id: UUID,
         now: datetime,
         *,
         is_quick_pick: bool = False,
@@ -27836,7 +27813,6 @@ class CoreRepository:
         return self._company_lottery_purchase(
             inbound_message_id,
             platform_id,
-            group_chat_id,
             now,
             tickets=tuple(tickets),
             is_quick_pick=is_quick_pick,
@@ -27847,13 +27823,11 @@ class CoreRepository:
         inbound_message_id: UUID | str,
         platform_id: str,
         quantity: int,
-        group_chat_id: UUID,
         now: datetime,
     ) -> CompanyLotteryPurchaseResult:
         return self._company_lottery_purchase(
             inbound_message_id,
             platform_id,
-            group_chat_id,
             now,
             quick_quantity=quantity,
         )
@@ -27907,7 +27881,7 @@ class CoreRepository:
     # ------------------------------------------------------- 公司双色球·购票草稿
 
     def start_company_lottery_draft(
-        self, platform_id: str, target_count: int, group_chat_id: UUID, now: datetime
+        self, platform_id: str, target_count: int, now: datetime
     ) -> CompanyLotteryDraftResult:
         with self.transaction():
             with self._session() as session:
@@ -27920,7 +27894,6 @@ class CoreRepository:
                 round_row = session.scalar(
                     select(CompanyLotteryRoundRecord)
                     .where(
-                        CompanyLotteryRoundRecord.group_chat_id == group_chat_id,
                         CompanyLotteryRoundRecord.state == "open",
                     )
                     .with_for_update()
@@ -27949,7 +27922,6 @@ class CoreRepository:
                 session.add(
                     CompanyLotteryDraftRecord(
                         user_id=user.id,
-                        group_chat_id=group_chat_id,
                         round_id=round_row.id,
                         target_count=target,
                         tickets=[],
@@ -28055,7 +28027,6 @@ class CoreRepository:
         self,
         inbound_message_id: UUID | str,
         platform_id: str,
-        group_chat_id: UUID,
         now: datetime,
     ) -> CompanyLotteryDraftResult:
         view = self.load_company_lottery_draft(platform_id, now)
@@ -28067,7 +28038,6 @@ class CoreRepository:
         purchase = self._company_lottery_purchase(
             inbound_message_id,
             platform_id,
-            group_chat_id,
             now,
             tickets=view.tickets,
             is_quick_pick=all(view.quick_flags),
@@ -28187,14 +28157,13 @@ class CoreRepository:
             )
         )
 
-    def close_company_lottery_round(self, group_chat_id: UUID, now: datetime) -> int:
+    def close_company_lottery_round(self, now: datetime) -> int:
         """把已到停售时刻的开放期次置为 closed，返回受影响的期次数。"""
         with self.transaction():
             with self._session() as session:
                 updated = session.execute(
                     update(CompanyLotteryRoundRecord)
                     .where(
-                        CompanyLotteryRoundRecord.group_chat_id == group_chat_id,
                         CompanyLotteryRoundRecord.state == "open",
                         CompanyLotteryRoundRecord.close_at <= now,
                     )
@@ -28203,7 +28172,7 @@ class CoreRepository:
                 return int(updated or 0)
 
     def draw_company_lottery_round(
-        self, group_chat_id: UUID, now: datetime, *, manual: bool = False
+        self, now: datetime, *, manual: bool = False
     ) -> CompanyLotteryDrawResult | None:
         """到点开奖并开出下一期；未到点或没有待开奖期次时返回 None。
 
@@ -28218,7 +28187,6 @@ class CoreRepository:
                 round_row = session.scalar(
                     select(CompanyLotteryRoundRecord)
                     .where(
-                        CompanyLotteryRoundRecord.group_chat_id == group_chat_id,
                         CompanyLotteryRoundRecord.state.in_(("open", "closed")),
                     )
                     .order_by(CompanyLotteryRoundRecord.round_number.desc())
@@ -28265,9 +28233,7 @@ class CoreRepository:
                     if tier is not None:
                         judged.append((bet, user, tier))
 
-                pool_total = self._company_lottery_pool_balance(
-                    session, group_chat_id, "pool"
-                )
+                pool_total = self._company_lottery_pool_balance(session, "pool")
                 settlement = settle_round(
                     pool_opening=pool_total - round_row.gross_amount,
                     sales=round_row.gross_amount,
@@ -28321,7 +28287,6 @@ class CoreRepository:
                 if settlement.paid_total:
                     self._company_lottery_pool_append(
                         session,
-                        group_chat_id,
                         round_row.id,
                         "pool",
                         "payout",
@@ -28332,7 +28297,6 @@ class CoreRepository:
                 if settlement.overflow:
                     self._company_lottery_pool_append(
                         session,
-                        group_chat_id,
                         round_row.id,
                         "pool",
                         "overflow",
@@ -28342,7 +28306,6 @@ class CoreRepository:
                     )
                     self._company_lottery_pool_append(
                         session,
-                        group_chat_id,
                         round_row.id,
                         "adjustment",
                         "overflow",
@@ -28366,7 +28329,6 @@ class CoreRepository:
                 next_round = self._open_company_lottery_round(
                     session,
                     settings_record,
-                    group_chat_id,
                     round_number=round_row.round_number + 1,
                     now=now,
                 )
@@ -28385,7 +28347,7 @@ class CoreRepository:
                     winners=tuple(winners),
                     pool_balance=settlement.pool_closing,
                     adjustment_balance=self._company_lottery_pool_balance(
-                        session, group_chat_id, "adjustment"
+                        session, "adjustment"
                     ),
                     next_round_number=next_round.round_number,
                 )
@@ -28393,71 +28355,49 @@ class CoreRepository:
     # ----------------------------------------------------------- 公司双色球·福利
 
     def run_company_lottery_jobs(self, now: datetime) -> None:
-        """停售提醒、停售、开奖与全员福利。由 run_daily_jobs 周期性调用。"""
+        """停售提醒、停售、开奖与全员福利。由 run_daily_jobs 周期性调用。
+
+        期次、奖池与调节金是全公司共用的一套，所以这里只跑一遍业务逻辑，
+        公告再广播到所有已配置的群。
+        """
         now = now.astimezone(BEIJING)
         settings = self.get_company_lottery_settings()
         if not settings.enabled:
             return
 
-        for group in self.list_group_chats():
-            self._run_company_lottery_group_jobs(group.id, settings, now)
+        # 冷启动或上一期已结算时把新一期开出来
+        self.ensure_company_lottery_round(now)
 
-    def _run_company_lottery_group_jobs(
-        self,
-        group_chat_id: UUID,
-        settings: CompanyLotterySettings,
-        now: datetime,
-    ) -> None:
-        destination = self.group_chat_destination(group_chat_id)
-        if destination is None:
-            return
-
-        # 冷启动的群第一次跑任务时把期次开出来
-        self.ensure_company_lottery_round(group_chat_id, now)
-
-        view = self.current_company_lottery_round(group_chat_id)
+        view = self.current_company_lottery_round()
         if view is not None and view.state == "open":
-            self._remind_company_lottery_close(group_chat_id, settings, now)
+            self._remind_company_lottery_close(settings, now)
 
-        self.close_company_lottery_round(group_chat_id, now)
+        self.close_company_lottery_round(now)
 
-        drawn = self.draw_company_lottery_round(group_chat_id, now)
+        drawn = self.draw_company_lottery_round(now)
         if drawn is not None:
-            self.enqueue_system_outbound(
-                _render_lottery_draw(drawn, settings),
-                group_chat_id=group_chat_id,
-                destination_chatroom_id=destination,
-            )
+            self._company_lottery_announce(_render_lottery_draw(drawn, settings))
 
-        welfare = self.settle_company_lottery_welfare(group_chat_id, now)
+        welfare = self.settle_company_lottery_welfare(now)
         if welfare.status == "paid":
-            self.enqueue_system_outbound(
-                _render_lottery_welfare(welfare),
-                group_chat_id=group_chat_id,
-                destination_chatroom_id=destination,
-            )
+            self._company_lottery_announce(_render_lottery_welfare(welfare))
 
     def _remind_company_lottery_close(
         self,
-        group_chat_id: UUID,
         settings: CompanyLotterySettings,
         now: datetime,
     ) -> None:
-        """停售提醒：进入提醒窗口、群里足够冷清、且本期还没提醒过时才发。
+        """停售提醒：进入提醒窗口、全公司足够冷清、且本期还没提醒过时才发。
 
         Worker 每秒都会跑一次任务，所以「本期是否已提醒」必须落库占位
-        （`reminded_at`），否则同一个冷清群会被同一条提醒刷屏。群里刚有人说话时
-        只跳过本次，不占位，等下一次 tick 再判。
+        （`reminded_at`），否则会被同一条提醒刷屏。刚有人说话时只跳过本次、
+        不占位，等下一次 tick 再判。
         """
-        destination = self.group_chat_destination(group_chat_id)
-        if destination is None:
-            return
         with self.transaction():
             with self._session() as session:
                 round_row = session.scalar(
                     select(CompanyLotteryRoundRecord)
                     .where(
-                        CompanyLotteryRoundRecord.group_chat_id == group_chat_id,
                         CompanyLotteryRoundRecord.state == "open",
                     )
                     .with_for_update()
@@ -28465,11 +28405,7 @@ class CoreRepository:
                 if round_row is None or round_row.reminded_at is not None:
                     return
 
-                latest = session.scalar(
-                    select(func.max(InboundRecord.received_at)).where(
-                        InboundRecord.group_chat_id == group_chat_id
-                    )
-                )
+                latest = session.scalar(select(func.max(InboundRecord.received_at)))
                 idle = (
                     10**9 if latest is None else int((now - latest).total_seconds())
                 )
@@ -28482,14 +28418,11 @@ class CoreRepository:
                     return
 
                 round_row.reminded_at = now
-                self.enqueue_system_outbound(
-                    _render_lottery_close_notice(
-                        self._company_lottery_round_view(session, round_row, None),
-                        settings,
-                    ),
-                    group_chat_id=group_chat_id,
-                    destination_chatroom_id=destination,
+                notice = _render_lottery_close_notice(
+                    self._company_lottery_round_view(session, round_row, None),
+                    settings,
                 )
+        self._company_lottery_announce(notice)
 
     def count_registered_employees(
         self, *, min_tenure_hours: int = 0, now: datetime | None = None
@@ -28501,7 +28434,7 @@ class CoreRepository:
             )
 
     def settle_company_lottery_welfare(
-        self, group_chat_id: UUID, now: datetime
+        self, now: datetime
     ) -> CompanyLotteryWelfareResult:
         """调节金攒够员工总数就全员发一轮；不足则什么都不做。
 
@@ -28516,9 +28449,7 @@ class CoreRepository:
                 if not settings.welfare_enabled:
                     return CompanyLotteryWelfareResult(status="disabled")
 
-                fund = self._company_lottery_pool_balance(
-                    session, group_chat_id, "adjustment"
-                )
+                fund = self._company_lottery_pool_balance(session, "adjustment")
                 user_ids = self._company_lottery_employee_ids(
                     session, settings.welfare_min_tenure_hours, now
                 )
@@ -28538,12 +28469,10 @@ class CoreRepository:
 
                 latest_round = session.scalar(
                     select(CompanyLotteryRoundRecord)
-                    .where(CompanyLotteryRoundRecord.group_chat_id == group_chat_id)
                     .order_by(CompanyLotteryRoundRecord.round_number.desc())
                     .limit(1)
                 )
                 welfare = CompanyLotteryWelfareRecord(
-                    group_chat_id=group_chat_id,
                     round_id=None if latest_round is None else latest_round.id,
                     employee_count=check.employee_count,
                     per_person=check.per_person,
@@ -28573,7 +28502,6 @@ class CoreRepository:
 
                 self._company_lottery_pool_append(
                     session,
-                    group_chat_id,
                     welfare.round_id,
                     "adjustment",
                     "welfare",
@@ -28592,12 +28520,10 @@ class CoreRepository:
                 )
 
     @staticmethod
-    @staticmethod
     def _company_lottery_inbound_id(
         session: Session,
         inbound_message_id: UUID | str,
         platform_id: str,
-        group_chat_id: UUID,
     ) -> UUID:
         """命令层传平台消息号，仓储层解析成入站记录主键。"""
         if isinstance(inbound_message_id, UUID):
@@ -28606,7 +28532,6 @@ class CoreRepository:
             select(InboundRecord.id).where(
                 InboundRecord.platform_message_id == inbound_message_id,
                 InboundRecord.sender_platform_id == platform_id,
-                InboundRecord.group_chat_id == group_chat_id,
             )
         )
         if inbound_id is None:
@@ -28628,7 +28553,6 @@ class CoreRepository:
         self,
         inbound_message_id: UUID | str,
         platform_id: str,
-        group_chat_id: UUID,
         now: datetime,
         *,
         tickets: tuple[Ticket, ...] | None = None,
@@ -28646,7 +28570,7 @@ class CoreRepository:
 
                 # 同一条消息重复投递：直接返回，不重复扣款
                 inbound_id = self._company_lottery_inbound_id(
-                    session, inbound_message_id, platform_id, group_chat_id
+                    session, inbound_message_id, platform_id
                 )
                 replay = session.scalar(
                     select(CompanyLotteryBetRecord.id)
@@ -28659,7 +28583,6 @@ class CoreRepository:
                 round_row = session.scalar(
                     select(CompanyLotteryRoundRecord)
                     .where(
-                        CompanyLotteryRoundRecord.group_chat_id == group_chat_id,
                         CompanyLotteryRoundRecord.state == "open",
                     )
                     .with_for_update()
@@ -28757,7 +28680,7 @@ class CoreRepository:
                     now,
                 )
                 self._company_lottery_pool_append(
-                    session, group_chat_id, round_row.id, "pool", "sales", cost, now
+                    session, round_row.id, "pool", "sales", cost, now
                 )
 
                 return CompanyLotteryPurchaseResult(
@@ -28824,11 +28747,9 @@ class CoreRepository:
             commit_hash=record.commit_hash,
             tickets_sold=record.tickets_sold,
             gross_amount=record.gross_amount,
-            pool_balance=self._company_lottery_pool_balance(
-                session, record.group_chat_id, "pool"
-            ),
+            pool_balance=self._company_lottery_pool_balance(session, "pool"),
             adjustment_balance=self._company_lottery_pool_balance(
-                session, record.group_chat_id, "adjustment"
+                session, "adjustment"
             ),
             my_tickets=my_tickets,
             answer=answer,
@@ -28836,28 +28757,22 @@ class CoreRepository:
         )
 
     @staticmethod
-    def _company_lottery_pool_balance(
-        session: Session, group_chat_id: UUID, account: str
-    ) -> int:
+    def _company_lottery_pool_balance(session: Session, account: str) -> int:
         """账本按流水求和取余额，与写入顺序无关；balance_after 只作对账留痕。"""
         total = session.scalar(
             select(func.coalesce(func.sum(CompanyLotteryPoolLedgerRecord.amount), 0)).where(
-                CompanyLotteryPoolLedgerRecord.group_chat_id == group_chat_id,
                 CompanyLotteryPoolLedgerRecord.account == account,
             )
         )
         return int(total or 0)
 
     @staticmethod
-    def _company_lottery_pool_has_history(
-        session: Session, group_chat_id: UUID, account: str
-    ) -> bool:
-        """该群这个账本是否已经有任何流水（用于判断是不是首期）。"""
+    def _company_lottery_pool_has_history(session: Session, account: str) -> bool:
+        """这个账本是否已经有任何流水（用于判断是不是首期）。"""
         return (
             session.scalar(
                 select(CompanyLotteryPoolLedgerRecord.id)
                 .where(
-                    CompanyLotteryPoolLedgerRecord.group_chat_id == group_chat_id,
                     CompanyLotteryPoolLedgerRecord.account == account,
                 )
                 .limit(1)
@@ -28868,7 +28783,6 @@ class CoreRepository:
     def _company_lottery_pool_append(
         self,
         session: Session,
-        group_chat_id: UUID,
         round_id: UUID | None,
         account: str,
         kind: str,
@@ -28876,10 +28790,9 @@ class CoreRepository:
         now: datetime,
         note: str | None = None,
     ) -> int:
-        balance = self._company_lottery_pool_balance(session, group_chat_id, account)
+        balance = self._company_lottery_pool_balance(session, account)
         session.add(
             CompanyLotteryPoolLedgerRecord(
-                group_chat_id=group_chat_id,
                 round_id=round_id,
                 account=account,
                 kind=kind,
@@ -28895,7 +28808,6 @@ class CoreRepository:
         self,
         session: Session,
         settings: CompanyLotterySettingsRecord,
-        group_chat_id: UUID,
         *,
         round_number: int,
         now: datetime,
@@ -28908,11 +28820,10 @@ class CoreRepository:
             blue_pool=settings.blue_pool,
         )
         salt = new_salt()
-        # 首期由系统注入启动奖池：迁移只能覆盖上线时已存在的群，新群在开第一期时补上。
-        if not self._company_lottery_pool_has_history(session, group_chat_id, "pool"):
+        # 启动奖池全公司只注入一次：迁移通常已经写过，这里兜住没有迁移数据的库。
+        if not self._company_lottery_pool_has_history(session, "pool"):
             self._company_lottery_pool_append(
                 session,
-                group_chat_id,
                 None,
                 "pool",
                 "deposit",
@@ -28927,7 +28838,6 @@ class CoreRepository:
             close_offset_minutes=settings.close_offset_minutes,
         )
         record = CompanyLotteryRoundRecord(
-            group_chat_id=group_chat_id,
             round_number=round_number,
             state="open",
             open_at=now,
@@ -28940,9 +28850,7 @@ class CoreRepository:
             red_4=answer.reds[3],
             blue=answer.blue,
             salt=salt,
-            pool_opening=self._company_lottery_pool_balance(
-                session, group_chat_id, "pool"
-            ),
+            pool_opening=self._company_lottery_pool_balance(session, "pool"),
             created_at=now,
         )
         session.add(record)

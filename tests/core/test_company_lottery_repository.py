@@ -83,24 +83,22 @@ def seeded(session_factory):
     return session_factory
 
 
-def seed_pool(repository, group_id, amount=100):
-    seed_account(repository, group_id, "pool", amount)
+def seed_pool(repository, amount=100):
+    seed_account(repository, "pool", amount)
 
 
-def seed_account(repository, group_id, account, amount):
-    """把某个账本重置成指定余额，覆盖首期自动注入的启动奖池。"""
+def seed_account(repository, account, amount):
+    """把全公司共用的某个账本重置成指定余额，覆盖首期自动注入的启动奖池。"""
     with repository.transaction():
         with repository._session() as session:
             session.execute(
                 delete(CompanyLotteryPoolLedgerRecord).where(
-                    CompanyLotteryPoolLedgerRecord.group_chat_id == group_id,
                     CompanyLotteryPoolLedgerRecord.account == account,
                 )
             )
             if amount:
                 repository._company_lottery_pool_append(
                     session,
-                    group_id,
                     None,
                     account,
                     "deposit",
@@ -137,8 +135,8 @@ def test_settings_can_be_updated(repository):
 
 
 def test_ensure_round_opens_exactly_one_open_round(repository, seeded, now):
-    first = repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
-    second = repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    first = repository.ensure_company_lottery_round(now)
+    second = repository.ensure_company_lottery_round(now)
 
     assert first.id == second.id
     assert first.round_number == 1
@@ -146,7 +144,7 @@ def test_ensure_round_opens_exactly_one_open_round(repository, seeded, now):
 
 
 def test_round_answer_is_hidden_until_drawn(repository, seeded, now):
-    view = repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    view = repository.ensure_company_lottery_round(now)
 
     assert view.answer is None
     assert view.commit_hash
@@ -160,13 +158,12 @@ def test_round_answer_is_hidden_until_drawn(repository, seeded, now):
 # --------------------------------------------------------------------------- 购票
 
 def test_buy_debits_balance_and_records_the_ticket(repository, seeded, now):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    repository.ensure_company_lottery_round(now)
 
     result = repository.buy_company_lottery_tickets(
         UUID("00000000-0000-0000-0000-0000000000a1"),
         "p1",
         [ticket((3, 7, 9, 10), 5)],
-        PRIMARY_GROUP_CHAT_ID,
         now,
     )
 
@@ -183,14 +180,14 @@ def test_buy_debits_balance_and_records_the_ticket(repository, seeded, now):
 
 
 def test_buy_is_idempotent_for_the_same_inbound_message(repository, seeded, now):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    repository.ensure_company_lottery_round(now)
     message_id = UUID("00000000-0000-0000-0000-0000000000a2")
 
     first = repository.buy_company_lottery_tickets(
-        message_id, "p1", [ticket((1, 2, 3, 4), 1)], PRIMARY_GROUP_CHAT_ID, now
+        message_id, "p1", [ticket((1, 2, 3, 4), 1)], now
     )
     second = repository.buy_company_lottery_tickets(
-        message_id, "p1", [ticket((1, 2, 3, 4), 1)], PRIMARY_GROUP_CHAT_ID, now
+        message_id, "p1", [ticket((1, 2, 3, 4), 1)], now
     )
 
     assert first.status == "bought"
@@ -205,13 +202,12 @@ def test_buy_is_idempotent_for_the_same_inbound_message(repository, seeded, now)
 
 
 def test_buy_rejects_a_ticket_already_owned_this_round(repository, seeded, now):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    repository.ensure_company_lottery_round(now)
     choice = ticket((1, 2, 3, 4), 1)
     repository.buy_company_lottery_tickets(
         UUID("00000000-0000-0000-0000-0000000000a3"),
         "p1",
         [choice],
-        PRIMARY_GROUP_CHAT_ID,
         now,
     )
 
@@ -219,7 +215,6 @@ def test_buy_rejects_a_ticket_already_owned_this_round(repository, seeded, now):
         UUID("00000000-0000-0000-0000-0000000000a4"),
         "p1",
         [choice],
-        PRIMARY_GROUP_CHAT_ID,
         now,
     )
 
@@ -228,12 +223,11 @@ def test_buy_rejects_a_ticket_already_owned_this_round(repository, seeded, now):
 
 
 def test_buy_accepts_a_different_ticket_in_the_same_round(repository, seeded, now):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    repository.ensure_company_lottery_round(now)
     repository.buy_company_lottery_tickets(
         UUID("00000000-0000-0000-0000-0000000000a5"),
         "p1",
         [ticket((1, 2, 3, 4), 1)],
-        PRIMARY_GROUP_CHAT_ID,
         now,
     )
 
@@ -241,7 +235,6 @@ def test_buy_accepts_a_different_ticket_in_the_same_round(repository, seeded, no
         UUID("00000000-0000-0000-0000-0000000000a6"),
         "p1",
         [ticket((5, 6, 7, 8), 2)],
-        PRIMARY_GROUP_CHAT_ID,
         now,
     )
 
@@ -250,13 +243,12 @@ def test_buy_accepts_a_different_ticket_in_the_same_round(repository, seeded, no
 
 
 def test_buy_enforces_the_daily_cap_per_beijing_day(repository, seeded, now):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    repository.ensure_company_lottery_round(now)
     for index in range(5):
         result = repository.buy_company_lottery_tickets(
             UUID(f"00000000-0000-0000-0000-0000000000b{index}"),
             "p1",
             [ticket((1, 2, 3, index), 1)],
-            PRIMARY_GROUP_CHAT_ID,
             now,
         )
         assert result.status == "bought"
@@ -265,7 +257,6 @@ def test_buy_enforces_the_daily_cap_per_beijing_day(repository, seeded, now):
         UUID("00000000-0000-0000-0000-0000000000bf"),
         "p1",
         [ticket((4, 5, 6, 7), 3)],
-        PRIMARY_GROUP_CHAT_ID,
         now,
     )
 
@@ -275,13 +266,12 @@ def test_buy_enforces_the_daily_cap_per_beijing_day(repository, seeded, now):
 
 
 def test_daily_cap_resets_on_the_next_beijing_day(repository, seeded, now):
-    view = repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    view = repository.ensure_company_lottery_round(now)
     for index in range(5):
         repository.buy_company_lottery_tickets(
             UUID(f"00000000-0000-0000-0000-0000000000c{index}"),
             "p1",
             [ticket((1, 2, 3, index), 1)],
-            PRIMARY_GROUP_CHAT_ID,
             now,
         )
 
@@ -291,12 +281,11 @@ def test_daily_cap_resets_on_the_next_beijing_day(repository, seeded, now):
             session.get(CompanyLotteryRoundRecord, view.id).state = "drawn"
 
     tomorrow = datetime(2026, 9, 15, 9, 0, tzinfo=BEIJING)
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, tomorrow)
+    repository.ensure_company_lottery_round(tomorrow)
     later = repository.buy_company_lottery_tickets(
         UUID("00000000-0000-0000-0000-0000000000cf"),
         "p1",
         [ticket((4, 5, 6, 8), 3)],
-        PRIMARY_GROUP_CHAT_ID,
         tomorrow,
     )
 
@@ -305,14 +294,13 @@ def test_daily_cap_resets_on_the_next_beijing_day(repository, seeded, now):
 
 
 def test_buy_rejects_after_close(repository, seeded, now):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    repository.ensure_company_lottery_round(now)
     after_close = datetime(2026, 9, 14, 21, 55, tzinfo=BEIJING)
 
     result = repository.buy_company_lottery_tickets(
         UUID("00000000-0000-0000-0000-0000000000d1"),
         "p1",
         [ticket((1, 2, 3, 4), 1)],
-        PRIMARY_GROUP_CHAT_ID,
         after_close,
     )
 
@@ -323,13 +311,12 @@ def test_buy_rejects_when_balance_is_short(repository, session_factory, now):
     with session_factory.begin() as session:
         add_group(session, PRIMARY_GROUP_CHAT_ID, "主群聊")
         add_user(session, "poor", "穷鬼", 9, balance=1)
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    repository.ensure_company_lottery_round(now)
 
     result = repository.buy_company_lottery_tickets(
         UUID("00000000-0000-0000-0000-0000000000d2"),
         "poor",
         [ticket((1, 2, 3, 4), 1)],
-        PRIMARY_GROUP_CHAT_ID,
         now,
     )
 
@@ -348,13 +335,12 @@ def test_buy_rejects_when_balance_is_short(repository, session_factory, now):
 
 
 def test_buy_rejects_unknown_employee(repository, seeded, now):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    repository.ensure_company_lottery_round(now)
 
     result = repository.buy_company_lottery_tickets(
         UUID("00000000-0000-0000-0000-0000000000d3"),
         "nobody",
         [ticket((1, 2, 3, 4), 1)],
-        PRIMARY_GROUP_CHAT_ID,
         now,
     )
 
@@ -362,14 +348,13 @@ def test_buy_rejects_unknown_employee(repository, seeded, now):
 
 
 def test_buy_rejects_when_disabled(repository, seeded, now):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    repository.ensure_company_lottery_round(now)
     repository.update_company_lottery_settings(enabled=False)
 
     result = repository.buy_company_lottery_tickets(
         UUID("00000000-0000-0000-0000-0000000000d4"),
         "p1",
         [ticket((1, 2, 3, 4), 1)],
-        PRIMARY_GROUP_CHAT_ID,
         now,
     )
 
@@ -379,13 +364,12 @@ def test_buy_rejects_when_disabled(repository, seeded, now):
 # --------------------------------------------------------------------------- 机选
 
 def test_quick_picks_buy_several_distinct_tickets(repository, seeded, now):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    repository.ensure_company_lottery_round(now)
 
     result = repository.buy_quick_picks(
         UUID("00000000-0000-0000-0000-0000000000e1"),
         "p1",
         5,
-        PRIMARY_GROUP_CHAT_ID,
         now,
     )
 
@@ -398,13 +382,12 @@ def test_quick_picks_buy_several_distinct_tickets(repository, seeded, now):
 
 
 def test_quick_picks_avoid_tickets_already_owned(repository, seeded, now):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    repository.ensure_company_lottery_round(now)
     owned = ticket((3, 7, 9, 10), 5)
     repository.buy_company_lottery_tickets(
         UUID("00000000-0000-0000-0000-0000000000e2"),
         "p1",
         [owned],
-        PRIMARY_GROUP_CHAT_ID,
         now,
     )
 
@@ -412,7 +395,6 @@ def test_quick_picks_avoid_tickets_already_owned(repository, seeded, now):
         UUID("00000000-0000-0000-0000-0000000000e3"),
         "p1",
         4,
-        PRIMARY_GROUP_CHAT_ID,
         now,
     )
 
@@ -420,12 +402,11 @@ def test_quick_picks_avoid_tickets_already_owned(repository, seeded, now):
 
 
 def test_quick_picks_share_the_daily_cap(repository, seeded, now):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    repository.ensure_company_lottery_round(now)
     repository.buy_company_lottery_tickets(
         UUID("00000000-0000-0000-0000-0000000000e4"),
         "p1",
         [ticket((1, 2, 3, 4), 1)],
-        PRIMARY_GROUP_CHAT_ID,
         now,
     )
 
@@ -433,7 +414,6 @@ def test_quick_picks_share_the_daily_cap(repository, seeded, now):
         UUID("00000000-0000-0000-0000-0000000000e5"),
         "p1",
         5,
-        PRIMARY_GROUP_CHAT_ID,
         now,
     )
 
@@ -442,12 +422,11 @@ def test_quick_picks_share_the_daily_cap(repository, seeded, now):
 
 
 def test_quick_pick_result_is_marked_on_the_bet(repository, seeded, now):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    repository.ensure_company_lottery_round(now)
     repository.buy_quick_picks(
         UUID("00000000-0000-0000-0000-0000000000e6"),
         "p1",
         1,
-        PRIMARY_GROUP_CHAT_ID,
         now,
     )
 
@@ -458,24 +437,22 @@ def test_quick_pick_result_is_marked_on_the_bet(repository, seeded, now):
 # --------------------------------------------------------------------------- 账本
 
 def test_sales_land_in_the_pool_ledger(repository, seeded, now):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
-    seed_pool(repository, PRIMARY_GROUP_CHAT_ID, 0)
+    repository.ensure_company_lottery_round(now)
+    seed_pool(repository, 0)
     repository.buy_company_lottery_tickets(
         UUID("00000000-0000-0000-0000-0000000000f1"),
         "p1",
         [ticket((1, 2, 3, 4), 1)],
-        PRIMARY_GROUP_CHAT_ID,
         now,
     )
     repository.buy_company_lottery_tickets(
         UUID("00000000-0000-0000-0000-0000000000f2"),
         "p2",
         [ticket((5, 6, 7, 8), 2), ticket((1, 5, 6, 7), 3)],
-        PRIMARY_GROUP_CHAT_ID,
         now,
     )
 
-    pool, adjustment = repository.company_lottery_balances(PRIMARY_GROUP_CHAT_ID)
+    pool, adjustment = repository.company_lottery_balances()
 
     assert pool == 6
     assert adjustment == 0
@@ -493,18 +470,17 @@ def test_sales_land_in_the_pool_ledger(repository, seeded, now):
 
 
 def test_first_round_injects_the_starting_pool_once(repository, seeded, now):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    repository.ensure_company_lottery_round(now)
 
-    assert repository.company_lottery_balances(PRIMARY_GROUP_CHAT_ID) == (100, 0)
+    assert repository.company_lottery_balances() == (100, 0)
 
     # 开第二期时不能再注入一次
-    repository.draw_company_lottery_round(PRIMARY_GROUP_CHAT_ID, DRAW_AT)
+    repository.draw_company_lottery_round(DRAW_AT)
 
-    assert repository.company_lottery_balances(PRIMARY_GROUP_CHAT_ID) == (100, 0)
+    assert repository.company_lottery_balances() == (100, 0)
     with repository._session() as session:
         deposits = session.scalars(
             select(CompanyLotteryPoolLedgerRecord.amount).where(
-                CompanyLotteryPoolLedgerRecord.group_chat_id == PRIMARY_GROUP_CHAT_ID,
                 CompanyLotteryPoolLedgerRecord.account == "pool",
                 CompanyLotteryPoolLedgerRecord.kind == "deposit",
             )
@@ -514,17 +490,16 @@ def test_first_round_injects_the_starting_pool_once(repository, seeded, now):
 
 def test_pool_seed_is_configurable(repository, seeded, now):
     repository.update_company_lottery_settings(pool_seed=40)
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    repository.ensure_company_lottery_round(now)
 
-    assert repository.company_lottery_balances(PRIMARY_GROUP_CHAT_ID) == (40, 0)
+    assert repository.company_lottery_balances() == (40, 0)
 
 
 def test_round_schedule_is_beijing_time_even_for_a_utc_clock(repository, seeded):
     """核心层 clock 给的是 UTC，停售与开奖必须仍落在北京时间整点。"""
     from datetime import UTC
 
-    view = repository.ensure_company_lottery_round(
-        PRIMARY_GROUP_CHAT_ID, datetime(2026, 9, 14, 12, 0, tzinfo=UTC)
+    view = repository.ensure_company_lottery_round(datetime(2026, 9, 14, 12, 0, tzinfo=UTC)
     )
 
     assert view.close_at.astimezone(BEIJING).strftime("%H:%M") == "21:50"
@@ -533,22 +508,20 @@ def test_round_schedule_is_beijing_time_even_for_a_utc_clock(repository, seeded)
 
 
 def test_pool_balance_matches_the_ledger_sum(repository, seeded, now):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    repository.ensure_company_lottery_round(now)
     repository.buy_company_lottery_tickets(
         UUID("00000000-0000-0000-0000-0000000000f3"),
         "p1",
         [ticket((1, 2, 3, 4), 1)],
-        PRIMARY_GROUP_CHAT_ID,
         now,
     )
 
-    pool, _ = repository.company_lottery_balances(PRIMARY_GROUP_CHAT_ID)
+    pool, _ = repository.company_lottery_balances()
     with repository._session() as session:
         total = session.scalar(
             select(
                 func.coalesce(func.sum(CompanyLotteryPoolLedgerRecord.amount), 0)
             ).where(
-                CompanyLotteryPoolLedgerRecord.group_chat_id == PRIMARY_GROUP_CHAT_ID,
                 CompanyLotteryPoolLedgerRecord.account == "pool",
             )
         )
@@ -556,45 +529,50 @@ def test_pool_balance_matches_the_ledger_sum(repository, seeded, now):
     assert pool == int(total)
 
 
-# --------------------------------------------------------------------------- 多群
+# --------------------------------------------------------------------------- 全公司共用
 
-def test_rounds_and_pools_are_scoped_per_group(repository, seeded, now):
-    first = repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
-    second = repository.ensure_company_lottery_round(SECOND_GROUP_CHAT_ID, now)
+def test_one_round_and_one_pool_are_shared_across_groups(repository, seeded, now):
+    """三个群共用一套经济：无论从哪个群调用，都是同一期、同一本奖池账。"""
+    first = repository.ensure_company_lottery_round(now)
+    second = repository.ensure_company_lottery_round(now)
+    seed_pool(repository, 0)
 
+    assert first.id == second.id
     assert first.round_number == 1
-    assert second.round_number == 1
-    assert first.id != second.id
 
-    seed_pool(repository, PRIMARY_GROUP_CHAT_ID, 0)
-    seed_pool(repository, SECOND_GROUP_CHAT_ID, 0)
     repository.buy_company_lottery_tickets(
         UUID("00000000-0000-0000-0000-000000000101"),
         "p1",
         [ticket((1, 2, 3, 4), 1)],
-        PRIMARY_GROUP_CHAT_ID,
+        now,
+    )
+    repository.buy_company_lottery_tickets(
+        UUID("00000000-0000-0000-0000-000000000104"),
+        "p2",
+        [ticket((5, 6, 7, 8), 2)],
         now,
     )
 
-    assert repository.company_lottery_balances(PRIMARY_GROUP_CHAT_ID)[0] == 2
-    assert repository.company_lottery_balances(SECOND_GROUP_CHAT_ID)[0] == 0
+    # 来自不同群的两次购票进的是同一本账、同一期
+    pool, adjustment = repository.company_lottery_balances()
+    assert pool == 4
+    assert adjustment == 0
+    assert repository.current_company_lottery_round().tickets_sold == 2
 
 
 def test_own_history_is_cross_group(repository, seeded, now):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
-    repository.ensure_company_lottery_round(SECOND_GROUP_CHAT_ID, now)
+    repository.ensure_company_lottery_round(now)
+    repository.ensure_company_lottery_round(now)
     repository.buy_company_lottery_tickets(
         UUID("00000000-0000-0000-0000-000000000102"),
         "p1",
         [ticket((1, 2, 3, 4), 1)],
-        PRIMARY_GROUP_CHAT_ID,
         now,
     )
     repository.buy_company_lottery_tickets(
         UUID("00000000-0000-0000-0000-000000000103"),
         "p1",
         [ticket((5, 6, 7, 8), 2)],
-        SECOND_GROUP_CHAT_ID,
         now,
     )
 
@@ -607,10 +585,10 @@ def test_own_history_is_cross_group(repository, seeded, now):
 # --------------------------------------------------------------------------- 引导购票
 
 def test_draft_starts_and_reports_its_target(repository, seeded, now):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    repository.ensure_company_lottery_round(now)
 
     result = repository.start_company_lottery_draft(
-        "p1", 5, PRIMARY_GROUP_CHAT_ID, now
+        "p1", 5, now
     )
 
     assert result.status == "started"
@@ -620,17 +598,16 @@ def test_draft_starts_and_reports_its_target(repository, seeded, now):
 
 
 def test_draft_target_is_capped_by_the_daily_limit(repository, seeded, now):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    repository.ensure_company_lottery_round(now)
     repository.buy_company_lottery_tickets(
         UUID("00000000-0000-0000-0000-000000000201"),
         "p1",
         [ticket((1, 2, 3, 4), 1)],
-        PRIMARY_GROUP_CHAT_ID,
         now,
     )
 
     result = repository.start_company_lottery_draft(
-        "p1", 5, PRIMARY_GROUP_CHAT_ID, now
+        "p1", 5, now
     )
 
     assert result.status == "started"
@@ -638,8 +615,8 @@ def test_draft_target_is_capped_by_the_daily_limit(repository, seeded, now):
 
 
 def test_draft_collects_manual_tickets_until_ready(repository, seeded, now):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
-    repository.start_company_lottery_draft("p1", 2, PRIMARY_GROUP_CHAT_ID, now)
+    repository.ensure_company_lottery_round(now)
+    repository.start_company_lottery_draft("p1", 2, now)
 
     first = repository.append_company_lottery_draft(
         "p1", ticket((1, 2, 3, 4), 1), now
@@ -659,8 +636,8 @@ def test_draft_collects_manual_tickets_until_ready(repository, seeded, now):
 
 
 def test_draft_accepts_quick_picks_mixed_with_manual(repository, seeded, now):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
-    repository.start_company_lottery_draft("p1", 2, PRIMARY_GROUP_CHAT_ID, now)
+    repository.ensure_company_lottery_round(now)
+    repository.start_company_lottery_draft("p1", 2, now)
     manual = ticket((1, 2, 3, 4), 1)
     repository.append_company_lottery_draft("p1", manual, now)
 
@@ -676,8 +653,8 @@ def test_draft_accepts_quick_picks_mixed_with_manual(repository, seeded, now):
 
 
 def test_draft_rejects_a_duplicate_ticket(repository, seeded, now):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
-    repository.start_company_lottery_draft("p1", 3, PRIMARY_GROUP_CHAT_ID, now)
+    repository.ensure_company_lottery_round(now)
+    repository.start_company_lottery_draft("p1", 3, now)
     choice = ticket((1, 2, 3, 4), 1)
     repository.append_company_lottery_draft("p1", choice, now)
 
@@ -688,16 +665,15 @@ def test_draft_rejects_a_duplicate_ticket(repository, seeded, now):
 
 
 def test_draft_rejects_a_ticket_already_owned_this_round(repository, seeded, now):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    repository.ensure_company_lottery_round(now)
     owned = ticket((1, 2, 3, 4), 1)
     repository.buy_company_lottery_tickets(
         UUID("00000000-0000-0000-0000-000000000202"),
         "p1",
         [owned],
-        PRIMARY_GROUP_CHAT_ID,
         now,
     )
-    repository.start_company_lottery_draft("p1", 3, PRIMARY_GROUP_CHAT_ID, now)
+    repository.start_company_lottery_draft("p1", 3, now)
 
     again = repository.append_company_lottery_draft("p1", owned, now)
 
@@ -705,8 +681,8 @@ def test_draft_rejects_a_ticket_already_owned_this_round(repository, seeded, now
 
 
 def test_draft_expires_after_the_timeout(repository, seeded, now):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
-    repository.start_company_lottery_draft("p1", 3, PRIMARY_GROUP_CHAT_ID, now)
+    repository.ensure_company_lottery_round(now)
+    repository.start_company_lottery_draft("p1", 3, now)
     repository.append_company_lottery_draft("p1", ticket((1, 2, 3, 4), 1), now)
 
     later = datetime(2026, 9, 14, 12, 16, tzinfo=BEIJING)
@@ -719,8 +695,8 @@ def test_draft_expires_after_the_timeout(repository, seeded, now):
 
 
 def test_cancelling_a_draft_never_touches_the_balance(repository, seeded, now):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
-    repository.start_company_lottery_draft("p1", 3, PRIMARY_GROUP_CHAT_ID, now)
+    repository.ensure_company_lottery_round(now)
+    repository.start_company_lottery_draft("p1", 3, now)
     repository.append_company_lottery_draft("p1", ticket((1, 2, 3, 4), 1), now)
 
     cancelled = repository.cancel_company_lottery_draft("p1")
@@ -735,8 +711,8 @@ def test_cancelling_a_draft_never_touches_the_balance(repository, seeded, now):
 
 
 def test_confirming_a_draft_buys_every_ticket_in_one_go(repository, seeded, now):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
-    repository.start_company_lottery_draft("p1", 3, PRIMARY_GROUP_CHAT_ID, now)
+    repository.ensure_company_lottery_round(now)
+    repository.start_company_lottery_draft("p1", 3, now)
     repository.append_company_lottery_draft("p1", ticket((1, 2, 3, 4), 1), now)
     repository.append_company_lottery_draft("p1", ticket((5, 6, 7, 8), 2), now)
     repository.append_company_lottery_draft("p1", ticket((1, 5, 6, 7), 3), now)
@@ -744,7 +720,6 @@ def test_confirming_a_draft_buys_every_ticket_in_one_go(repository, seeded, now)
     result = repository.confirm_company_lottery_draft(
         UUID("00000000-0000-0000-0000-000000000203"),
         "p1",
-        PRIMARY_GROUP_CHAT_ID,
         now,
     )
 
@@ -761,15 +736,14 @@ def test_confirming_a_draft_buys_every_ticket_in_one_go(repository, seeded, now)
 
 
 def test_confirming_an_all_quick_draft_marks_bets_as_quick(repository, seeded, now):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
-    repository.start_company_lottery_draft("p1", 2, PRIMARY_GROUP_CHAT_ID, now)
+    repository.ensure_company_lottery_round(now)
+    repository.start_company_lottery_draft("p1", 2, now)
     repository.append_quick_pick_to_draft("p1", now)
     repository.append_quick_pick_to_draft("p1", now)
 
     result = repository.confirm_company_lottery_draft(
         UUID("00000000-0000-0000-0000-000000000204"),
         "p1",
-        PRIMARY_GROUP_CHAT_ID,
         now,
     )
 
@@ -781,12 +755,11 @@ def test_confirming_an_all_quick_draft_marks_bets_as_quick(repository, seeded, n
 
 
 def test_confirming_without_a_draft_reports_no_draft(repository, seeded, now):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    repository.ensure_company_lottery_round(now)
 
     result = repository.confirm_company_lottery_draft(
         UUID("00000000-0000-0000-0000-000000000205"),
         "p1",
-        PRIMARY_GROUP_CHAT_ID,
         now,
     )
 
@@ -797,15 +770,14 @@ def test_confirming_a_draft_respects_the_current_balance(repository, session_fac
     with session_factory.begin() as session:
         add_group(session, PRIMARY_GROUP_CHAT_ID, "主群聊")
         add_user(session, "p3", "小刚", 3, balance=3)
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
-    repository.start_company_lottery_draft("p3", 3, PRIMARY_GROUP_CHAT_ID, now)
+    repository.ensure_company_lottery_round(now)
+    repository.start_company_lottery_draft("p3", 3, now)
     repository.append_company_lottery_draft("p3", ticket((1, 2, 3, 4), 1), now)
     repository.append_company_lottery_draft("p3", ticket((5, 6, 7, 8), 2), now)
 
     result = repository.confirm_company_lottery_draft(
         UUID("00000000-0000-0000-0000-000000000206"),
         "p3",
-        PRIMARY_GROUP_CHAT_ID,
         now,
     )
 
@@ -818,11 +790,11 @@ def test_confirming_a_draft_respects_the_current_balance(repository, session_fac
 
 
 def test_starting_a_draft_again_replaces_the_previous_one(repository, seeded, now):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
-    repository.start_company_lottery_draft("p1", 5, PRIMARY_GROUP_CHAT_ID, now)
+    repository.ensure_company_lottery_round(now)
+    repository.start_company_lottery_draft("p1", 5, now)
     repository.append_company_lottery_draft("p1", ticket((1, 2, 3, 4), 1), now)
 
-    repository.start_company_lottery_draft("p1", 2, PRIMARY_GROUP_CHAT_ID, now)
+    repository.start_company_lottery_draft("p1", 2, now)
 
     draft = repository.load_company_lottery_draft("p1", now)
     assert draft is not None
@@ -852,40 +824,36 @@ def balance_of(repository, platform_id):
 
 
 def test_close_marks_due_rounds_closed(repository, seeded, now):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    repository.ensure_company_lottery_round(now)
 
-    assert repository.close_company_lottery_round(
-        PRIMARY_GROUP_CHAT_ID, now
+    assert repository.close_company_lottery_round(now
     ) == 0
-    assert repository.close_company_lottery_round(
-        PRIMARY_GROUP_CHAT_ID, datetime(2026, 9, 14, 21, 50, tzinfo=BEIJING)
+    assert repository.close_company_lottery_round(datetime(2026, 9, 14, 21, 50, tzinfo=BEIJING)
     ) == 1
-    assert repository.close_company_lottery_round(
-        PRIMARY_GROUP_CHAT_ID, datetime(2026, 9, 14, 21, 55, tzinfo=BEIJING)
+    assert repository.close_company_lottery_round(datetime(2026, 9, 14, 21, 55, tzinfo=BEIJING)
     ) == 0
 
-    view = repository.current_company_lottery_round(PRIMARY_GROUP_CHAT_ID)
+    view = repository.current_company_lottery_round()
     assert view.state == "closed"
 
 
 def test_draw_waits_for_the_draw_time(repository, seeded, now):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    repository.ensure_company_lottery_round(now)
 
-    assert repository.draw_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now) is None
+    assert repository.draw_company_lottery_round(now) is None
 
 
 def test_draw_pays_the_head_prize(repository, seeded, now):
-    view = repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
-    seed_pool(repository, PRIMARY_GROUP_CHAT_ID, 100)
+    view = repository.ensure_company_lottery_round(now)
+    seed_pool(repository, 100)
     repository.buy_company_lottery_tickets(
         UUID("00000000-0000-0000-0000-000000000301"),
         "p1",
         [answer_for(repository, view.id)],
-        PRIMARY_GROUP_CHAT_ID,
         now,
     )
 
-    result = repository.draw_company_lottery_round(PRIMARY_GROUP_CHAT_ID, DRAW_AT)
+    result = repository.draw_company_lottery_round(DRAW_AT)
 
     assert result is not None
     assert result.round_number == 1
@@ -898,18 +866,17 @@ def test_draw_pays_the_head_prize(repository, seeded, now):
 
 
 def test_draw_pays_a_fifth_prize_for_a_blue_hit(repository, seeded, now):
-    view = repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    view = repository.ensure_company_lottery_round(now)
     answer = answer_for(repository, view.id)
     near_miss = Ticket(reds=losing_ticket(answer).reds, blue=answer.blue)
     repository.buy_company_lottery_tickets(
         UUID("00000000-0000-0000-0000-000000000302"),
         "p1",
         [near_miss],
-        PRIMARY_GROUP_CHAT_ID,
         now,
     )
 
-    result = repository.draw_company_lottery_round(PRIMARY_GROUP_CHAT_ID, DRAW_AT)
+    result = repository.draw_company_lottery_round(DRAW_AT)
 
     assert result.winners[0].tier == "fifth"
     assert result.winners[0].amount == 1
@@ -931,17 +898,16 @@ def losing_ticket(answer):
 
 
 def test_draw_ignores_losing_tickets(repository, seeded, now):
-    view = repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    view = repository.ensure_company_lottery_round(now)
     answer = answer_for(repository, view.id)
     repository.buy_company_lottery_tickets(
         UUID("00000000-0000-0000-0000-000000000303"),
         "p1",
         [losing_ticket(answer)],
-        PRIMARY_GROUP_CHAT_ID,
         now,
     )
 
-    result = repository.draw_company_lottery_round(PRIMARY_GROUP_CHAT_ID, DRAW_AT)
+    result = repository.draw_company_lottery_round(DRAW_AT)
 
     assert result.winner_count == 0
     assert result.paid_total == 0
@@ -949,18 +915,17 @@ def test_draw_ignores_losing_tickets(repository, seeded, now):
 
 
 def test_draw_is_idempotent(repository, seeded, now):
-    view = repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
-    seed_pool(repository, PRIMARY_GROUP_CHAT_ID, 100)
+    view = repository.ensure_company_lottery_round(now)
+    seed_pool(repository, 100)
     repository.buy_company_lottery_tickets(
         UUID("00000000-0000-0000-0000-000000000304"),
         "p1",
         [answer_for(repository, view.id)],
-        PRIMARY_GROUP_CHAT_ID,
         now,
     )
 
-    first = repository.draw_company_lottery_round(PRIMARY_GROUP_CHAT_ID, DRAW_AT)
-    second = repository.draw_company_lottery_round(PRIMARY_GROUP_CHAT_ID, DRAW_AT)
+    first = repository.draw_company_lottery_round(DRAW_AT)
+    second = repository.draw_company_lottery_round(DRAW_AT)
 
     assert first is not None
     assert second is None
@@ -976,18 +941,17 @@ def test_draw_is_idempotent(repository, seeded, now):
 
 
 def test_draw_merges_and_caps_per_employee(repository, seeded, now):
-    view = repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
-    seed_pool(repository, PRIMARY_GROUP_CHAT_ID, 200)
+    view = repository.ensure_company_lottery_round(now)
+    seed_pool(repository, 200)
     answer = answer_for(repository, view.id)
     repository.buy_company_lottery_tickets(
         UUID("00000000-0000-0000-0000-000000000305"),
         "p1",
         [answer, Ticket(reds=answer.reds, blue=answer.blue % 6 + 1)],
-        PRIMARY_GROUP_CHAT_ID,
         now,
     )
 
-    result = repository.draw_company_lottery_round(PRIMARY_GROUP_CHAT_ID, DRAW_AT)
+    result = repository.draw_company_lottery_round(DRAW_AT)
 
     # 一等奖 100 + 二等奖 50 = 150，合并后按单人 100 封顶
     assert result.payable == 100
@@ -998,17 +962,16 @@ def test_draw_merges_and_caps_per_employee(repository, seeded, now):
 
 
 def test_draw_haircuts_when_the_pool_is_short(repository, seeded, now):
-    view = repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
-    seed_pool(repository, PRIMARY_GROUP_CHAT_ID, 0)
+    view = repository.ensure_company_lottery_round(now)
+    seed_pool(repository, 0)
     repository.buy_company_lottery_tickets(
         UUID("00000000-0000-0000-0000-000000000306"),
         "p1",
         [answer_for(repository, view.id)],
-        PRIMARY_GROUP_CHAT_ID,
         now,
     )
 
-    result = repository.draw_company_lottery_round(PRIMARY_GROUP_CHAT_ID, DRAW_AT)
+    result = repository.draw_company_lottery_round(DRAW_AT)
 
     # 奖池只有 2 币，应付 100，按比例折算
     assert result.payable == 100
@@ -1020,39 +983,37 @@ def test_draw_haircuts_when_the_pool_is_short(repository, seeded, now):
 
 
 def test_draw_pours_overflow_into_the_adjustment_fund(repository, seeded, now):
-    view = repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
-    seed_pool(repository, PRIMARY_GROUP_CHAT_ID, 200)
+    view = repository.ensure_company_lottery_round(now)
+    seed_pool(repository, 200)
     answer = answer_for(repository, view.id)
     repository.buy_company_lottery_tickets(
         UUID("00000000-0000-0000-0000-000000000307"),
         "p1",
         [losing_ticket(answer)],
-        PRIMARY_GROUP_CHAT_ID,
         now,
     )
 
-    result = repository.draw_company_lottery_round(PRIMARY_GROUP_CHAT_ID, DRAW_AT)
+    result = repository.draw_company_lottery_round(DRAW_AT)
 
-    pool, adjustment = repository.company_lottery_balances(PRIMARY_GROUP_CHAT_ID)
+    pool, adjustment = repository.company_lottery_balances()
     assert result.pool_balance == 200
     assert pool == 200
     assert adjustment == 2
 
 
 def test_draw_keeps_the_head_pool_rolling_when_nobody_wins(repository, seeded, now):
-    view = repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
-    seed_pool(repository, PRIMARY_GROUP_CHAT_ID, 100)
+    view = repository.ensure_company_lottery_round(now)
+    seed_pool(repository, 100)
     answer = answer_for(repository, view.id)
     repository.buy_company_lottery_tickets(
         UUID("00000000-0000-0000-0000-000000000308"),
         "p1",
         [losing_ticket(answer)],
-        PRIMARY_GROUP_CHAT_ID,
         now,
     )
 
-    first = repository.draw_company_lottery_round(PRIMARY_GROUP_CHAT_ID, DRAW_AT)
-    pool_after_first, _ = repository.company_lottery_balances(PRIMARY_GROUP_CHAT_ID)
+    first = repository.draw_company_lottery_round(DRAW_AT)
+    pool_after_first, _ = repository.company_lottery_balances()
 
     assert first.winner_count == 0
     assert first.paid_total == 0
@@ -1060,19 +1021,18 @@ def test_draw_keeps_the_head_pool_rolling_when_nobody_wins(repository, seeded, n
 
 
 def test_draw_opens_the_next_round(repository, seeded, now):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    repository.ensure_company_lottery_round(now)
     repository.buy_company_lottery_tickets(
         UUID("00000000-0000-0000-0000-000000000309"),
         "p1",
         [ticket((1, 2, 3, 4), 1)],
-        PRIMARY_GROUP_CHAT_ID,
         now,
     )
 
-    result = repository.draw_company_lottery_round(PRIMARY_GROUP_CHAT_ID, DRAW_AT)
+    result = repository.draw_company_lottery_round(DRAW_AT)
 
     assert result.next_round_number == 2
-    view = repository.current_company_lottery_round(PRIMARY_GROUP_CHAT_ID)
+    view = repository.current_company_lottery_round()
     assert view.round_number == 2
     assert view.state == "open"
     assert view.answer is None
@@ -1080,13 +1040,13 @@ def test_draw_opens_the_next_round(repository, seeded, now):
 
 
 def test_draw_reveals_the_answer_only_after_settlement(repository, seeded, now):
-    view = repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
+    view = repository.ensure_company_lottery_round(now)
     expected = answer_for(repository, view.id)
     assert view.answer is None
 
-    repository.draw_company_lottery_round(PRIMARY_GROUP_CHAT_ID, DRAW_AT)
+    repository.draw_company_lottery_round(DRAW_AT)
 
-    settled = repository.company_lottery_round_by_number(PRIMARY_GROUP_CHAT_ID, 1)
+    settled = repository.company_lottery_round_by_number(1)
     assert settled.state == "drawn"
     assert settled.answer == expected
     assert settled.salt
@@ -1099,24 +1059,24 @@ def test_employee_headcount_is_the_welfare_threshold(repository, seeded):
 
 
 def test_welfare_does_nothing_below_the_threshold(repository, seeded, now):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
-    seed_account(repository, PRIMARY_GROUP_CHAT_ID, "adjustment", 1)
+    repository.ensure_company_lottery_round(now)
+    seed_account(repository, "adjustment", 1)
 
-    result = repository.settle_company_lottery_welfare(PRIMARY_GROUP_CHAT_ID, now)
+    result = repository.settle_company_lottery_welfare(now)
 
     assert result.status == "not_due"
     assert result.employee_count == 2
     assert result.fund_after == 1
     assert balance_of(repository, "p1") == 100
-    _, adjustment = repository.company_lottery_balances(PRIMARY_GROUP_CHAT_ID)
+    _, adjustment = repository.company_lottery_balances()
     assert adjustment == 1
 
 
 def test_welfare_pays_every_employee_once(repository, seeded, now):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
-    seed_account(repository, PRIMARY_GROUP_CHAT_ID, "adjustment", 2)
+    repository.ensure_company_lottery_round(now)
+    seed_account(repository, "adjustment", 2)
 
-    result = repository.settle_company_lottery_welfare(PRIMARY_GROUP_CHAT_ID, now)
+    result = repository.settle_company_lottery_welfare(now)
 
     assert result.status == "paid"
     assert result.employee_count == 2
@@ -1126,27 +1086,27 @@ def test_welfare_pays_every_employee_once(repository, seeded, now):
     assert result.fund_after == 0
     assert balance_of(repository, "p1") == 101
     assert balance_of(repository, "p2") == 101
-    _, adjustment = repository.company_lottery_balances(PRIMARY_GROUP_CHAT_ID)
+    _, adjustment = repository.company_lottery_balances()
     assert adjustment == 0
 
 
 def test_welfare_keeps_the_remainder(repository, seeded, now):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
-    seed_account(repository, PRIMARY_GROUP_CHAT_ID, "adjustment", 5)
+    repository.ensure_company_lottery_round(now)
+    seed_account(repository, "adjustment", 5)
 
-    result = repository.settle_company_lottery_welfare(PRIMARY_GROUP_CHAT_ID, now)
+    result = repository.settle_company_lottery_welfare(now)
 
     assert result.paid_total == 2
     assert result.fund_after == 3
-    _, adjustment = repository.company_lottery_balances(PRIMARY_GROUP_CHAT_ID)
+    _, adjustment = repository.company_lottery_balances()
     assert adjustment == 3
 
 
 def test_welfare_pays_only_one_round_even_with_a_large_fund(repository, seeded, now):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
-    seed_account(repository, PRIMARY_GROUP_CHAT_ID, "adjustment", 100)
+    repository.ensure_company_lottery_round(now)
+    seed_account(repository, "adjustment", 100)
 
-    result = repository.settle_company_lottery_welfare(PRIMARY_GROUP_CHAT_ID, now)
+    result = repository.settle_company_lottery_welfare(now)
 
     assert result.paid_total == 2
     assert result.fund_after == 98
@@ -1154,12 +1114,12 @@ def test_welfare_pays_only_one_round_even_with_a_large_fund(repository, seeded, 
 
 
 def test_welfare_threshold_follows_the_latest_headcount(repository, seeded, now):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
-    seed_account(repository, PRIMARY_GROUP_CHAT_ID, "adjustment", 2)
+    repository.ensure_company_lottery_round(now)
+    seed_account(repository, "adjustment", 2)
     with seeded.begin() as session:
         add_user(session, "p3", "小刚", 3)
 
-    result = repository.settle_company_lottery_welfare(PRIMARY_GROUP_CHAT_ID, now)
+    result = repository.settle_company_lottery_welfare(now)
 
     assert result.status == "not_due"
     assert result.employee_count == 3
@@ -1180,8 +1140,8 @@ def test_welfare_can_skip_recent_hires(repository, session_factory, now):
         min_tenure_hours=24, now=now
     ) == 1
 
-    seed_account(repository, PRIMARY_GROUP_CHAT_ID, "adjustment", 1)
-    result = repository.settle_company_lottery_welfare(PRIMARY_GROUP_CHAT_ID, now)
+    seed_account(repository, "adjustment", 1)
+    result = repository.settle_company_lottery_welfare(now)
 
     assert result.status == "paid"
     assert result.employee_count == 1
@@ -1190,10 +1150,10 @@ def test_welfare_can_skip_recent_hires(repository, session_factory, now):
 
 
 def test_welfare_writes_ledger_and_payout_rows(repository, seeded, now):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
-    seed_account(repository, PRIMARY_GROUP_CHAT_ID, "adjustment", 6)
+    repository.ensure_company_lottery_round(now)
+    seed_account(repository, "adjustment", 6)
 
-    result = repository.settle_company_lottery_welfare(PRIMARY_GROUP_CHAT_ID, now)
+    result = repository.settle_company_lottery_welfare(now)
 
     with repository._session() as session:
         welfare_rows = session.scalars(select(CompanyLotteryWelfareRecord)).all()
@@ -1213,21 +1173,21 @@ def test_welfare_writes_ledger_and_payout_rows(repository, seeded, now):
 def test_welfare_does_nothing_without_employees(repository, session_factory, now):
     with session_factory.begin() as session:
         add_group(session, PRIMARY_GROUP_CHAT_ID, "主群聊")
-    seed_account(repository, PRIMARY_GROUP_CHAT_ID, "adjustment", 50)
+    seed_account(repository, "adjustment", 50)
 
-    result = repository.settle_company_lottery_welfare(PRIMARY_GROUP_CHAT_ID, now)
+    result = repository.settle_company_lottery_welfare(now)
 
     assert result.status == "not_due"
     assert result.employee_count == 0
-    _, adjustment = repository.company_lottery_balances(PRIMARY_GROUP_CHAT_ID)
+    _, adjustment = repository.company_lottery_balances()
     assert adjustment == 50
 
 
 def test_welfare_can_be_disabled(repository, seeded, now):
     repository.update_company_lottery_settings(welfare_enabled=False)
-    seed_account(repository, PRIMARY_GROUP_CHAT_ID, "adjustment", 10)
+    seed_account(repository, "adjustment", 10)
 
-    result = repository.settle_company_lottery_welfare(PRIMARY_GROUP_CHAT_ID, now)
+    result = repository.settle_company_lottery_welfare(now)
 
     assert result.status == "disabled"
     assert balance_of(repository, "p1") == 100
@@ -1236,8 +1196,8 @@ def test_welfare_can_be_disabled(repository, seeded, now):
 def test_welfare_rolls_back_entirely_on_failure(
     repository, seeded, now, monkeypatch
 ):
-    repository.ensure_company_lottery_round(PRIMARY_GROUP_CHAT_ID, now)
-    seed_account(repository, PRIMARY_GROUP_CHAT_ID, "adjustment", 10)
+    repository.ensure_company_lottery_round(now)
+    seed_account(repository, "adjustment", 10)
 
     calls = {"count": 0}
     original = repository._apply_balance_change
@@ -1251,11 +1211,11 @@ def test_welfare_rolls_back_entirely_on_failure(
     monkeypatch.setattr(repository, "_apply_balance_change", flaky)
 
     with pytest.raises(RuntimeError):
-        repository.settle_company_lottery_welfare(PRIMARY_GROUP_CHAT_ID, now)
+        repository.settle_company_lottery_welfare(now)
 
     assert balance_of(repository, "p1") == 100
     assert balance_of(repository, "p2") == 100
-    _, adjustment = repository.company_lottery_balances(PRIMARY_GROUP_CHAT_ID)
+    _, adjustment = repository.company_lottery_balances()
     assert adjustment == 10
 
     with repository._session() as session:
@@ -1267,18 +1227,41 @@ def test_welfare_rolls_back_entirely_on_failure(
     assert payout_rows == []
 
 
-def test_welfare_is_scoped_per_group(repository, seeded, now):
-    seed_account(repository, PRIMARY_GROUP_CHAT_ID, "adjustment", 2)
-    seed_account(repository, SECOND_GROUP_CHAT_ID, "adjustment", 0)
+def test_welfare_runs_once_for_the_whole_company(repository, seeded, now):
+    """福利也是全公司一本账：发过一轮之后立刻再判就是 not_due。"""
+    seed_account(repository, "adjustment", 2)
 
-    result = repository.settle_company_lottery_welfare(PRIMARY_GROUP_CHAT_ID, now)
+    result = repository.settle_company_lottery_welfare(now)
 
     assert result.status == "paid"
-    _, adjustment = repository.company_lottery_balances(SECOND_GROUP_CHAT_ID)
+    _, adjustment = repository.company_lottery_balances()
     assert adjustment == 0
 
-    second = repository.settle_company_lottery_welfare(SECOND_GROUP_CHAT_ID, now)
+    second = repository.settle_company_lottery_welfare(now)
     assert second.status == "not_due"
+
+
+def test_announcements_are_broadcast_to_every_group(repository, seeded, now):
+    """期次是全局的，但开奖公告要送到每一个群。"""
+    seed_pool(repository, 100)
+    view = repository.ensure_company_lottery_round(now)
+    repository.buy_company_lottery_tickets(
+        UUID("00000000-0000-0000-0000-0000000001a1"),
+        "p1",
+        [answer_for(repository, view.id)],
+        now,
+    )
+
+    repository.run_company_lottery_jobs(DRAW_AT)
+
+    assert any(
+        "【公司双色球开奖】" in text
+        for text in outbound_texts(repository)
+    )
+    assert any(
+        "【公司双色球开奖】" in text
+        for text in outbound_texts(repository)
+    )
 
 
 # --------------------------------------------------------------------------- 调度
@@ -1299,33 +1282,31 @@ def outbound_texts(repository, group_chat_id=PRIMARY_GROUP_CHAT_ID):
 def test_run_jobs_opens_the_first_round(repository, seeded, now):
     repository.run_company_lottery_jobs(now)
 
-    view = repository.current_company_lottery_round(PRIMARY_GROUP_CHAT_ID)
+    view = repository.current_company_lottery_round()
     assert view is not None
     assert view.round_number == 1
     assert view.state == "open"
     assert outbound_texts(repository) == []
 
 
-def test_run_jobs_opens_a_round_for_every_group(repository, seeded, now):
+def test_run_jobs_opens_one_round_for_the_whole_company(repository, seeded, now):
     repository.run_company_lottery_jobs(now)
 
-    assert repository.current_company_lottery_round(
-        PRIMARY_GROUP_CHAT_ID
-    ).round_number == 1
-    assert repository.current_company_lottery_round(
-        SECOND_GROUP_CHAT_ID
-    ).round_number == 1
+    with repository._session() as session:
+        rounds = session.scalars(select(CompanyLotteryRoundRecord)).all()
+
+    assert len(rounds) == 1
+    assert rounds[0].round_number == 1
 
 
 def test_run_jobs_draws_and_announces_at_the_draw_time(repository, seeded, now):
     repository.run_company_lottery_jobs(now)
-    view = repository.current_company_lottery_round(PRIMARY_GROUP_CHAT_ID)
-    seed_pool(repository, PRIMARY_GROUP_CHAT_ID, 100)
+    view = repository.current_company_lottery_round()
+    seed_pool(repository, 100)
     repository.buy_company_lottery_tickets(
         UUID("00000000-0000-0000-0000-000000000401"),
         "p1",
         [answer_for(repository, view.id)],
-        PRIMARY_GROUP_CHAT_ID,
         now,
     )
 
@@ -1337,19 +1318,15 @@ def test_run_jobs_draws_and_announces_at_the_draw_time(repository, seeded, now):
     assert "🏆 一等奖 100 —— 小明" in texts[0]
     assert "第 2 期已开卖" in texts[0]
 
-    assert repository.company_lottery_round_by_number(
-        PRIMARY_GROUP_CHAT_ID, 1
-    ).state == "drawn"
-    assert repository.current_company_lottery_round(
-        PRIMARY_GROUP_CHAT_ID
-    ).round_number == 2
+    assert repository.company_lottery_round_by_number(1).state == "drawn"
+    assert repository.current_company_lottery_round().round_number == 2
 
 
 def test_run_jobs_does_not_draw_before_the_draw_time(repository, seeded, now):
     repository.run_company_lottery_jobs(now)
     repository.run_company_lottery_jobs(datetime(2026, 9, 14, 21, 55, tzinfo=BEIJING))
 
-    view = repository.current_company_lottery_round(PRIMARY_GROUP_CHAT_ID)
+    view = repository.current_company_lottery_round()
     assert view.round_number == 1
     assert view.state == "closed"
     assert outbound_texts(repository) == []
@@ -1407,7 +1384,7 @@ def test_run_jobs_skips_the_reminder_when_the_group_is_busy(repository, seeded, 
 
 def test_run_jobs_pays_welfare_after_drawing(repository, seeded, now):
     repository.run_company_lottery_jobs(now)
-    seed_account(repository, PRIMARY_GROUP_CHAT_ID, "adjustment", 2)
+    seed_account(repository, "adjustment", 2)
 
     repository.run_company_lottery_jobs(DRAW_AT)
 
@@ -1424,19 +1401,18 @@ def test_run_jobs_does_nothing_when_disabled(repository, seeded, now):
 
     repository.run_company_lottery_jobs(now)
 
-    assert repository.current_company_lottery_round(PRIMARY_GROUP_CHAT_ID) is None
+    assert repository.current_company_lottery_round() is None
     assert outbound_texts(repository) == []
 
 
 def test_run_jobs_is_idempotent_across_ticks(repository, seeded, now):
     repository.run_company_lottery_jobs(now)
-    view = repository.current_company_lottery_round(PRIMARY_GROUP_CHAT_ID)
-    seed_pool(repository, PRIMARY_GROUP_CHAT_ID, 100)
+    view = repository.current_company_lottery_round()
+    seed_pool(repository, 100)
     repository.buy_company_lottery_tickets(
         UUID("00000000-0000-0000-0000-000000000402"),
         "p1",
         [answer_for(repository, view.id)],
-        PRIMARY_GROUP_CHAT_ID,
         now,
     )
 

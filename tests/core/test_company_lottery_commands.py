@@ -61,7 +61,7 @@ def _setup():
     )
     repository.create_user("p1", "小明", now, 100)
     repository.create_user("p2", "小红", now, 100)
-    repository.ensure_company_lottery_round(group.id, now)
+    repository.ensure_company_lottery_round(now)
     return service, repository, factory, group, now
 
 
@@ -79,11 +79,11 @@ def _send(service, group, message_id, sender, content, now):
     )
 
 
-def _answer(repository, group_id):
+def _answer(repository):
     from dzmm_bot.core.company_lottery import Ticket
     from dzmm_bot.core.schema import CompanyLotteryRoundRecord
 
-    view = repository.current_company_lottery_round(group_id)
+    view = repository.current_company_lottery_round()
     with repository._session() as session:
         record = session.get(CompanyLotteryRoundRecord, view.id)
     return Ticket(
@@ -237,7 +237,7 @@ def test_purchase_is_rejected_after_close():
 def test_first_round_seeds_the_pool_so_the_head_prize_pays_out():
     service, repository, factory, group, now = _setup()
 
-    pool, adjustment = repository.company_lottery_balances(group.id)
+    pool, adjustment = repository.company_lottery_balances()
 
     assert pool == 100
     assert adjustment == 0
@@ -361,8 +361,8 @@ def test_my_tickets_is_empty_for_a_new_employee():
 
 def test_verify_reveals_the_answer_hash_after_the_draw():
     service, repository, factory, group, now = _setup()
-    answer = _answer(repository, group.id)
-    repository.draw_company_lottery_round(group.id, DRAW_AT)
+    answer = _answer(repository)
+    repository.draw_company_lottery_round(DRAW_AT)
 
     _send(service, group, "m1", "p1", "/彩票验证 1", DRAW_AT)
 
@@ -384,7 +384,7 @@ def test_verify_needs_a_drawn_round():
 
 def test_my_tickets_shows_the_prize_after_the_draw():
     service, repository, factory, group, now = _setup()
-    answer = _answer(repository, group.id)
+    answer = _answer(repository)
     _send(
         service,
         group,
@@ -393,7 +393,7 @@ def test_my_tickets_shows_the_prize_after_the_draw():
         f"/购买彩票 {' '.join(f'{n:02d}' for n in answer.reds)} + {answer.blue:02d}",
         now,
     )
-    repository.draw_company_lottery_round(group.id, DRAW_AT)
+    repository.draw_company_lottery_round(DRAW_AT)
 
     _send(service, group, "m2", "p1", "/我的彩票", DRAW_AT)
 

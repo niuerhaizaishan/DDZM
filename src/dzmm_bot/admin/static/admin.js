@@ -302,7 +302,6 @@ const texasHoldemSettingsModal = document.querySelector("#texas-holdem-settings-
 const darkMarketSettingsModal = document.querySelector("#dark-market-settings-modal");
 const darkMarketDetailModal = document.querySelector("#dark-market-detail-modal");
 const companyLotterySettingsModal = document.querySelector("#company-lottery-settings-modal");
-const companyLotteryGroupChatSelect = document.querySelector("#company-lottery-group-chat-id");
 const companyLotteryPoolAccount = document.querySelector("#company-lottery-pool-account");
 const companyLotteryPoolAmount = document.querySelector("#company-lottery-pool-amount");
 const numberBombEnabled = document.querySelector("#number-bomb-enabled");
@@ -636,7 +635,7 @@ function renderCompanyLotteryOverview(overview) {
   companyLotteryOverview = overview;
 
   document.querySelector("#company-lottery-rounds").innerHTML = overview.rounds.map((item) => `
-    <article class="data-row"><div><b>第 ${item.round_number} 期</b><small>${statusBadge(companyLotteryStateLabel(item.state), item.state === "open" ? "success" : item.state === "drawn" ? "" : "warning")}</small><small>售票 ${item.tickets_sold} 注 · 流水 ${item.gross_amount} 摸鱼币 · 开奖 ${escapeHtml(formatHeartbeat(item.draw_at))} · 停售 ${escapeHtml(formatHeartbeat(item.close_at))}</small><small>期初 ${item.pool_opening} · 溢出 ${item.pool_overflow} · 期末 ${item.pool_closing} · 中奖 ${item.winner_count} 人 · 应发 ${item.payable} · 实发 ${item.paid_total}</small><small>${item.answer ? `号码：${escapeHtml(item.answer)} · 盐：${escapeHtml(item.salt || "")}` : "号码将在开奖后公布"}</small></div></article>`).join("") || '<p class="muted">本群还没有彩票期次。</p>';
+    <article class="data-row"><div><b>第 ${item.round_number} 期</b><small>${statusBadge(companyLotteryStateLabel(item.state), item.state === "open" ? "success" : item.state === "drawn" ? "" : "warning")}</small><small>售票 ${item.tickets_sold} 注 · 流水 ${item.gross_amount} 摸鱼币 · 开奖 ${escapeHtml(formatHeartbeat(item.draw_at))} · 停售 ${escapeHtml(formatHeartbeat(item.close_at))}</small><small>期初 ${item.pool_opening} · 溢出 ${item.pool_overflow} · 期末 ${item.pool_closing} · 中奖 ${item.winner_count} 人 · 应发 ${item.payable} · 实发 ${item.paid_total}</small><small>${item.answer ? `号码：${escapeHtml(item.answer)} · 盐：${escapeHtml(item.salt || "")}` : "号码将在开奖后公布"}</small></div></article>`).join("") || '<p class="muted">还没有彩票期次。</p>';
 
   document.querySelector("#company-lottery-ledger").innerHTML = overview.ledger.map((item) => `
     <article class="data-row"><div><b>${escapeHtml(companyLotteryAccountLabel(item.account))} · ${escapeHtml(companyLotteryLedgerKindLabel(item.kind))} ${item.amount > 0 ? "+" : ""}${item.amount}</b><small>余额 ${item.balance_after} 摸鱼币${item.round_number == null ? "" : ` · 第 ${item.round_number} 期`}</small><small>${escapeHtml(formatHeartbeat(item.created_at))}${item.note ? ` · ${escapeHtml(item.note)}` : ""}</small></div></article>`).join("") || '<p class="muted">没有奖池流水。</p>';
@@ -1651,28 +1650,15 @@ async function loadCompanyLotterySettings() {
   return companyLotterySettings;
 }
 
-async function loadCompanyLotteryOverview(groupChatId) {
-  const select = companyLotteryGroupChatSelect;
-  const target = groupChatId || select.value || groupChats[0]?.id;
-  if (!target) {
-    companyLotteryOverview = null;
-    for (const id of ["#company-lottery-rounds", "#company-lottery-ledger", "#company-lottery-prizes", "#company-lottery-employees"]) {
-      document.querySelector(id).innerHTML = '<p class="muted">还没有可查看的群聊。</p>';
-    }
-    return null;
-  }
-  select.value = target;
-  companyLotteryOverview = await requestGame(`/api/game/company-lottery/overview?${new URLSearchParams({group_chat_id: target})}`);
+async function loadCompanyLotteryOverview() {
+  companyLotteryOverview = await requestGame("/api/game/company-lottery/overview");
   renderCompanyLotteryOverview(companyLotteryOverview);
   return companyLotteryOverview;
 }
 
 async function loadCompanyLottery() {
   await loadCompanyLotterySettings();
-  const select = companyLotteryGroupChatSelect;
-  const groups = groupChats.filter((group) => !group.deleted_at);
-  select.innerHTML = groups.map((group) => `<option value="${escapeHtml(group.id)}">${escapeHtml(group.name)}</option>`).join("");
-  await loadCompanyLotteryOverview(select.value);
+  await loadCompanyLotteryOverview();
 }
 
 async function loadRedPacketSettings() {
@@ -2519,18 +2505,12 @@ document.querySelector("#dark-market-status-filter").addEventListener("change", 
 document.querySelector("#dark-market-page-size").addEventListener("change", () => void loadDarkMarketListings(1));
 document.querySelector("#edit-company-lottery-settings").addEventListener("click", () => void openCompanyLotterySettingsModal());
 document.querySelector("#refresh-company-lottery").addEventListener("click", (event) => void runMutation(event.currentTarget, "刷新中…", () => loadCompanyLotteryOverview()));
-companyLotteryGroupChatSelect.addEventListener("change", (event) => void runMutation(event.currentTarget, "读取中…", () => loadCompanyLotteryOverview(event.currentTarget.value)));
 document.querySelector("#company-lottery-draw").addEventListener("click", async (event) => {
-  const groupChatId = companyLotteryGroupChatSelect.value;
-  if (!groupChatId) {
-    setResult("请先选择要开奖的群聊", "error");
-    return;
-  }
-  if (!window.confirm("确认对该群当前期次手动开奖？开奖后会立即发送公告并结算全员福利。")) return;
+  if (!window.confirm("确认对全公司当前期次手动开奖？开奖后会立即向所有群发送公告并结算全员福利。")) return;
   try {
     await runMutation(event.currentTarget, "开奖中…", async () => {
-      const result = await requestGame(`/api/game/company-lottery/draw?${new URLSearchParams({group_chat_id: groupChatId})}`, {method: "POST"});
-      await loadCompanyLotteryOverview(groupChatId);
+      const result = await requestGame("/api/game/company-lottery/draw", {method: "POST"});
+      await loadCompanyLotteryOverview();
       setResult(`第 ${result.round_number} 期已开奖：${result.answer}，中奖 ${result.winner_count} 人，实发 ${result.paid_total} 摸鱼币。`, "success");
     });
   } catch (error) {
@@ -2538,21 +2518,20 @@ document.querySelector("#company-lottery-draw").addEventListener("click", async 
   }
 });
 document.querySelector("#company-lottery-pool-deposit").addEventListener("click", async (event) => {
-  const groupChatId = companyLotteryGroupChatSelect.value;
   const account = companyLotteryPoolAccount.value;
   const amount = Number(companyLotteryPoolAmount.value);
-  if (!groupChatId || !Number.isInteger(amount) || amount < 1 || amount > 1000000) {
-    setResult("请选择群聊并填写 1–1000000 的整数金额", "error");
+  if (!Number.isInteger(amount) || amount < 1 || amount > 1000000) {
+    setResult("请填写 1–1000000 的整数金额", "error");
     return;
   }
   try {
     await runMutation(event.currentTarget, "注入中…", async () => {
-      const result = await requestGame(`/api/game/company-lottery/pool?${new URLSearchParams({group_chat_id: groupChatId})}`, {
+      const result = await requestGame("/api/game/company-lottery/pool", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({account, amount}),
       });
-      await loadCompanyLotteryOverview(groupChatId);
+      await loadCompanyLotteryOverview();
       setResult(`已注入 ${amount} 摸鱼币：奖池 ${result.pool_balance}，调节金 ${result.adjustment_balance}。`, "success");
     });
   } catch (error) {

@@ -1240,8 +1240,6 @@ class CompanyLotteryEmployeeTotalResponse(ApiModel):
 
 
 class CompanyLotteryOverviewResponse(ApiModel):
-    group_chat_id: UUID
-    group_name: str
     enabled: bool
     pool_balance: int
     adjustment_balance: int

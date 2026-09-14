@@ -15,7 +15,6 @@ depends_on: str | Sequence[str] | None = None
 
 
 POOL_SEED = 100
-PRIMARY_GROUP_CHAT_ID = "00000000-0000-0000-0000-000000000001"
 LOTTERY_KNOWLEDGE_CARD_ID = UUID("1f4b0c62-5a17-4a6e-8f2d-6c9e3ab5d704")
 
 
@@ -56,7 +55,6 @@ def _create_rounds() -> None:
     op.create_table(
         "company_lottery_rounds",
         sa.Column("id", sa.Uuid(), nullable=False),
-        sa.Column("group_chat_id", sa.Uuid(), nullable=False),
         sa.Column("round_number", sa.Integer(), nullable=False),
         sa.Column("state", sa.String(length=16), nullable=False),
         sa.Column("open_at", sa.DateTime(timezone=True), nullable=False),
@@ -88,14 +86,13 @@ def _create_rounds() -> None:
             "state IN ('open', 'closed', 'drawn', 'cancelled')",
             name="ck_company_lottery_round_state",
         ),
-        sa.ForeignKeyConstraint(["group_chat_id"], ["group_chats.id"]),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("group_chat_id", "round_number"),
+        sa.UniqueConstraint("round_number"),
     )
     op.create_index(
         "ux_company_lottery_one_open",
         "company_lottery_rounds",
-        ["group_chat_id"],
+        ["state"],
         unique=True,
         sqlite_where=sa.text("state = 'open'"),
         postgresql_where=sa.text("state = 'open'"),
@@ -153,13 +150,11 @@ def _create_drafts() -> None:
         "company_lottery_drafts",
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("user_id", sa.Uuid(), nullable=False),
-        sa.Column("group_chat_id", sa.Uuid(), nullable=False),
         sa.Column("round_id", sa.Uuid(), nullable=False),
         sa.Column("target_count", sa.Integer(), nullable=False),
         sa.Column("tickets", sa.JSON(), nullable=False),
         sa.Column("last_activity_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(["group_chat_id"], ["group_chats.id"]),
         sa.ForeignKeyConstraint(["round_id"], ["company_lottery_rounds.id"]),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"]),
         sa.PrimaryKeyConstraint("id"),
@@ -171,7 +166,6 @@ def _create_pool_ledger() -> None:
     op.create_table(
         "company_lottery_pool_ledger",
         sa.Column("id", sa.Uuid(), nullable=False),
-        sa.Column("group_chat_id", sa.Uuid(), nullable=False),
         sa.Column("round_id", sa.Uuid()),
         sa.Column("account", sa.String(length=16), nullable=False),
         sa.Column("kind", sa.String(length=16), nullable=False),
@@ -183,14 +177,13 @@ def _create_pool_ledger() -> None:
             "account IN ('pool', 'adjustment')",
             name="ck_company_lottery_ledger_account",
         ),
-        sa.ForeignKeyConstraint(["group_chat_id"], ["group_chats.id"]),
         sa.ForeignKeyConstraint(["round_id"], ["company_lottery_rounds.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
         "ix_company_lottery_ledger_account",
         "company_lottery_pool_ledger",
-        ["group_chat_id", "account", "created_at"],
+        ["account", "created_at"],
     )
 
 
@@ -198,7 +191,6 @@ def _create_welfare() -> None:
     op.create_table(
         "company_lottery_welfare",
         sa.Column("id", sa.Uuid(), nullable=False),
-        sa.Column("group_chat_id", sa.Uuid(), nullable=False),
         sa.Column("round_id", sa.Uuid()),
         sa.Column("employee_count", sa.Integer(), nullable=False),
         sa.Column("per_person", sa.Integer(), nullable=False),
@@ -206,14 +198,13 @@ def _create_welfare() -> None:
         sa.Column("fund_before", sa.Integer(), nullable=False),
         sa.Column("fund_after", sa.Integer(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(["group_chat_id"], ["group_chats.id"]),
         sa.ForeignKeyConstraint(["round_id"], ["company_lottery_rounds.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
-        "ix_company_lottery_welfare_group",
+        "ix_company_lottery_welfare_created",
         "company_lottery_welfare",
-        ["group_chat_id", "created_at"],
+        ["created_at"],
     )
     op.create_table(
         "company_lottery_welfare_payouts",
@@ -298,20 +289,10 @@ def _seed_settings() -> None:
 
 
 def _seed_pool() -> None:
-    """首期由系统注入启动奖池，之后不再额外注入。"""
-    bind = op.get_bind()
-    inspector = sa.inspect(bind)
-
-    group_ids = {UUID(PRIMARY_GROUP_CHAT_ID)}
-    if inspector.has_table("group_chats"):
-        groups = sa.table("group_chats", sa.column("id", sa.Uuid()))
-        existing = [row[0] for row in bind.execute(sa.select(groups.c.id))]
-        group_ids |= set(existing)
-
+    """全公司共用一本账，启动奖池全局只注入一次。"""
     ledger = sa.table(
         "company_lottery_pool_ledger",
         sa.column("id", sa.Uuid()),
-        sa.column("group_chat_id", sa.Uuid()),
         sa.column("round_id", sa.Uuid()),
         sa.column("account", sa.String()),
         sa.column("kind", sa.String()),
@@ -320,21 +301,18 @@ def _seed_pool() -> None:
         sa.column("note", sa.String()),
         sa.column("created_at", sa.DateTime(timezone=True)),
     )
-    now = datetime.now().astimezone()
-    for group_id in group_ids:
-        bind.execute(
-            ledger.insert().values(
-                id=uuid4(),
-                group_chat_id=group_id,
-                round_id=None,
-                account="pool",
-                kind="deposit",
-                amount=POOL_SEED,
-                balance_after=POOL_SEED,
-                note="上线启动奖池",
-                created_at=now,
-            )
+    op.get_bind().execute(
+        ledger.insert().values(
+            id=uuid4(),
+            round_id=None,
+            account="pool",
+            kind="deposit",
+            amount=POOL_SEED,
+            balance_after=POOL_SEED,
+            note="上线启动奖池",
+            created_at=datetime.now().astimezone(),
         )
+    )
 
 
 def _seed_knowledge_card() -> None:
@@ -405,7 +383,7 @@ def downgrade() -> None:
     )
     op.drop_table("company_lottery_welfare_payouts")
     op.drop_index(
-        "ix_company_lottery_welfare_group", table_name="company_lottery_welfare"
+        "ix_company_lottery_welfare_created", table_name="company_lottery_welfare"
     )
     op.drop_table("company_lottery_welfare")
     op.drop_index(

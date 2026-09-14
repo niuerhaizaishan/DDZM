@@ -1525,29 +1525,17 @@ def create_app(
 
     @app.get("/api/game/company-lottery/overview")
     def company_lottery_overview(
-        group_chat_id: str,
         _: Annotated[None, Depends(authorize)],
     ) -> dict:
-        if not group_chat_id:
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid group"
-            )
-        return _relay_core(
-            lambda: core.get_company_lottery_overview(group_chat_id)
-        )
+        return _relay_core(core.get_company_lottery_overview)
 
     @app.post("/api/game/company-lottery/draw")
     def draw_company_lottery_round(
-        group_chat_id: str,
         identity: Annotated[AdminIdentity, Depends(authorize)],
         idempotency_key: Annotated[
             str | None, Header(alias="Idempotency-Key")
         ] = None,
     ) -> JSONResponse:
-        if not group_chat_id:
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid group"
-            )
         return idempotent_response(
             identity,
             idempotency_key,
@@ -1555,19 +1543,17 @@ def create_app(
                 200,
                 _relay_core(
                     lambda: core.draw_company_lottery_round(
-                        group_chat_id,
                         identity.username,
                         beijing_now().isoformat(),
                     )
                 ),
             ),
-            scope=f"company-lottery-draw:{group_chat_id}",
+            scope="company-lottery-draw",
         )
 
     @app.post("/api/game/company-lottery/pool")
     def deposit_company_lottery_pool(
         request: dict,
-        group_chat_id: str,
         identity: Annotated[AdminIdentity, Depends(authorize)],
         idempotency_key: Annotated[
             str | None, Header(alias="Idempotency-Key")
@@ -1578,8 +1564,7 @@ def create_app(
         account = request["account"]
         amount = request["amount"]
         if (
-            not group_chat_id
-            or account not in {"pool", "adjustment"}
+            account not in {"pool", "adjustment"}
             or not isinstance(amount, int)
             or isinstance(amount, bool)
             or not 1 <= amount <= 1_000_000
@@ -1592,7 +1577,6 @@ def create_app(
                 200,
                 _relay_core(
                     lambda: core.deposit_company_lottery_pool(
-                        group_chat_id,
                         account,
                         amount,
                         identity.username,
@@ -1600,7 +1584,7 @@ def create_app(
                     )
                 ),
             ),
-            scope=f"company-lottery-pool:{group_chat_id}:{account}:{amount}",
+            scope=f"company-lottery-pool:{account}:{amount}",
         )
 
     @app.patch("/api/game/red-packet/settings")

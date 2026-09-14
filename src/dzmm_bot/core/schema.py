@@ -3057,12 +3057,16 @@ class CompanyLotterySettingsRecord(Base):
 
 
 class CompanyLotteryRoundRecord(Base):
+    """全公司共用一期：期号、号码、奖池与调节金都不按群拆分。"""
+
     __tablename__ = "company_lottery_rounds"
     __table_args__ = (
-        UniqueConstraint("group_chat_id", "round_number"),
+        UniqueConstraint("round_number"),
+        # 部分唯一索引建在 state 上：只约束 state='open' 的行，而它们的 state 恒等，
+        # 因此全局同一时间最多只有一个开放期次。
         Index(
             "ux_company_lottery_one_open",
-            "group_chat_id",
+            "state",
             unique=True,
             sqlite_where=text("state = 'open'"),
             postgresql_where=text("state = 'open'"),
@@ -3075,9 +3079,6 @@ class CompanyLotteryRoundRecord(Base):
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
-    group_chat_id: Mapped[UUID] = mapped_column(
-        ForeignKey("group_chats.id"), default=PRIMARY_GROUP_CHAT_ID, nullable=False
-    )
     round_number: Mapped[int] = mapped_column(Integer, nullable=False)
     state: Mapped[str] = mapped_column(String(16), nullable=False)
 
@@ -3179,9 +3180,6 @@ class CompanyLotteryDraftRecord(Base):
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
-    group_chat_id: Mapped[UUID] = mapped_column(
-        ForeignKey("group_chats.id"), nullable=False
-    )
     round_id: Mapped[UUID] = mapped_column(
         ForeignKey("company_lottery_rounds.id"), nullable=False
     )
@@ -3198,7 +3196,6 @@ class CompanyLotteryPoolLedgerRecord(Base):
     __table_args__ = (
         Index(
             "ix_company_lottery_ledger_account",
-            "group_chat_id",
             "account",
             "created_at",
         ),
@@ -3209,9 +3206,6 @@ class CompanyLotteryPoolLedgerRecord(Base):
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
-    group_chat_id: Mapped[UUID] = mapped_column(
-        ForeignKey("group_chats.id"), nullable=False
-    )
     round_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("company_lottery_rounds.id")
     )
@@ -3226,13 +3220,10 @@ class CompanyLotteryPoolLedgerRecord(Base):
 class CompanyLotteryWelfareRecord(Base):
     __tablename__ = "company_lottery_welfare"
     __table_args__ = (
-        Index("ix_company_lottery_welfare_group", "group_chat_id", "created_at"),
+        Index("ix_company_lottery_welfare_created", "created_at"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
-    group_chat_id: Mapped[UUID] = mapped_column(
-        ForeignKey("group_chats.id"), nullable=False
-    )
     round_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("company_lottery_rounds.id")
     )

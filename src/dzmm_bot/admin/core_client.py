@@ -169,14 +169,12 @@ class AdminCorePort(Protocol):
 
     def set_company_lottery_settings(self, settings: dict) -> dict: ...
 
-    def get_company_lottery_overview(self, group_chat_id: str) -> dict: ...
+    def get_company_lottery_overview(self) -> dict: ...
 
-    def draw_company_lottery_round(
-        self, group_chat_id: str, actor: str, now: str
-    ) -> dict: ...
+    def draw_company_lottery_round(self, actor: str, now: str) -> dict: ...
 
     def deposit_company_lottery_pool(
-        self, group_chat_id: str, account: str, amount: int, actor: str, now: str
+        self, account: str, amount: int, actor: str, now: str
     ) -> dict: ...
 
     def get_performance_settings(self) -> dict: ...
@@ -689,29 +687,22 @@ class CoreClient:
         response.raise_for_status()
         return response.json()
 
-    def get_company_lottery_overview(self, group_chat_id: str) -> dict:
-        return self._get(
-            "/internal/game/company-lottery/overview",
-            params={"group_chat_id": group_chat_id},
-        )
+    def get_company_lottery_overview(self) -> dict:
+        return self._get("/internal/game/company-lottery/overview")
 
-    def draw_company_lottery_round(
-        self, group_chat_id: str, actor: str, now: str
-    ) -> dict:
+    def draw_company_lottery_round(self, actor: str, now: str) -> dict:
         response = self._client.post(
             "/internal/game/company-lottery/draw",
-            params={"group_chat_id": group_chat_id},
             json={"actor": actor, "now": now},
         )
         response.raise_for_status()
         return response.json()
 
     def deposit_company_lottery_pool(
-        self, group_chat_id: str, account: str, amount: int, actor: str, now: str
+        self, account: str, amount: int, actor: str, now: str
     ) -> dict:
         response = self._client.post(
             "/internal/game/company-lottery/pool",
-            params={"group_chat_id": group_chat_id},
             json={
                 "actor": actor,
                 "now": now,

@@ -937,13 +937,11 @@ class FakeCore:
         self.company_lottery_settings = settings
         return self.company_lottery_settings
 
-    def get_company_lottery_overview(self, group_chat_id):
-        return {**self.company_lottery_overview, "group_chat_id": group_chat_id}
+    def get_company_lottery_overview(self):
+        return self.company_lottery_overview
 
-    def draw_company_lottery_round(self, group_chat_id, actor, now):
-        self.company_lottery_draws.append(
-            {"group_chat_id": group_chat_id, "actor": actor, "now": now}
-        )
+    def draw_company_lottery_round(self, actor, now):
+        self.company_lottery_draws.append({"actor": actor, "now": now})
         return {
             "round_number": 1,
             "answer": "03  07  09  10　　🔵 05",
@@ -954,12 +952,9 @@ class FakeCore:
             "next_round_number": 2,
         }
 
-    def deposit_company_lottery_pool(
-        self, group_chat_id, account, amount, actor, now
-    ):
+    def deposit_company_lottery_pool(self, account, amount, actor, now):
         self.company_lottery_deposits.append(
             {
-                "group_chat_id": group_chat_id,
                 "account": account,
                 "amount": amount,
                 "actor": actor,
@@ -3648,38 +3643,26 @@ def test_admin_proxies_company_lottery_settings_overview_and_actions(
     assert replayed.json() == updated.json()
 
     overview = client.get(
-        "/api/game/company-lottery/overview"
-        "?group_chat_id=00000000-0000-0000-0000-000000000001",
+        "/api/game/company-lottery/overview",
         headers=headers,
     )
     assert overview.status_code == 200
-    assert overview.json()["group_name"] == "主群聊"
+    assert overview.json()["enabled"] is True
+    assert overview.json()["pool_balance"] == 100
     assert overview.json()["rounds"][0]["state"] == "open"
     assert overview.json()["ledger"][0]["kind"] == "deposit"
 
-    assert (
-        client.get(
-            "/api/game/company-lottery/overview?group_chat_id=", headers=headers
-        ).status_code
-        == 422
-    )
-
     drawn = client.post(
-        "/api/game/company-lottery/draw"
-        "?group_chat_id=00000000-0000-0000-0000-000000000001",
+        "/api/game/company-lottery/draw",
         headers={**headers, "Idempotency-Key": "company-lottery-draw-1"},
     )
     assert drawn.status_code == 200
     assert drawn.json()["round_number"] == 1
     assert drawn.json()["next_round_number"] == 2
-    assert core.company_lottery_draws[0]["group_chat_id"] == (
-        "00000000-0000-0000-0000-000000000001"
-    )
     assert core.company_lottery_draws[0]["actor"]
 
     deposited = client.post(
-        "/api/game/company-lottery/pool"
-        "?group_chat_id=00000000-0000-0000-0000-000000000001",
+        "/api/game/company-lottery/pool",
         headers={**headers, "Idempotency-Key": "company-lottery-pool-1"},
         json={"account": "adjustment", "amount": 25},
     )
@@ -3744,7 +3727,6 @@ def test_admin_page_contains_company_lottery_controls(client, headers):
         'id="company-lottery-prizes"',
         'id="company-lottery-employees"',
         'id="company-lottery-settings-modal"',
-        'id="company-lottery-group-chat-id"',
         'id="save-company-lottery-settings"',
         'id="edit-company-lottery-settings"',
         'id="refresh-company-lottery"',

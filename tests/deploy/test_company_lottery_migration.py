@@ -97,9 +97,24 @@ def test_company_lottery_migration_creates_indexes(tmp_path, monkeypatch):
         "ix_company_lottery_bets_round_user",
         "ix_company_lottery_bets_created_at",
         "ix_company_lottery_ledger_account",
-        "ix_company_lottery_welfare_group",
+        "ix_company_lottery_welfare_created",
         "ix_company_lottery_welfare_payouts_user",
     } <= names
+
+
+def test_company_lottery_migration_keeps_the_economy_global(tmp_path, monkeypatch):
+    """期次、账本与福利都不带 group_chat_id：三个群共用一套经济。"""
+    engine = migrated_engine(tmp_path, monkeypatch)
+    inspector = inspect(engine)
+
+    for table in (
+        "company_lottery_rounds",
+        "company_lottery_drafts",
+        "company_lottery_pool_ledger",
+        "company_lottery_welfare",
+    ):
+        columns = {column["name"] for column in inspector.get_columns(table)}
+        assert "group_chat_id" not in columns, table
 
 
 def test_company_lottery_migration_downgrades_cleanly(tmp_path, monkeypatch):

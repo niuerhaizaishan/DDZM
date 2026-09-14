@@ -733,11 +733,11 @@ def test_company_lottery_settings_core_api_validates_bounds(client, headers):
         )
 
 
-def _lottery_answer(repository, group_chat_id):
+def _lottery_answer(repository):
     """直接读期次记录取出已承诺但未公布的号码，用于构造必中注单。"""
     from dzmm_bot.core.schema import CompanyLotteryRoundRecord
 
-    view = repository.current_company_lottery_round(group_chat_id)
+    view = repository.current_company_lottery_round()
     with repository._session() as session:
         record = session.get(CompanyLotteryRoundRecord, view.id)
     return Ticket(
@@ -753,14 +753,14 @@ def test_company_lottery_overview_manual_draw_and_pool_deposit(app_context, head
     )
     repository.create_user("lottery-api-1", "接口甲", NOW, 100)
     repository.create_user("lottery-api-2", "接口乙", NOW, 100)
-    repository.ensure_company_lottery_round(group.id, NOW)
+    repository.ensure_company_lottery_round(NOW)
 
     overview = app_context.client.get(
-        f"/internal/game/company-lottery/overview?group_chat_id={group.id}",
+        "/internal/game/company-lottery/overview",
         headers=headers,
     )
     assert overview.status_code == 200
-    assert overview.json()["group_name"] == group.name
+    assert overview.json()["enabled"] is True
     assert overview.json()["pool_balance"] == 100
     assert overview.json()["employee_count"] == 2
     assert overview.json()["current_round_number"] == 1
@@ -768,17 +768,8 @@ def test_company_lottery_overview_manual_draw_and_pool_deposit(app_context, head
     # 未开奖不泄露号码
     assert overview.json()["rounds"][0]["answer"] is None
 
-    assert (
-        app_context.client.get(
-            f"/internal/game/company-lottery/overview"
-            f"?group_chat_id={UUID(int=0)}",
-            headers=headers,
-        ).status_code
-        == 404
-    )
-
     draw_before_close = app_context.client.post(
-        f"/internal/game/company-lottery/draw?group_chat_id={group.id}",
+        "/internal/game/company-lottery/draw",
         headers=headers,
         json={"actor": "超级管理员", "now": NOW.isoformat()},
     )
@@ -787,14 +778,13 @@ def test_company_lottery_overview_manual_draw_and_pool_deposit(app_context, head
     repository.buy_company_lottery_tickets(
         UUID(int=401),
         "lottery-api-1",
-        [_lottery_answer(repository, group.id)],
-        group.id,
+        [_lottery_answer(repository)],
         NOW,
     )
 
     closed_at = NOW.replace(hour=21, minute=55, tzinfo=BEIJING)
     drawn = app_context.client.post(
-        f"/internal/game/company-lottery/draw?group_chat_id={group.id}",
+        f"/internal/game/company-lottery/draw",
         headers=headers,
         json={"actor": "超级管理员", "now": closed_at.isoformat()},
     )
@@ -805,7 +795,7 @@ def test_company_lottery_overview_manual_draw_and_pool_deposit(app_context, head
     assert drawn.json()["next_round_number"] == 2
 
     after = app_context.client.get(
-        f"/internal/game/company-lottery/overview?group_chat_id={group.id}",
+        f"/internal/game/company-lottery/overview",
         headers=headers,
     ).json()
     assert [item["round_number"] for item in after["rounds"]] == [2, 1]
@@ -826,7 +816,7 @@ def test_company_lottery_overview_manual_draw_and_pool_deposit(app_context, head
     assert any(entry["kind"] == "deposit" for entry in after["ledger"])
 
     deposited = app_context.client.post(
-        f"/internal/game/company-lottery/pool?group_chat_id={group.id}",
+        f"/internal/game/company-lottery/pool",
         headers=headers,
         json={
             "actor": "超级管理员",
@@ -854,7 +844,7 @@ def test_company_lottery_end_to_end_from_sale_to_next_round(app_context, headers
         "/internal/daily-jobs/run", headers=headers, json={"now": NOW.isoformat()}
     )
     assert first_tick.status_code == 200
-    assert repository.current_company_lottery_round(group.id).round_number == 1
+    assert repository.current_company_lottery_round().round_number == 1
 
     players = (("e2e-1", "端到端甲"), ("e2e-2", "端到端乙"), ("e2e-3", "端到端丙"))
     for platform_id, name in players:
@@ -890,7 +880,7 @@ def test_company_lottery_end_to_end_from_sale_to_next_round(app_context, headers
         assert response.status_code == 200
         return "\n".join(outbound_texts())
 
-    answer = _lottery_answer(repository, group.id)
+    answer = _lottery_answer(repository)
     used: set[str] = set()
 
     def losing_ticket():
@@ -938,7 +928,7 @@ def test_company_lottery_end_to_end_from_sale_to_next_round(app_context, headers
     assert repository.find_user("e2e-1").balance == 196
     assert repository.find_user("e2e-2").balance == 196
     assert repository.find_user("e2e-3").balance == 198
-    assert repository.company_lottery_balances(group.id) == (100 + 10, 0)
+    assert repository.company_lottery_balances() == (100 + 10, 0)
 
     # 停售前提醒：群里已经安静很久
     client.post(
@@ -953,7 +943,7 @@ def test_company_lottery_end_to_end_from_sale_to_next_round(app_context, headers
     client.post(
         "/internal/daily-jobs/run", headers=headers, json={"now": closed_tick.isoformat()}
     )
-    assert repository.current_company_lottery_round(group.id).state == "closed"
+    assert repository.current_company_lottery_round().state == "closed"
     assert "停售" in send("e2e-late", "e2e-1", "/购买彩票 机选", closed_tick)
 
     # 开奖：公告、派奖与下一期
@@ -968,15 +958,15 @@ def test_company_lottery_end_to_end_from_sale_to_next_round(app_context, headers
     assert repository.find_user("e2e-3").balance == 198 + 100
     assert repository.find_user("e2e-2").balance == 196
 
-    settled = repository.company_lottery_round_by_number(group.id, 1)
+    settled = repository.company_lottery_round_by_number(1)
     assert settled.state == "drawn"
     assert settled.answer == answer
     assert commit_hash(settled.answer, settled.salt) == settled.commit_hash
-    assert repository.company_lottery_balances(group.id)[1] == 0
+    assert repository.company_lottery_balances()[1] == 0
 
     # 手动给调节金注资后，下一轮任务把全员福利发出去
     injected = client.post(
-        f"/internal/game/company-lottery/pool?group_chat_id={group.id}",
+        f"/internal/game/company-lottery/pool",
         headers=headers,
         json={"actor": "超级管理员", "now": draw_tick.isoformat(), "account": "adjustment", "amount": 5},
     )
@@ -985,12 +975,12 @@ def test_company_lottery_end_to_end_from_sale_to_next_round(app_context, headers
         "/internal/daily-jobs/run", headers=headers, json={"now": draw_tick.isoformat()}
     )
     assert any("公司福利发放" in text for text in outbound_texts())
-    assert repository.company_lottery_balances(group.id)[1] == 5 - 3
+    assert repository.company_lottery_balances()[1] == 5 - 3
     assert repository.find_user("e2e-3").balance == 298 + 1
     assert repository.find_user("e2e-2").balance == 196 + 1
 
     # 下一期已经开卖且没有泄露号码
-    next_round = repository.current_company_lottery_round(group.id)
+    next_round = repository.current_company_lottery_round()
     assert next_round.round_number == 2
     assert next_round.state == "open"
     assert next_round.tickets_sold == 0

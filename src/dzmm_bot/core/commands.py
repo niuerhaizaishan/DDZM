@@ -4365,7 +4365,7 @@ class GroupCommandHandler:
 
         if command == "/彩票":
             view = self._repository.current_company_lottery_round(
-                group_chat_id, message.sender_platform_id
+                message.sender_platform_id
             )
             if view is None:
                 return self._reply("/彩票", "not_open", received_at)
@@ -4391,7 +4391,7 @@ class GroupCommandHandler:
             if len(parts) != 2 or not parts[1].lstrip("#").isdigit():
                 return self._reply("/彩票验证", "usage", received_at)
             view = self._repository.company_lottery_round_by_number(
-                group_chat_id, int(parts[1].lstrip("#"))
+                int(parts[1].lstrip("#"))
             )
             if view is None or view.state != "drawn" or view.answer is None:
                 return self._reply("/彩票验证", "not_found", received_at)
@@ -4419,7 +4419,6 @@ class GroupCommandHandler:
             result = self._repository.confirm_company_lottery_draft(
                 message.platform_message_id,
                 message.sender_platform_id,
-                group_chat_id,
                 received_at,
             )
             if result.status in {"no_draft", "empty_draft"}:
@@ -4461,7 +4460,7 @@ class GroupCommandHandler:
 
         if order.kind is OrderKind.GUIDED:
             draft = self._repository.start_company_lottery_draft(
-                message.sender_platform_id, order.quantity, group_chat_id, received_at
+                message.sender_platform_id, order.quantity, received_at
             )
             return self._company_lottery_draft_reply(draft, received_at)
 
@@ -4470,7 +4469,6 @@ class GroupCommandHandler:
                 message.platform_message_id,
                 message.sender_platform_id,
                 order.quantity,
-                group_chat_id,
                 received_at,
             )
         else:
@@ -4478,7 +4476,6 @@ class GroupCommandHandler:
                 message.platform_message_id,
                 message.sender_platform_id,
                 [order.ticket],
-                group_chat_id,
                 received_at,
             )
         return self._reply(

@@ -2222,19 +2222,15 @@ def create_app(
     )
     def company_lottery_overview(
         _: Annotated[None, Depends(authorize)],
-        group_chat_id: UUID,
         round_limit: Annotated[int, Query(ge=1, le=200)] = 20,
         ledger_limit: Annotated[int, Query(ge=1, le=200)] = 50,
         prize_limit: Annotated[int, Query(ge=1, le=200)] = 50,
     ) -> CompanyLotteryOverviewResponse:
         overview = repository.company_lottery_overview(
-            group_chat_id,
             round_limit=round_limit,
             ledger_limit=ledger_limit,
             prize_limit=prize_limit,
         )
-        if overview is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "群聊不存在")
         return _company_lottery_overview_response(overview)
 
     @app.post(
@@ -2244,18 +2240,15 @@ def create_app(
     def draw_company_lottery_round(
         request: DrawCompanyLotteryRoundRequest,
         _: Annotated[None, Depends(authorize)],
-        group_chat_id: UUID,
     ) -> CompanyLotteryDrawResponse:
-        view = repository.current_company_lottery_round(group_chat_id)
+        view = repository.current_company_lottery_round()
         if view is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "当前没有可开奖的期次")
         if view.close_at > request.now:
             raise HTTPException(
                 status.HTTP_409_CONFLICT, "本期尚未到停售时刻，不能提前开奖"
             )
-        drawn = repository.draw_company_lottery_round_manually(
-            group_chat_id, request.now
-        )
+        drawn = repository.draw_company_lottery_round_manually(request.now)
         if drawn is None:
             raise HTTPException(status.HTTP_409_CONFLICT, "开奖失败，请稍后重试")
         return CompanyLotteryDrawResponse(
@@ -2275,12 +2268,8 @@ def create_app(
     def deposit_company_lottery_pool(
         request: DepositCompanyLotteryPoolRequest,
         _: Annotated[None, Depends(authorize)],
-        group_chat_id: UUID,
     ) -> CompanyLotteryPoolBalancesResponse:
-        if all(group.id != group_chat_id for group in repository.list_group_chats()):
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "群聊不存在")
         pool, adjustment = repository.deposit_company_lottery_pool(
-            group_chat_id,
             request.amount,
             request.now,
             account=request.account,
@@ -3886,8 +3875,6 @@ def _company_lottery_overview_response(
     overview,
 ) -> CompanyLotteryOverviewResponse:
     return CompanyLotteryOverviewResponse(
-        group_chat_id=overview.group_chat_id,
-        group_name=overview.group_name,
         enabled=overview.enabled,
         pool_balance=overview.pool_balance,
         adjustment_balance=overview.adjustment_balance,
