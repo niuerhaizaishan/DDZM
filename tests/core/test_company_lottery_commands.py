@@ -130,6 +130,26 @@ def test_commands_are_group_only():
     assert reply == "请回到群里查看彩票信息。"
 
 
+def test_guided_ticket_entry_is_ignored_outside_an_enabled_group():
+    from dzmm_bot.core.commands import GroupCommandHandler
+
+    _, repository, _, group, now = _setup()
+    repository.start_company_lottery_draft("p1", 1, now)
+
+    reply = GroupCommandHandler(repository).handle(
+        InboundMessage(
+            "unmanaged-group-ticket",
+            "p1",
+            "03 07 09 10 + 05",
+            now,
+            source_type="group",
+            chatroom_id="not-configured",
+        )
+    )
+
+    assert reply is None
+
+
 def test_help_explains_the_lottery_rules_and_expectation():
     service, repository, factory, group, now = _setup()
 

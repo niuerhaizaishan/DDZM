@@ -625,7 +625,7 @@ function renderCompanyLotterySettings(settings) {
     <article><span>号码池</span><strong>红球 ${settings.red_pool} 选 ${settings.red_count} + 蓝球 ${settings.blue_pool} 选 1</strong><small>共 ${settings.combinations} 种组合</small></article>
     <article><span>单注价格</span><strong>${settings.ticket_price}</strong><small>每人每日最多 ${settings.max_tickets_per_day} 注，单期最多 ${settings.max_tickets_per_round} 注</small></article>
     <article><span>奖级奖金</span><strong>${settings.head_prize} / ${settings.second_prize} / ${settings.third_prize} / ${settings.fourth_prize} / ${settings.fifth_prize}</strong><small>一至五等奖固定奖金</small></article>
-    <article><span>奖池</span><strong>上限 ${settings.pool_ceiling}</strong><small>启动奖池 ${settings.pool_seed}（只在每个群首期注入） · 单人单期上限 ${settings.per_person_cap}</small></article>
+    <article><span>奖池</span><strong>上限 ${settings.pool_ceiling}</strong><small>启动奖池 ${settings.pool_seed}（全公司仅首期注入一次） · 单人单期上限 ${settings.per_person_cap}</small></article>
     <article><span>投注时间</span><strong>${drawTime} 开奖</strong><small>提前 ${settings.close_offset_minutes} 分钟停售，提前 ${settings.notify_offset_minutes} 分钟提醒</small></article>
     <article><span>全员福利</span><strong>${settings.welfare_enabled ? `每人 ${settings.welfare_per_person}` : "已停用"}</strong><small>调节金达到当前员工总数时发放一轮；入职满 ${settings.welfare_min_tenure_hours} 小时才计入</small></article>
     <article><span>购票草稿</span><strong>${settings.draft_timeout_minutes} 分钟</strong><small>草稿超时作废且不扣款</small></article>`;
@@ -635,7 +635,7 @@ function renderCompanyLotteryOverview(overview) {
   companyLotteryOverview = overview;
 
   document.querySelector("#company-lottery-rounds").innerHTML = overview.rounds.map((item) => `
-    <article class="data-row"><div><b>第 ${item.round_number} 期</b><small>${statusBadge(companyLotteryStateLabel(item.state), item.state === "open" ? "success" : item.state === "drawn" ? "" : "warning")}</small><small>售票 ${item.tickets_sold} 注 · 流水 ${item.gross_amount} 摸鱼币 · 开奖 ${escapeHtml(formatHeartbeat(item.draw_at))} · 停售 ${escapeHtml(formatHeartbeat(item.close_at))}</small><small>期初 ${item.pool_opening} · 溢出 ${item.pool_overflow} · 期末 ${item.pool_closing} · 中奖 ${item.winner_count} 人 · 应发 ${item.payable} · 实发 ${item.paid_total}</small><small>${item.answer ? `号码：${escapeHtml(item.answer)} · 盐：${escapeHtml(item.salt || "")}` : "号码将在开奖后公布"}</small></div></article>`).join("") || '<p class="muted">还没有彩票期次。</p>';
+    <article class="data-row"><div><b>第 ${item.round_number} 期</b><small>${statusBadge(companyLotteryStateLabel(item.state), item.state === "open" ? "success" : item.state === "drawn" ? "" : "warning")}</small><small>售票 ${item.tickets_sold} 注 · 流水 ${item.gross_amount} 摸鱼币 · 开奖 ${escapeHtml(formatHeartbeat(item.draw_at))} · 停售 ${escapeHtml(formatHeartbeat(item.close_at))}</small><small>期初 ${item.pool_opening} · 溢出 ${item.pool_overflow} · 期末 ${item.pool_closing} · 中奖 ${item.winner_count} 注 · 应发 ${item.payable} · 实发 ${item.paid_total}</small><small>${item.answer ? `号码：${escapeHtml(item.answer)} · 盐：${escapeHtml(item.salt || "")}` : "号码将在开奖后公布"}</small></div></article>`).join("") || '<p class="muted">还没有彩票期次。</p>';
 
   document.querySelector("#company-lottery-ledger").innerHTML = overview.ledger.map((item) => `
     <article class="data-row"><div><b>${escapeHtml(companyLotteryAccountLabel(item.account))} · ${escapeHtml(companyLotteryLedgerKindLabel(item.kind))} ${item.amount > 0 ? "+" : ""}${item.amount}</b><small>余额 ${item.balance_after} 摸鱼币${item.round_number == null ? "" : ` · 第 ${item.round_number} 期`}</small><small>${escapeHtml(formatHeartbeat(item.created_at))}${item.note ? ` · ${escapeHtml(item.note)}` : ""}</small></div></article>`).join("") || '<p class="muted">没有奖池流水。</p>';
@@ -3272,7 +3272,7 @@ companyLotterySettingsModal.addEventListener("click", async (event) => {
     welfare_min_tenure_hours: numberAt("welfare-min-tenure-hours"),
   };
   const ranges = {
-    red_pool: [5, 99], red_count: [1, 10], blue_pool: [1, 99], ticket_price: [1, 1000],
+    red_pool: [5, 99], red_count: [4, 4], blue_pool: [1, 99], ticket_price: [1, 1000],
     head_prize: [0, 1000000], second_prize: [0, 1000000], third_prize: [0, 1000000],
     fourth_prize: [0, 1000000], fifth_prize: [0, 1000000],
     pool_ceiling: [0, 1000000], pool_seed: [0, 1000000], per_person_cap: [0, 1000000],

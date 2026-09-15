@@ -1159,7 +1159,7 @@ class CompanyLotterySettingsResponse(ApiModel):
 class SetCompanyLotterySettingsRequest(ApiModel):
     enabled: bool
     red_pool: int = Field(ge=5, le=99)
-    red_count: int = Field(ge=1, le=10)
+    red_count: int = Field(ge=4, le=4)
     blue_pool: int = Field(ge=1, le=99)
     ticket_price: int = Field(ge=1, le=1000)
     head_prize: int = Field(ge=0, le=1_000_000)
@@ -1275,7 +1275,7 @@ class CompanyLotteryDrawResponse(ApiModel):
     paid_total: int
     pool_balance: int
     adjustment_balance: int
-    next_round_number: int
+    next_round_number: int | None
 
 
 class DarkMarketBidResponse(ApiModel):

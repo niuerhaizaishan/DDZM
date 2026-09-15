@@ -156,7 +156,7 @@
 - [x] 写失败测试：配置读写（含乐观并发与幂等重放）、期次历史、奖池与调节金流水、中奖明细、员工累计收益、手动开奖与手动注资，以及核心层 `overview` / `draw` / `pool` 三个内部接口。
 - [x] 运行相关测试，确认失败。
 - [x] 实现后台页面与接口；所有写操作复用仓储层的同一方法（`update_company_lottery_settings`、`draw_company_lottery_round_manually`、`deposit_company_lottery_pool`）。手动开奖额外要求期次已过停售时刻，避免在承诺期内泄露号码。
-- [x] 补发首个新群的启动奖池：迁移只能覆盖上线时已存在的群，仓储层在群首期补上（`pool_seed` 可在后台配置）。
+- [x] 确保启动奖池全公司仅首期注入一次；迁移与仓储层都不按群重复注入（`pool_seed` 可在后台配置）。
 - [x] 修正期次排期时区：核心层 `clock` 给的是 UTC，`_open_company_lottery_round` 必须先转北京时间再算 22:00 开奖。
 - [x] 重新运行后台测试（新增 3 个用例全绿；其余失败为仓库既有的 Linux 桌面/X11 与 Windows 权限位用例）。
 

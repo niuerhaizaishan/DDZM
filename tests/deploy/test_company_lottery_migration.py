@@ -49,6 +49,17 @@ def test_company_lottery_migration_creates_tables(tmp_path, monkeypatch):
     assert EXPECTED_TABLES <= set(inspect(engine).get_table_names())
 
 
+def test_company_lottery_migration_adds_round_rule_snapshots(tmp_path, monkeypatch):
+    engine = migrated_engine(tmp_path, monkeypatch)
+
+    columns = {
+        column["name"]
+        for column in inspect(engine).get_columns("company_lottery_rounds")
+    }
+
+    assert "rules_snapshot" in columns
+
+
 def test_company_lottery_migration_seeds_pool_and_settings(tmp_path, monkeypatch):
     engine = migrated_engine(tmp_path, monkeypatch)
 

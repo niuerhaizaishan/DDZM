@@ -1470,7 +1470,7 @@ def create_app(
             )
         int_ranges = {
             "red_pool": (5, 99),
-            "red_count": (1, 10),
+            "red_count": (4, 4),
             "blue_pool": (1, 99),
             "ticket_price": (1, 1000),
             "head_prize": (0, 1_000_000),

@@ -3681,6 +3681,7 @@ def test_admin_rejects_invalid_company_lottery_settings_before_relay(
         key: value for key, value in original.items() if key != "combinations"
     }
     for invalid in (
+        {**base, "red_count": 3},
         {**base, "red_count": 11},
         {**base, "draw_hour": 24},
         {**base, "max_tickets_per_day": 0},

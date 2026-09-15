@@ -192,7 +192,7 @@
 
               <section id="company-lottery-view" class="dashboard-view panel" hidden>
                 <p class="eyebrow">号码型彩票</p>
-                <div class="panel-heading"><div><h2>公司双色球</h2><p class="muted">全公司共用一期：红球池选 4 + 蓝球池选 1，默认共 1,260 种组合；销售额先入奖池，超出上限转入调节金。</p></div><button id="edit-company-lottery-settings" class="primary" type="button">编辑彩票规则</button></div>
+                <div class="panel-heading"><div><h2>公司双色球</h2><p class="muted">全公司共用一期：红球固定选 4 + 蓝球池选 1，默认共 1,260 种组合；销售额先入奖池，超出上限转入调节金。</p></div><button id="edit-company-lottery-settings" class="primary" type="button">编辑彩票规则</button></div>
                 <div id="company-lottery-settings-card" class="settings-card" aria-live="polite"></div>
                 <hr>
                 <div class="list-toolbar"><div class="list-toolbar-controls"><span class="muted">全公司共用一期；公告广播到所有已启用监听的群。</span></div><button id="refresh-company-lottery" class="secondary" type="button">刷新报表</button></div>
@@ -201,7 +201,7 @@
                 <div class="panel-heading"><div><h2>期次记录</h2><p class="muted">开奖前不展示号码；开奖后展示号码、盐与派奖结果。</p></div></div>
                 <div id="company-lottery-rounds" class="data-list" aria-live="polite"></div>
                 <hr>
-                <div class="panel-heading"><div><h2>奖池与调节金流水</h2><p class="muted">每个群独立记账，逐笔留痕。</p></div></div>
+                <div class="panel-heading"><div><h2>奖池与调节金流水</h2><p class="muted">全公司共用账本，逐笔留痕。</p></div></div>
                 <div id="company-lottery-ledger" class="data-list" aria-live="polite"></div>
                 <hr>
                 <div class="panel-heading"><div><h2>中奖明细</h2><p class="muted">面值为应发金额，实发金额在封顶与折算之后确定。</p></div></div>
@@ -533,7 +533,7 @@
         <label><input id="company-lottery-enabled" type="checkbox"> 启用公司双色球</label>
         <div class="event-input-grid">
           <label>红球池上限<input id="company-lottery-red-pool" type="number" min="5" max="99" required></label>
-          <label>红球选球数<input id="company-lottery-red-count" type="number" min="1" max="10" required></label>
+          <label>红球选球数（固定）<input id="company-lottery-red-count" type="number" min="4" max="4" readonly required></label>
           <label>蓝球池上限<input id="company-lottery-blue-pool" type="number" min="1" max="99" required></label>
           <label>单注价格<input id="company-lottery-ticket-price" type="number" min="1" max="1000" required></label>
           <label>一等奖<input id="company-lottery-head-prize" type="number" min="0" max="1000000" required></label>

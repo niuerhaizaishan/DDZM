@@ -4318,7 +4318,11 @@ class GroupCommandHandler:
         不是草稿续填就返回 None，让这条消息照常走闲聊；号码格式对得上但草稿刚好
         超时的话，给一次明确提示而不是静默丢弃。
         """
-        if message.source_type != "group":
+        if (
+            message.source_type != "group"
+            or message.chatroom_id is None
+            or self._repository.resolve_enabled_group_chat(message.chatroom_id) is None
+        ):
             return None
         received_at = message.received_at.astimezone(_BEIJING)
         quick = is_quick_pick(content)
@@ -4345,7 +4349,12 @@ class GroupCommandHandler:
         return self._company_lottery_draft_reply(result, received_at)
 
     def _company_lottery_parse_single(self, content: str):
-        settings = self._repository.get_company_lottery_settings()
+        view = self._repository.current_company_lottery_round()
+        settings = (
+            self._repository.get_company_lottery_settings()
+            if view is None
+            else view.rules
+        )
         try:
             return parse_single(
                 content,
@@ -4431,7 +4440,12 @@ class GroupCommandHandler:
                 self._company_lottery_purchase_values(purchase),
             )
 
-        settings = self._repository.get_company_lottery_settings()
+        view = self._repository.current_company_lottery_round()
+        settings = (
+            self._repository.get_company_lottery_settings()
+            if view is None
+            else view.rules
+        )
         try:
             order = parse_order(
                 content,
@@ -4521,7 +4535,7 @@ class GroupCommandHandler:
         }
 
     def _company_lottery_menu_values(self, view) -> dict:
-        settings = self._repository.get_company_lottery_settings()
+        settings = view.rules
         counts = tier_counts(
             red_pool=settings.red_pool,
             red_count=settings.red_count,

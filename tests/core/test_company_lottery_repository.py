@@ -134,6 +134,11 @@ def test_settings_can_be_updated(repository):
     assert settings.pool_ceiling == 500
 
 
+def test_settings_reject_a_red_ball_count_other_than_four(repository):
+    with pytest.raises(ValueError, match="红球选球数固定为 4"):
+        repository.update_company_lottery_settings(red_count=3)
+
+
 def test_ensure_round_opens_exactly_one_open_round(repository, seeded, now):
     first = repository.ensure_company_lottery_round(now)
     second = repository.ensure_company_lottery_round(now)
@@ -1320,6 +1325,79 @@ def test_run_jobs_draws_and_announces_at_the_draw_time(repository, seeded, now):
 
     assert repository.company_lottery_round_by_number(1).state == "drawn"
     assert repository.current_company_lottery_round().round_number == 2
+
+
+def test_draw_uses_the_prizes_captured_when_the_round_opened(
+    repository, seeded, now
+):
+    view = repository.ensure_company_lottery_round(now)
+    repository.buy_company_lottery_tickets(
+        UUID("00000000-0000-0000-0000-000000000403"),
+        "p1",
+        [answer_for(repository, view.id)],
+        now,
+    )
+    repository.update_company_lottery_settings(head_prize=1)
+
+    repository.run_company_lottery_jobs(DRAW_AT)
+
+    assert balance_of(repository, "p1") == 198
+
+
+def test_draw_announcements_skip_groups_that_disabled_announcements(
+    repository, seeded, now
+):
+    with repository.transaction():
+        with repository._session() as session:
+            session.get(GroupChatRecord, SECOND_GROUP_CHAT_ID).announcements_enabled = False
+    view = repository.ensure_company_lottery_round(now)
+    repository.buy_company_lottery_tickets(
+        UUID("00000000-0000-0000-0000-000000000404"),
+        "p1",
+        [answer_for(repository, view.id)],
+        now,
+    )
+
+    repository.run_company_lottery_jobs(DRAW_AT)
+
+    assert any("【公司双色球开奖】" in text for text in outbound_texts(repository))
+    assert not any(
+        "【公司双色球开奖】" in text
+        for text in outbound_texts(repository, SECOND_GROUP_CHAT_ID)
+    )
+
+
+def test_winner_announcement_keeps_different_actual_amounts_separate():
+    from dzmm_bot.core.repository import (
+        CompanyLotteryWinner,
+        _company_lottery_winner_lines,
+    )
+
+    lines = _company_lottery_winner_lines(
+        (
+            CompanyLotteryWinner("小明", "fifth", 0),
+            CompanyLotteryWinner("小红", "fifth", 1),
+            CompanyLotteryWinner("小蓝", "fifth", 1),
+        )
+    )
+
+    assert lines == ["　 五等奖 0 —— 小明", "　 五等奖 1 —— 小红 小蓝"]
+
+
+def test_disabling_sales_does_not_strand_an_open_round(repository, seeded, now):
+    view = repository.ensure_company_lottery_round(now)
+    repository.buy_company_lottery_tickets(
+        UUID("00000000-0000-0000-0000-000000000405"),
+        "p1",
+        [answer_for(repository, view.id)],
+        now,
+    )
+    repository.update_company_lottery_settings(enabled=False)
+
+    repository.run_company_lottery_jobs(DRAW_AT)
+
+    assert repository.company_lottery_round_by_number(1).state == "drawn"
+    assert repository.current_company_lottery_round() is None
 
 
 def test_run_jobs_does_not_draw_before_the_draw_time(repository, seeded, now):

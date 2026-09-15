@@ -2163,6 +2163,7 @@ class CompanyLotteryRoundView:
     pool_balance: int
     adjustment_balance: int
     my_tickets: int
+    rules: CompanyLotterySettings
     answer: Ticket | None = None
     salt: str | None = None
 
@@ -2249,7 +2250,8 @@ class CompanyLotteryDrawResult:
     winners: tuple[CompanyLotteryWinner, ...]
     pool_balance: int
     adjustment_balance: int
-    next_round_number: int
+    next_round_number: int | None
+    rules: CompanyLotterySettings
 
 
 @dataclass(frozen=True)
@@ -27527,6 +27529,8 @@ class CoreRepository:
                     if not hasattr(record, name):
                         raise ValueError(f"未知的公司双色球配置项：{name}")
                     setattr(record, name, value)
+                if record.red_count != DEFAULT_RED_COUNT:
+                    raise ValueError("红球选球数固定为 4")
                 session.flush()
                 return _company_lottery_settings(record)
 
@@ -27720,9 +27724,11 @@ class CoreRepository:
             )
 
     def _company_lottery_announce(self, text: str) -> int:
-        """把公告广播到所有已配置的群；返回实际投递的群数。"""
+        """把公告广播到允许公告的已监听群；返回实际投递的群数。"""
         delivered = 0
         for group in self.list_group_chats():
+            if not group.listening_enabled or not group.announcements_enabled:
+                continue
             destination = self.group_chat_destination(group.id)
             if destination is None:
                 continue
@@ -27739,9 +27745,6 @@ class CoreRepository:
     ) -> CompanyLotteryDrawResult | None:
         """后台手动开奖：只对已过停售时刻的期次生效，公告与福利与定时任务一致。"""
         now = now.astimezone(BEIJING)
-        settings = self.get_company_lottery_settings()
-        if not settings.enabled:
-            return None
         view = self.current_company_lottery_round()
         if view is None or view.close_at > now:
             return None
@@ -27750,7 +27753,7 @@ class CoreRepository:
         drawn = self.draw_company_lottery_round(now, manual=True)
         if drawn is None:
             return None
-        self._company_lottery_announce(_render_lottery_draw(drawn, settings))
+        self._company_lottery_announce(_render_lottery_draw(drawn))
         welfare = self.settle_company_lottery_welfare(now)
         if welfare.status == "paid":
             self._company_lottery_announce(_render_lottery_welfare(welfare))
@@ -27900,6 +27903,7 @@ class CoreRepository:
                 )
                 if round_row is None or round_row.close_at <= now:
                     return CompanyLotteryDraftResult(status="closed")
+                rules = _company_lottery_round_settings(round_row, settings)
 
                 user = session.scalar(
                     select(UserRecord).where(UserRecord.platform_id == platform_id)
@@ -27907,7 +27911,7 @@ class CoreRepository:
                 if user is None:
                     return CompanyLotteryDraftResult(status="not_joined")
 
-                remaining = settings.max_tickets_per_day - self._company_lottery_today_count(
+                remaining = rules.max_tickets_per_day - self._company_lottery_today_count(
                     session, user.id, now
                 )
                 if remaining <= 0:
@@ -28081,6 +28085,11 @@ class CoreRepository:
                     session.delete(draft)
                     return CompanyLotteryDraftResult(status="expired")
 
+                round_row = session.get(CompanyLotteryRoundRecord, draft.round_id)
+                if round_row is None:
+                    return CompanyLotteryDraftResult(status="no_draft")
+                rules = _company_lottery_round_settings(round_row, settings)
+
                 entries = list(draft.tickets)
                 taken = {entry["key"] for entry in entries} | self._company_lottery_ticket_keys(
                     session, draft.round_id, user.id
@@ -28089,9 +28098,9 @@ class CoreRepository:
                 if is_quick:
                     drawn = quick_tickets(
                         quantity=1,
-                        red_pool=settings.red_pool,
-                        red_count=settings.red_count,
-                        blue_pool=settings.blue_pool,
+                        red_pool=rules.red_pool,
+                        red_count=rules.red_count,
+                        blue_pool=rules.blue_pool,
                         exclude=taken,
                     )[0]
                 else:
@@ -28205,6 +28214,7 @@ class CoreRepository:
 
                 settings_record = self._company_lottery_settings_record(session)
                 settings = _company_lottery_settings(settings_record)
+                rules = _company_lottery_round_settings(round_row, settings)
                 answer = Ticket(
                     reds=(
                         round_row.red_1,
@@ -28238,15 +28248,15 @@ class CoreRepository:
                     pool_opening=pool_total - round_row.gross_amount,
                     sales=round_row.gross_amount,
                     winners=[(str(bet.user_id), tier) for bet, _, tier in judged],
-                    prizes=settings.prizes,
-                    per_person_cap=settings.per_person_cap,
-                    pool_ceiling=settings.pool_ceiling,
+                    prizes=rules.prizes,
+                    per_person_cap=rules.per_person_cap,
+                    pool_ceiling=rules.pool_ceiling,
                 )
 
                 merited: dict[str, int] = {}
                 for bet, _, tier in judged:
                     key = str(bet.user_id)
-                    merited[key] = merited.get(key, 0) + settings.prizes[tier]
+                    merited[key] = merited.get(key, 0) + rules.prizes[tier]
 
                 winners: list[CompanyLotteryWinner] = []
                 last_index: dict[str, int] = {}
@@ -28261,12 +28271,12 @@ class CoreRepository:
                         # 尾差补给该员工最后一张中奖票，避免整除截断凭空吞币
                         actual = target - allocated.get(key, 0)
                     else:
-                        share = Decimal(settings.prizes[tier]) / Decimal(merited[key])
+                        share = Decimal(rules.prizes[tier]) / Decimal(merited[key])
                         actual = int(Decimal(target) * share)
                     allocated[key] = allocated.get(key, 0) + actual
 
                     bet.prize_tier = tier.value
-                    bet.merited_amount = settings.prizes[tier]
+                    bet.merited_amount = rules.prizes[tier]
                     bet.prize_amount = actual
                     bet.settled_at = now
                     if actual:
@@ -28326,11 +28336,15 @@ class CoreRepository:
                 round_row.capped_count = len(settlement.capped_users)
                 round_row.winner_count = len(judged)
 
-                next_round = self._open_company_lottery_round(
-                    session,
-                    settings_record,
-                    round_number=round_row.round_number + 1,
-                    now=now,
+                next_round = (
+                    self._open_company_lottery_round(
+                        session,
+                        settings_record,
+                        round_number=round_row.round_number + 1,
+                        now=now,
+                    )
+                    if settings.enabled
+                    else None
                 )
 
                 return CompanyLotteryDrawResult(
@@ -28349,7 +28363,10 @@ class CoreRepository:
                     adjustment_balance=self._company_lottery_pool_balance(
                         session, "adjustment"
                     ),
-                    next_round_number=next_round.round_number,
+                    next_round_number=(
+                        None if next_round is None else next_round.round_number
+                    ),
+                    rules=rules,
                 )
 
     # ----------------------------------------------------------- 公司双色球·福利
@@ -28362,13 +28379,11 @@ class CoreRepository:
         """
         now = now.astimezone(BEIJING)
         settings = self.get_company_lottery_settings()
-        if not settings.enabled:
-            return
-
-        # 冷启动或上一期已结算时把新一期开出来
-        self.ensure_company_lottery_round(now)
-
         view = self.current_company_lottery_round()
+        if view is None:
+            if not settings.enabled:
+                return
+            view = self.ensure_company_lottery_round(now)
         if view is not None and view.state == "open":
             self._remind_company_lottery_close(settings, now)
 
@@ -28376,7 +28391,7 @@ class CoreRepository:
 
         drawn = self.draw_company_lottery_round(now)
         if drawn is not None:
-            self._company_lottery_announce(_render_lottery_draw(drawn, settings))
+            self._company_lottery_announce(_render_lottery_draw(drawn))
 
         welfare = self.settle_company_lottery_welfare(now)
         if welfare.status == "paid":
@@ -28592,6 +28607,7 @@ class CoreRepository:
                         status="closed",
                         close_at=None if round_row is None else round_row.close_at,
                     )
+                rules = _company_lottery_round_settings(round_row, settings)
 
                 user = session.scalar(
                     select(UserRecord).where(UserRecord.platform_id == platform_id)
@@ -28623,22 +28639,22 @@ class CoreRepository:
                     )
                     or 0
                 )
-                remaining = settings.max_tickets_per_day - today_count
+                remaining = rules.max_tickets_per_day - today_count
                 if remaining <= 0 or wanted > remaining:
                     return CompanyLotteryPurchaseResult(
                         status="daily_limit", remaining=max(remaining, 0)
                     )
 
-                if round_row.tickets_sold + wanted > settings.max_tickets_per_round:
+                if round_row.tickets_sold + wanted > rules.max_tickets_per_round:
                     return CompanyLotteryPurchaseResult(status="round_full")
 
                 if is_quick:
                     fresh = tuple(
                         quick_tickets(
                             quantity=wanted,
-                            red_pool=settings.red_pool,
-                            red_count=settings.red_count,
-                            blue_pool=settings.blue_pool,
+                            red_pool=rules.red_pool,
+                            red_count=rules.red_count,
+                            blue_pool=rules.blue_pool,
                             exclude=existing_keys,
                         )
                     )
@@ -28647,7 +28663,7 @@ class CoreRepository:
                     if any(ticket.as_key() in existing_keys for ticket in fresh):
                         return CompanyLotteryPurchaseResult(status="duplicate")
 
-                cost = settings.ticket_price * len(fresh)
+                cost = rules.ticket_price * len(fresh)
                 if user.balance < cost:
                     return CompanyLotteryPurchaseResult(
                         status="insufficient_balance", needed=cost - user.balance
@@ -28664,7 +28680,7 @@ class CoreRepository:
                             red_4=ticket.reds[3],
                             blue=ticket.blue,
                             ticket_key=ticket.as_key(),
-                            cost=settings.ticket_price,
+                            cost=rules.ticket_price,
                             is_quick_pick=is_quick or is_quick_pick,
                             inbound_message_id=inbound_id,
                             created_at=now,
@@ -28738,6 +28754,7 @@ class CoreRepository:
             )
             salt = record.salt
 
+        settings = _company_lottery_settings(self._company_lottery_settings_record(session))
         return CompanyLotteryRoundView(
             id=record.id,
             round_number=record.round_number,
@@ -28752,6 +28769,7 @@ class CoreRepository:
                 session, "adjustment"
             ),
             my_tickets=my_tickets,
+            rules=_company_lottery_round_settings(record, settings),
             answer=answer,
             salt=salt,
         )
@@ -28814,10 +28832,11 @@ class CoreRepository:
     ) -> CompanyLotteryRoundRecord:
         # 停售与开奖时刻按北京时间整点计算，调用方可能传 UTC（核心层 clock 就是 UTC）
         now = now.astimezone(BEIJING)
+        rules = _company_lottery_settings(settings)
         answer = draw_numbers(
-            red_pool=settings.red_pool,
-            red_count=settings.red_count,
-            blue_pool=settings.blue_pool,
+            red_pool=rules.red_pool,
+            red_count=rules.red_count,
+            blue_pool=rules.blue_pool,
         )
         salt = new_salt()
         # 启动奖池全公司只注入一次：迁移通常已经写过，这里兜住没有迁移数据的库。
@@ -28850,6 +28869,7 @@ class CoreRepository:
             red_4=answer.reds[3],
             blue=answer.blue,
             salt=salt,
+            rules_snapshot=_company_lottery_rule_snapshot(rules),
             pool_opening=self._company_lottery_pool_balance(session, "pool"),
             created_at=now,
         )
@@ -28890,6 +28910,50 @@ def _company_lottery_settings(
     )
 
 
+def _company_lottery_rule_snapshot(settings: CompanyLotterySettings) -> dict[str, int]:
+    return {
+        "red_pool": settings.red_pool,
+        "red_count": settings.red_count,
+        "blue_pool": settings.blue_pool,
+        "ticket_price": settings.ticket_price,
+        "head_prize": settings.prizes[PrizeTier.HEAD],
+        "second_prize": settings.prizes[PrizeTier.SECOND],
+        "third_prize": settings.prizes[PrizeTier.THIRD],
+        "fourth_prize": settings.prizes[PrizeTier.FOURTH],
+        "fifth_prize": settings.prizes[PrizeTier.FIFTH],
+        "pool_ceiling": settings.pool_ceiling,
+        "per_person_cap": settings.per_person_cap,
+        "max_tickets_per_day": settings.max_tickets_per_day,
+        "max_tickets_per_round": settings.max_tickets_per_round,
+    }
+
+
+def _company_lottery_round_settings(
+    record: CompanyLotteryRoundRecord, settings: CompanyLotterySettings
+) -> CompanyLotterySettings:
+    snapshot = record.rules_snapshot
+    if not snapshot:
+        return settings
+    return replace(
+        settings,
+        red_pool=int(snapshot["red_pool"]),
+        red_count=int(snapshot["red_count"]),
+        blue_pool=int(snapshot["blue_pool"]),
+        ticket_price=int(snapshot["ticket_price"]),
+        prizes={
+            PrizeTier.HEAD: int(snapshot["head_prize"]),
+            PrizeTier.SECOND: int(snapshot["second_prize"]),
+            PrizeTier.THIRD: int(snapshot["third_prize"]),
+            PrizeTier.FOURTH: int(snapshot["fourth_prize"]),
+            PrizeTier.FIFTH: int(snapshot["fifth_prize"]),
+        },
+        pool_ceiling=int(snapshot["pool_ceiling"]),
+        per_person_cap=int(snapshot["per_person_cap"]),
+        max_tickets_per_day=int(snapshot["max_tickets_per_day"]),
+        max_tickets_per_round=int(snapshot["max_tickets_per_round"]),
+    )
+
+
 _COMPANY_LOTTERY_TIER_LABELS: dict[str, str] = {
     "head": "🏆 一等奖",
     "second": "🥈 二等奖",
@@ -28912,21 +28976,23 @@ _COMPANY_LOTTERY_NAME_LIMIT = 5
 def _company_lottery_winner_lines(
     winners: Sequence[CompanyLotteryWinner],
 ) -> list[str]:
-    grouped: dict[str, list[CompanyLotteryWinner]] = {}
+    grouped: dict[tuple[str, int], list[CompanyLotteryWinner]] = {}
     for winner in winners:
-        grouped.setdefault(winner.tier, []).append(winner)
+        grouped.setdefault((winner.tier, winner.amount), []).append(winner)
 
     lines: list[str] = []
     for tier in _COMPANY_LOTTERY_TIER_ORDER:
-        entries = grouped.get(tier)
-        if not entries:
-            continue
-        label = _COMPANY_LOTTERY_TIER_LABELS[tier]
-        amount = entries[0].amount
-        names = " ".join(entry.display_name for entry in entries[:_COMPANY_LOTTERY_NAME_LIMIT])
-        if len(entries) > _COMPANY_LOTTERY_NAME_LIMIT:
-            names = f"{names} 等 {len(entries)} 人"
-        lines.append(f"{label} {amount} —— {names}")
+        entries_by_amount = [
+            (amount, entries)
+            for (winner_tier, amount), entries in grouped.items()
+            if winner_tier == tier
+        ]
+        for amount, entries in entries_by_amount:
+            label = _COMPANY_LOTTERY_TIER_LABELS[tier]
+            names = " ".join(entry.display_name for entry in entries[:_COMPANY_LOTTERY_NAME_LIMIT])
+            if len(entries) > _COMPANY_LOTTERY_NAME_LIMIT:
+                names = f"{names} 等 {len(entries)} 人"
+            lines.append(f"{label} {amount} —— {names}")
     return lines
 
 
@@ -28940,13 +29006,11 @@ def _render_lottery_close_notice(
     )
 
 
-def _render_lottery_draw(
-    result: CompanyLotteryDrawResult, settings: CompanyLotterySettings
-) -> str:
+def _render_lottery_draw(result: CompanyLotteryDrawResult) -> str:
     lines = [
         "【公司双色球开奖】",
         f"本期奖池：{result.pool_balance} 摸鱼币",
-        f"单人中奖上限：{settings.per_person_cap} 摸鱼币",
+        f"单人中奖上限：{result.rules.per_person_cap} 摸鱼币",
         "━━━━━━━━━━━━━━━━━━",
         result.answer.display(),
         f"本期售出 {result.tickets_sold} 注 ｜ 流水 {result.gross_amount} 币",
@@ -28966,7 +29030,10 @@ def _render_lottery_draw(
     lines.append(
         f"奖池 {result.pool_balance} 币 ｜ 调节金 {result.adjustment_balance} 币"
     )
-    lines.append(f"第 {result.next_round_number} 期已开卖 → /购买彩票 机选")
+    if result.next_round_number is None:
+        lines.append("公司双色球已暂停，待后台重新启用")
+    else:
+        lines.append(f"第 {result.next_round_number} 期已开卖 → /购买彩票 机选")
     return "\n".join(lines)
 
 

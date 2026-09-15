@@ -3095,6 +3095,7 @@ class CompanyLotteryRoundRecord(Base):
     red_4: Mapped[int | None] = mapped_column(Integer)
     blue: Mapped[int | None] = mapped_column(Integer)
     salt: Mapped[str | None] = mapped_column(String(64))
+    rules_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSON)
 
     tickets_sold: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0", nullable=False
