@@ -13,6 +13,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 from uuid import UUID, uuid4
 
+from decimal import Decimal
 from sqlalchemy import and_, delete, exists, func, or_, select, text, union_all, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -51,6 +52,29 @@ from .ai_knowledge import (
 )
 
 from .ai_mentions import normalize_ai_mention
+from .company_lottery import (
+    DEFAULT_BLUE_POOL,
+    DEFAULT_MAX_TICKETS_PER_DAY,
+    DEFAULT_PER_PERSON_CAP,
+    DEFAULT_POOL_CEILING,
+    DEFAULT_PRIZES,
+    DEFAULT_RED_COUNT,
+    DEFAULT_RED_POOL,
+    DEFAULT_TICKET_PRICE,
+    DEFAULT_WELFARE_PER_PERSON,
+    PrizeTier,
+    Ticket,
+    commit_hash,
+    check_welfare,
+    draw_numbers,
+    judge,
+    new_salt,
+    quick_tickets,
+    round_timing,
+    settle_round,
+    should_notify_close,
+    total_combinations,
+)
 from .dark_market import (
     DarkMarketListingView,
     calculate_fee,
@@ -141,6 +165,13 @@ from .schema import (
     BlameIncidentCardRecord,
     CommandDefinitionRecord,
     CommandReplyTemplateRecord,
+    CompanyLotteryBetRecord,
+    CompanyLotteryDraftRecord,
+    CompanyLotteryPoolLedgerRecord,
+    CompanyLotteryRoundRecord,
+    CompanyLotterySettingsRecord,
+    CompanyLotteryWelfarePayoutRecord,
+    CompanyLotteryWelfareRecord,
     DailyActivityRecord,
     DailyAIUsageRecord,
     DailyCheckinRecord,
@@ -2079,7 +2110,223 @@ _COMMAND_DEFINITIONS = (
     ("/删除身份", "/删除身份 编号 [编号...]", "删除随机事件投稿中的身份"),
     ("/修改事件", "/修改事件 编号", "修改随机事件投稿中的指定事件"),
     ("/删除事件", "/删除事件 编号 [编号...]", "删除随机事件投稿中的事件"),
+    ("/购买彩票", "/购买彩票 红 红 红 红 + 蓝", "购买公司双色球，或用 机选 随机选号"),
+    ("/彩票", "/彩票", "查看当期公司双色球的期次、奖池与奖级"),
+    ("/我的彩票", "/我的彩票", "查看自己的购票记录、累计投入与收益"),
+    ("/确认彩票", "/确认彩票", "确认逐注填写的购票草稿"),
+    ("/取消彩票", "/取消彩票", "放弃逐注填写的购票草稿"),
+    ("/彩票验证", "/彩票验证 期号", "核验指定期次的开奖号码与哈希"),
 )
+
+
+@dataclass(frozen=True)
+class CompanyLotterySettings:
+    enabled: bool
+    red_pool: int
+    red_count: int
+    blue_pool: int
+    ticket_price: int
+    prizes: dict[PrizeTier, int]
+    pool_ceiling: int
+    pool_seed: int
+    per_person_cap: int
+    max_tickets_per_day: int
+    max_tickets_per_round: int
+    draw_hour: int
+    draw_minute: int
+    close_offset_minutes: int
+    notify_offset_minutes: int
+    draft_timeout_minutes: int
+    welfare_enabled: bool
+    welfare_per_person: int
+    welfare_min_tenure_hours: int
+
+    @property
+    def combinations(self) -> int:
+        return total_combinations(
+            red_pool=self.red_pool,
+            red_count=self.red_count,
+            blue_pool=self.blue_pool,
+        )
+
+
+@dataclass(frozen=True)
+class CompanyLotteryRoundView:
+    id: UUID
+    round_number: int
+    state: str
+    close_at: datetime
+    draw_at: datetime
+    commit_hash: str
+    tickets_sold: int
+    gross_amount: int
+    pool_balance: int
+    adjustment_balance: int
+    my_tickets: int
+    answer: Ticket | None = None
+    salt: str | None = None
+
+
+@dataclass(frozen=True)
+class CompanyLotteryBetView:
+    round_number: int
+    ticket: Ticket
+    is_quick_pick: bool
+    cost: int
+    prize_tier: str | None
+    prize_amount: int
+    created_at: datetime
+    settled_at: datetime | None
+
+
+@dataclass(frozen=True)
+class CompanyLotteryHistory:
+    bets: tuple[CompanyLotteryBetView, ...]
+    total_cost: int
+    total_prize: int
+
+
+@dataclass(frozen=True)
+class CompanyLotteryPurchaseResult:
+    status: str
+    round_number: int | None = None
+    tickets: tuple[Ticket, ...] = ()
+    cost: int = 0
+    balance: int | None = None
+    remaining: int | None = None
+    needed: int | None = None
+    is_quick_pick: bool = False
+    close_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class CompanyLotteryDraftView:
+    round_number: int
+    target_count: int
+    tickets: tuple[Ticket, ...]
+    quick_flags: tuple[bool, ...]
+    expires_at: datetime
+
+    @property
+    def collected(self) -> int:
+        return len(self.tickets)
+
+    @property
+    def complete(self) -> bool:
+        return self.collected >= self.target_count
+
+
+@dataclass(frozen=True)
+class CompanyLotteryDraftResult:
+    status: str
+    target: int = 0
+    collected: int = 0
+    latest: Ticket | None = None
+    is_quick_pick: bool = False
+    remaining: int | None = None
+    purchase: CompanyLotteryPurchaseResult | None = None
+
+
+@dataclass(frozen=True)
+class CompanyLotteryWinner:
+    display_name: str
+    tier: str
+    amount: int
+
+
+@dataclass(frozen=True)
+class CompanyLotteryDrawResult:
+    round_number: int
+    answer: Ticket
+    salt: str
+    tickets_sold: int
+    gross_amount: int
+    winner_count: int
+    paid_total: int
+    payable: int
+    haircut: Decimal | None
+    capped_users: tuple[str, ...]
+    winners: tuple[CompanyLotteryWinner, ...]
+    pool_balance: int
+    adjustment_balance: int
+    next_round_number: int
+
+
+@dataclass(frozen=True)
+class CompanyLotteryWelfareResult:
+    status: str
+    employee_count: int = 0
+    per_person: int = 0
+    paid_total: int = 0
+    fund_before: int = 0
+    fund_after: int = 0
+
+
+@dataclass(frozen=True)
+class CompanyLotteryRoundSummary:
+    round_number: int
+    state: str
+    open_at: datetime
+    close_at: datetime
+    draw_at: datetime
+    drawn_at: datetime | None
+    tickets_sold: int
+    gross_amount: int
+    winner_count: int
+    payable: int
+    paid_total: int
+    pool_opening: int
+    pool_overflow: int
+    pool_closing: int
+    answer: str | None
+    salt: str | None
+
+
+@dataclass(frozen=True)
+class CompanyLotteryLedgerEntry:
+    created_at: datetime
+    account: str
+    kind: str
+    amount: int
+    balance_after: int
+    round_number: int | None
+    note: str | None
+
+
+@dataclass(frozen=True)
+class CompanyLotteryPrizeRecord:
+    round_number: int
+    display_name: str
+    ticket: str
+    tier: str
+    merited_amount: int
+    prize_amount: int
+    settled_at: datetime | None
+
+
+@dataclass(frozen=True)
+class CompanyLotteryEmployeeTotal:
+    display_name: str
+    tickets: int
+    cost: int
+    prize: int
+
+    @property
+    def net(self) -> int:
+        return self.prize - self.cost
+
+
+@dataclass(frozen=True)
+class CompanyLotteryOverview:
+    enabled: bool
+    pool_balance: int
+    adjustment_balance: int
+    employee_count: int
+    current_round_number: int | None
+    rounds: tuple[CompanyLotteryRoundSummary, ...]
+    ledger: tuple[CompanyLotteryLedgerEntry, ...]
+    prizes: tuple[CompanyLotteryPrizeRecord, ...]
+    employees: tuple[CompanyLotteryEmployeeTotal, ...]
 
 
 class CoreRepository:
@@ -22313,6 +22560,7 @@ class CoreRepository:
         self.run_performance_jobs(now)
         self.run_dark_market_jobs(now)
         self.run_shop_card_jobs(now)
+        self.run_company_lottery_jobs(now)
         with self.transaction():
             with self._session() as session:
                 self._lock_gameplay_gate(session)
@@ -27260,6 +27508,1477 @@ class CoreRepository:
                 )
                 or 0,
             }
+
+    # --------------------------------------------------------------- 公司双色球
+
+    def get_company_lottery_settings(self) -> CompanyLotterySettings:
+        with self._session() as session:
+            return _company_lottery_settings(
+                self._company_lottery_settings_record(session)
+            )
+
+    def update_company_lottery_settings(
+        self, **changes: object
+    ) -> CompanyLotterySettings:
+        with self.transaction():
+            with self._session() as session:
+                record = self._company_lottery_settings_record(session)
+                for name, value in changes.items():
+                    if not hasattr(record, name):
+                        raise ValueError(f"未知的公司双色球配置项：{name}")
+                    setattr(record, name, value)
+                session.flush()
+                return _company_lottery_settings(record)
+
+    def company_lottery_balances(self) -> tuple[int, int]:
+        """返回全公司共用的 (奖池余额, 调节金余额)。"""
+        with self._session() as session:
+            return (
+                self._company_lottery_pool_balance(session, "pool"),
+                self._company_lottery_pool_balance(session, "adjustment"),
+            )
+
+    def current_company_lottery_round(
+        self, platform_id: str | None = None
+    ) -> CompanyLotteryRoundView | None:
+        """当前未结算的期次；已开奖的期次不返回。全公司同一时间只有一期。"""
+        with self._session() as session:
+            record = session.scalar(
+                select(CompanyLotteryRoundRecord)
+                .where(
+                    CompanyLotteryRoundRecord.state.in_(("open", "closed")),
+                )
+                .order_by(CompanyLotteryRoundRecord.round_number.desc())
+                .limit(1)
+            )
+            if record is None:
+                return None
+            return self._company_lottery_round_view(session, record, platform_id)
+
+    def company_lottery_round_by_number(
+        self, number: int
+    ) -> CompanyLotteryRoundView | None:
+        with self._session() as session:
+            record = session.scalar(
+                select(CompanyLotteryRoundRecord).where(
+                    CompanyLotteryRoundRecord.round_number == number,
+                )
+            )
+            if record is None:
+                return None
+            return self._company_lottery_round_view(session, record, None)
+
+    def company_lottery_overview(
+        self,
+        *,
+        round_limit: int = 20,
+        ledger_limit: int = 50,
+        prize_limit: int = 50,
+    ) -> CompanyLotteryOverview:
+        """后台报表：全公司的期次、流水、中奖明细与员工累计收益。"""
+        with self._session() as session:
+            settings = _company_lottery_settings(
+                self._company_lottery_settings_record(session)
+            )
+            pool, adjustment = (
+                self._company_lottery_pool_balance(session, "pool"),
+                self._company_lottery_pool_balance(session, "adjustment"),
+            )
+
+            current = session.scalar(
+                select(CompanyLotteryRoundRecord.round_number)
+                .where(
+                    CompanyLotteryRoundRecord.state.in_(("open", "closed")),
+                )
+                .order_by(CompanyLotteryRoundRecord.round_number.desc())
+                .limit(1)
+            )
+
+            rounds = session.scalars(
+                select(CompanyLotteryRoundRecord)
+                .order_by(CompanyLotteryRoundRecord.round_number.desc())
+                .limit(round_limit)
+            ).all()
+
+            ledger_rows = session.execute(
+                select(CompanyLotteryPoolLedgerRecord, CompanyLotteryRoundRecord.round_number)
+                .outerjoin(
+                    CompanyLotteryRoundRecord,
+                    CompanyLotteryRoundRecord.id
+                    == CompanyLotteryPoolLedgerRecord.round_id,
+                )
+                .order_by(CompanyLotteryPoolLedgerRecord.created_at.desc())
+                .limit(ledger_limit)
+            ).all()
+
+            prize_rows = session.execute(
+                select(
+                    CompanyLotteryBetRecord,
+                    UserRecord.display_name,
+                    CompanyLotteryRoundRecord.round_number,
+                )
+                .join(UserRecord, UserRecord.id == CompanyLotteryBetRecord.user_id)
+                .join(
+                    CompanyLotteryRoundRecord,
+                    CompanyLotteryRoundRecord.id == CompanyLotteryBetRecord.round_id,
+                )
+                .where(
+                    CompanyLotteryBetRecord.prize_tier.is_not(None),
+                    CompanyLotteryBetRecord.settled_at.is_not(None),
+                )
+                .order_by(
+                    CompanyLotteryRoundRecord.round_number.desc(),
+                    CompanyLotteryBetRecord.settled_at.desc(),
+                )
+                .limit(prize_limit)
+            ).all()
+
+            total_rows = session.execute(
+                select(
+                    UserRecord.display_name,
+                    func.count(CompanyLotteryBetRecord.id),
+                    func.coalesce(func.sum(CompanyLotteryBetRecord.cost), 0),
+                    func.coalesce(func.sum(CompanyLotteryBetRecord.prize_amount), 0),
+                )
+                .join(UserRecord, UserRecord.id == CompanyLotteryBetRecord.user_id)
+                .group_by(UserRecord.display_name)
+                .order_by(func.coalesce(func.sum(CompanyLotteryBetRecord.prize_amount), 0).desc())
+            ).all()
+
+            employee_count = len(self._company_lottery_employee_ids(session, 0, None))
+
+            return CompanyLotteryOverview(
+                enabled=settings.enabled,
+                pool_balance=pool,
+                adjustment_balance=adjustment,
+                employee_count=employee_count,
+                current_round_number=None if current is None else int(current),
+                rounds=tuple(
+                    CompanyLotteryRoundSummary(
+                        round_number=row.round_number,
+                        state=row.state,
+                        open_at=row.open_at,
+                        close_at=row.close_at,
+                        draw_at=row.draw_at,
+                        drawn_at=row.drawn_at,
+                        tickets_sold=row.tickets_sold,
+                        gross_amount=row.gross_amount,
+                        winner_count=row.winner_count,
+                        payable=row.payable,
+                        paid_total=row.paid_total,
+                        pool_opening=row.pool_opening,
+                        pool_overflow=row.pool_overflow,
+                        pool_closing=row.pool_closing,
+                        answer=(
+                            None
+                            if row.state != "drawn" or row.red_1 is None
+                            else Ticket(
+                                reds=(row.red_1, row.red_2, row.red_3, row.red_4),
+                                blue=row.blue,
+                            ).display()
+                        ),
+                        salt=row.salt if row.state == "drawn" else None,
+                    )
+                    for row in rounds
+                ),
+                ledger=tuple(
+                    CompanyLotteryLedgerEntry(
+                        created_at=entry.created_at,
+                        account=entry.account,
+                        kind=entry.kind,
+                        amount=entry.amount,
+                        balance_after=entry.balance_after,
+                        round_number=None if number is None else int(number),
+                        note=entry.note,
+                    )
+                    for entry, number in ledger_rows
+                ),
+                prizes=tuple(
+                    CompanyLotteryPrizeRecord(
+                        round_number=round_number,
+                        display_name=display_name,
+                        ticket=Ticket(
+                            reds=(bet.red_1, bet.red_2, bet.red_3, bet.red_4),
+                            blue=bet.blue,
+                        ).display(),
+                        tier=bet.prize_tier,
+                        merited_amount=bet.merited_amount,
+                        prize_amount=bet.prize_amount,
+                        settled_at=bet.settled_at,
+                    )
+                    for bet, display_name, round_number in prize_rows
+                ),
+                employees=tuple(
+                    CompanyLotteryEmployeeTotal(
+                        display_name=display_name,
+                        tickets=int(tickets),
+                        cost=int(cost),
+                        prize=int(prize),
+                    )
+                    for display_name, tickets, cost, prize in total_rows
+                ),
+            )
+
+    def _company_lottery_announce(self, text: str) -> int:
+        """把公告广播到所有已配置的群；返回实际投递的群数。"""
+        delivered = 0
+        for group in self.list_group_chats():
+            destination = self.group_chat_destination(group.id)
+            if destination is None:
+                continue
+            self.enqueue_system_outbound(
+                text,
+                group_chat_id=group.id,
+                destination_chatroom_id=destination,
+            )
+            delivered += 1
+        return delivered
+
+    def draw_company_lottery_round_manually(
+        self, now: datetime
+    ) -> CompanyLotteryDrawResult | None:
+        """后台手动开奖：只对已过停售时刻的期次生效，公告与福利与定时任务一致。"""
+        now = now.astimezone(BEIJING)
+        settings = self.get_company_lottery_settings()
+        if not settings.enabled:
+            return None
+        view = self.current_company_lottery_round()
+        if view is None or view.close_at > now:
+            return None
+
+        self.close_company_lottery_round(now)
+        drawn = self.draw_company_lottery_round(now, manual=True)
+        if drawn is None:
+            return None
+        self._company_lottery_announce(_render_lottery_draw(drawn, settings))
+        welfare = self.settle_company_lottery_welfare(now)
+        if welfare.status == "paid":
+            self._company_lottery_announce(_render_lottery_welfare(welfare))
+        return drawn
+
+    def deposit_company_lottery_pool(
+        self,
+        amount: int,
+        now: datetime,
+        *,
+        account: str = "pool",
+    ) -> tuple[int, int]:
+        """后台手动注资；返回注资后的 (奖池, 调节金)。"""
+        if amount:
+            with self.transaction():
+                with self._session() as session:
+                    self._company_lottery_pool_append(
+                        session,
+                        None,
+                        account,
+                        "manual",
+                        amount,
+                        now,
+                        "后台手动注入",
+                    )
+        return self.company_lottery_balances()
+
+    def ensure_company_lottery_round(
+        self, now: datetime
+    ) -> CompanyLotteryRoundView:
+        """确保全公司有一个未结算的期次；没有就新开一期。"""
+        with self.transaction():
+            with self._session() as session:
+                settings = self._company_lottery_settings_record(session)
+                latest = session.scalar(
+                    select(CompanyLotteryRoundRecord)
+                    .order_by(CompanyLotteryRoundRecord.round_number.desc())
+                    .limit(1)
+                )
+                if latest is not None and latest.state in {"open", "closed"}:
+                    return self._company_lottery_round_view(session, latest, None)
+
+                record = self._open_company_lottery_round(
+                    session,
+                    settings,
+                    round_number=1 if latest is None else latest.round_number + 1,
+                    now=now,
+                )
+                return self._company_lottery_round_view(session, record, None)
+
+    def buy_company_lottery_tickets(
+        self,
+        inbound_message_id: UUID | str,
+        platform_id: str,
+        tickets: Sequence[Ticket],
+        now: datetime,
+        *,
+        is_quick_pick: bool = False,
+    ) -> CompanyLotteryPurchaseResult:
+        return self._company_lottery_purchase(
+            inbound_message_id,
+            platform_id,
+            now,
+            tickets=tuple(tickets),
+            is_quick_pick=is_quick_pick,
+        )
+
+    def buy_quick_picks(
+        self,
+        inbound_message_id: UUID | str,
+        platform_id: str,
+        quantity: int,
+        now: datetime,
+    ) -> CompanyLotteryPurchaseResult:
+        return self._company_lottery_purchase(
+            inbound_message_id,
+            platform_id,
+            now,
+            quick_quantity=quantity,
+        )
+
+    def own_company_lottery_bets(
+        self, platform_id: str, limit: int = 20
+    ) -> CompanyLotteryHistory:
+        with self._session() as session:
+            rows = session.execute(
+                select(CompanyLotteryBetRecord, CompanyLotteryRoundRecord.round_number)
+                .join(
+                    CompanyLotteryRoundRecord,
+                    CompanyLotteryRoundRecord.id == CompanyLotteryBetRecord.round_id,
+                )
+                .join(UserRecord, UserRecord.id == CompanyLotteryBetRecord.user_id)
+                .where(UserRecord.platform_id == platform_id)
+                .order_by(CompanyLotteryBetRecord.created_at.desc())
+                .limit(limit)
+            ).all()
+
+            views = tuple(
+                CompanyLotteryBetView(
+                    round_number=round_number,
+                    ticket=Ticket(
+                        reds=(bet.red_1, bet.red_2, bet.red_3, bet.red_4),
+                        blue=bet.blue,
+                    ),
+                    is_quick_pick=bet.is_quick_pick,
+                    cost=bet.cost,
+                    prize_tier=bet.prize_tier,
+                    prize_amount=bet.prize_amount,
+                    created_at=bet.created_at,
+                    settled_at=bet.settled_at,
+                )
+                for bet, round_number in rows
+            )
+
+            totals = session.execute(
+                select(
+                    func.coalesce(func.sum(CompanyLotteryBetRecord.cost), 0),
+                    func.coalesce(func.sum(CompanyLotteryBetRecord.prize_amount), 0),
+                )
+                .join(UserRecord, UserRecord.id == CompanyLotteryBetRecord.user_id)
+                .where(UserRecord.platform_id == platform_id)
+            ).one()
+
+            return CompanyLotteryHistory(
+                bets=views, total_cost=int(totals[0]), total_prize=int(totals[1])
+            )
+
+    # ------------------------------------------------------- 公司双色球·购票草稿
+
+    def start_company_lottery_draft(
+        self, platform_id: str, target_count: int, now: datetime
+    ) -> CompanyLotteryDraftResult:
+        with self.transaction():
+            with self._session() as session:
+                settings = _company_lottery_settings(
+                    self._company_lottery_settings_record(session)
+                )
+                if not settings.enabled:
+                    return CompanyLotteryDraftResult(status="disabled")
+
+                round_row = session.scalar(
+                    select(CompanyLotteryRoundRecord)
+                    .where(
+                        CompanyLotteryRoundRecord.state == "open",
+                    )
+                    .with_for_update()
+                )
+                if round_row is None or round_row.close_at <= now:
+                    return CompanyLotteryDraftResult(status="closed")
+
+                user = session.scalar(
+                    select(UserRecord).where(UserRecord.platform_id == platform_id)
+                )
+                if user is None:
+                    return CompanyLotteryDraftResult(status="not_joined")
+
+                remaining = settings.max_tickets_per_day - self._company_lottery_today_count(
+                    session, user.id, now
+                )
+                if remaining <= 0:
+                    return CompanyLotteryDraftResult(status="limit", remaining=0)
+
+                target = min(max(target_count, 1), remaining)
+                session.execute(
+                    delete(CompanyLotteryDraftRecord).where(
+                        CompanyLotteryDraftRecord.user_id == user.id
+                    )
+                )
+                session.add(
+                    CompanyLotteryDraftRecord(
+                        user_id=user.id,
+                        round_id=round_row.id,
+                        target_count=target,
+                        tickets=[],
+                        last_activity_at=now,
+                        expires_at=now + timedelta(minutes=settings.draft_timeout_minutes),
+                    )
+                )
+                return CompanyLotteryDraftResult(
+                    status="started", target=target, collected=0, remaining=remaining
+                )
+
+    def load_company_lottery_draft(
+        self, platform_id: str, now: datetime
+    ) -> CompanyLotteryDraftView | None:
+        """读取草稿；已过期则就地删除并返回 None。"""
+        with self.transaction():
+            with self._session() as session:
+                user = session.scalar(
+                    select(UserRecord).where(UserRecord.platform_id == platform_id)
+                )
+                if user is None:
+                    return None
+                draft = session.scalar(
+                    select(CompanyLotteryDraftRecord).where(
+                        CompanyLotteryDraftRecord.user_id == user.id
+                    )
+                )
+                if draft is None:
+                    return None
+                if draft.expires_at <= now:
+                    session.delete(draft)
+                    return None
+
+                round_row = session.get(CompanyLotteryRoundRecord, draft.round_id)
+                return CompanyLotteryDraftView(
+                    round_number=0 if round_row is None else round_row.round_number,
+                    target_count=draft.target_count,
+                    tickets=tuple(
+                        Ticket(reds=tuple(entry["reds"]), blue=entry["blue"])
+                        for entry in draft.tickets
+                    ),
+                    quick_flags=tuple(
+                        bool(entry.get("quick")) for entry in draft.tickets
+                    ),
+                    expires_at=draft.expires_at,
+                )
+
+    def company_lottery_draft_status(self, platform_id: str, now: datetime) -> str:
+        """草稿状态：`none` / `active` / `expired`；已过期的草稿就地删除。
+
+        与 load 分开是为了让「刚发号码就超时」这种情况能给出明确提示，
+        而不是被当成闲聊静默丢弃。
+        """
+        with self.transaction():
+            with self._session() as session:
+                user = session.scalar(
+                    select(UserRecord).where(UserRecord.platform_id == platform_id)
+                )
+                if user is None:
+                    return "none"
+                draft = session.scalar(
+                    select(CompanyLotteryDraftRecord).where(
+                        CompanyLotteryDraftRecord.user_id == user.id
+                    )
+                )
+                if draft is None:
+                    return "none"
+                if draft.expires_at > now:
+                    return "active"
+                session.delete(draft)
+                return "expired"
+
+    def append_company_lottery_draft(
+        self, platform_id: str, ticket: Ticket, now: datetime
+    ) -> CompanyLotteryDraftResult:
+        return self._append_company_lottery_draft(
+            platform_id, now, ticket=ticket, is_quick=False
+        )
+
+    def append_quick_pick_to_draft(
+        self, platform_id: str, now: datetime
+    ) -> CompanyLotteryDraftResult:
+        return self._append_company_lottery_draft(
+            platform_id, now, ticket=None, is_quick=True
+        )
+
+    def cancel_company_lottery_draft(self, platform_id: str) -> bool:
+        with self.transaction():
+            with self._session() as session:
+                user = session.scalar(
+                    select(UserRecord).where(UserRecord.platform_id == platform_id)
+                )
+                if user is None:
+                    return False
+                deleted = session.execute(
+                    delete(CompanyLotteryDraftRecord).where(
+                        CompanyLotteryDraftRecord.user_id == user.id
+                    )
+                ).rowcount
+                return bool(deleted)
+
+    def confirm_company_lottery_draft(
+        self,
+        inbound_message_id: UUID | str,
+        platform_id: str,
+        now: datetime,
+    ) -> CompanyLotteryDraftResult:
+        view = self.load_company_lottery_draft(platform_id, now)
+        if view is None:
+            return CompanyLotteryDraftResult(status="no_draft")
+        if not view.tickets:
+            return CompanyLotteryDraftResult(status="empty_draft")
+
+        purchase = self._company_lottery_purchase(
+            inbound_message_id,
+            platform_id,
+            now,
+            tickets=view.tickets,
+            is_quick_pick=all(view.quick_flags),
+        )
+        if purchase.status == "bought":
+            self.cancel_company_lottery_draft(platform_id)
+        return CompanyLotteryDraftResult(
+            status=purchase.status,
+            target=view.target_count,
+            collected=view.collected,
+            purchase=purchase,
+        )
+
+    def _append_company_lottery_draft(
+        self,
+        platform_id: str,
+        now: datetime,
+        *,
+        ticket: Ticket | None,
+        is_quick: bool,
+    ) -> CompanyLotteryDraftResult:
+        with self.transaction():
+            with self._session() as session:
+                settings = _company_lottery_settings(
+                    self._company_lottery_settings_record(session)
+                )
+                user = session.scalar(
+                    select(UserRecord).where(UserRecord.platform_id == platform_id)
+                )
+                if user is None:
+                    return CompanyLotteryDraftResult(status="not_joined")
+
+                draft = session.scalar(
+                    select(CompanyLotteryDraftRecord)
+                    .where(CompanyLotteryDraftRecord.user_id == user.id)
+                    .with_for_update()
+                )
+                if draft is None:
+                    return CompanyLotteryDraftResult(status="no_draft")
+                if draft.expires_at <= now:
+                    session.delete(draft)
+                    return CompanyLotteryDraftResult(status="expired")
+
+                entries = list(draft.tickets)
+                taken = {entry["key"] for entry in entries} | self._company_lottery_ticket_keys(
+                    session, draft.round_id, user.id
+                )
+
+                if is_quick:
+                    drawn = quick_tickets(
+                        quantity=1,
+                        red_pool=settings.red_pool,
+                        red_count=settings.red_count,
+                        blue_pool=settings.blue_pool,
+                        exclude=taken,
+                    )[0]
+                else:
+                    assert ticket is not None
+                    if ticket.as_key() in taken:
+                        return CompanyLotteryDraftResult(
+                            status="duplicate", target=draft.target_count,
+                            collected=len(entries),
+                        )
+                    drawn = ticket
+
+                entries.append(
+                    {
+                        "key": drawn.as_key(),
+                        "reds": list(drawn.reds),
+                        "blue": drawn.blue,
+                        "quick": is_quick,
+                    }
+                )
+                draft.tickets = entries
+                draft.last_activity_at = now
+                draft.expires_at = now + timedelta(
+                    minutes=settings.draft_timeout_minutes
+                )
+                session.flush()
+
+                return CompanyLotteryDraftResult(
+                    status="ready" if len(entries) >= draft.target_count else "appended",
+                    target=draft.target_count,
+                    collected=len(entries),
+                    latest=drawn,
+                    is_quick_pick=is_quick,
+                )
+
+    def _company_lottery_today_count(
+        self, session: Session, user_id: UUID, now: datetime
+    ) -> int:
+        day_start = now.astimezone(BEIJING).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        return int(
+            session.scalar(
+                select(func.count())
+                .select_from(CompanyLotteryBetRecord)
+                .where(
+                    CompanyLotteryBetRecord.user_id == user_id,
+                    CompanyLotteryBetRecord.created_at >= day_start,
+                )
+            )
+            or 0
+        )
+
+    @staticmethod
+    def _company_lottery_ticket_keys(
+        session: Session, round_id: UUID, user_id: UUID
+    ) -> set[str]:
+        return set(
+            session.scalars(
+                select(CompanyLotteryBetRecord.ticket_key).where(
+                    CompanyLotteryBetRecord.round_id == round_id,
+                    CompanyLotteryBetRecord.user_id == user_id,
+                )
+            )
+        )
+
+    def close_company_lottery_round(self, now: datetime) -> int:
+        """把已到停售时刻的开放期次置为 closed，返回受影响的期次数。"""
+        with self.transaction():
+            with self._session() as session:
+                updated = session.execute(
+                    update(CompanyLotteryRoundRecord)
+                    .where(
+                        CompanyLotteryRoundRecord.state == "open",
+                        CompanyLotteryRoundRecord.close_at <= now,
+                    )
+                    .values(state="closed", closed_at=now)
+                ).rowcount
+                return int(updated or 0)
+
+    def draw_company_lottery_round(
+        self, now: datetime, *, manual: bool = False
+    ) -> CompanyLotteryDrawResult | None:
+        """到点开奖并开出下一期；未到点或没有待开奖期次时返回 None。
+
+        购票时销售额已经逐笔进池，所以这里把期初余额拆成「池内原有」与
+        「本期销售额」两部分再交给纯逻辑结算，避免重复计入。
+
+        `manual=True` 只放宽「开奖时刻」这一道闸，停售时刻仍然必须已过，
+        保证后台手动开奖也不会在号码承诺期内泄露号码。
+        """
+        with self.transaction():
+            with self._session() as session:
+                round_row = session.scalar(
+                    select(CompanyLotteryRoundRecord)
+                    .where(
+                        CompanyLotteryRoundRecord.state.in_(("open", "closed")),
+                    )
+                    .order_by(CompanyLotteryRoundRecord.round_number.desc())
+                    .limit(1)
+                    .with_for_update()
+                )
+                if round_row is None:
+                    return None
+                if manual:
+                    if round_row.close_at > now:
+                        return None
+                elif round_row.draw_at > now:
+                    return None
+                if round_row.red_1 is None:
+                    raise RuntimeError("公司双色球期次缺少开奖号码")
+
+                settings_record = self._company_lottery_settings_record(session)
+                settings = _company_lottery_settings(settings_record)
+                answer = Ticket(
+                    reds=(
+                        round_row.red_1,
+                        round_row.red_2,
+                        round_row.red_3,
+                        round_row.red_4,
+                    ),
+                    blue=round_row.blue,
+                )
+
+                rows = session.execute(
+                    select(CompanyLotteryBetRecord, UserRecord)
+                    .join(UserRecord, UserRecord.id == CompanyLotteryBetRecord.user_id)
+                    .where(CompanyLotteryBetRecord.round_id == round_row.id)
+                ).all()
+
+                judged: list[tuple[CompanyLotteryBetRecord, UserRecord, PrizeTier]] = []
+                for bet, user in rows:
+                    tier = judge(
+                        answer,
+                        Ticket(
+                            reds=(bet.red_1, bet.red_2, bet.red_3, bet.red_4),
+                            blue=bet.blue,
+                        ),
+                    )
+                    if tier is not None:
+                        judged.append((bet, user, tier))
+
+                pool_total = self._company_lottery_pool_balance(session, "pool")
+                settlement = settle_round(
+                    pool_opening=pool_total - round_row.gross_amount,
+                    sales=round_row.gross_amount,
+                    winners=[(str(bet.user_id), tier) for bet, _, tier in judged],
+                    prizes=settings.prizes,
+                    per_person_cap=settings.per_person_cap,
+                    pool_ceiling=settings.pool_ceiling,
+                )
+
+                merited: dict[str, int] = {}
+                for bet, _, tier in judged:
+                    key = str(bet.user_id)
+                    merited[key] = merited.get(key, 0) + settings.prizes[tier]
+
+                winners: list[CompanyLotteryWinner] = []
+                last_index: dict[str, int] = {}
+                for index, (bet, _, _) in enumerate(judged):
+                    last_index[str(bet.user_id)] = index
+
+                allocated: dict[str, int] = {}
+                for index, (bet, user, tier) in enumerate(judged):
+                    key = str(bet.user_id)
+                    target = settlement.per_user_paid[key]
+                    if index == last_index[key]:
+                        # 尾差补给该员工最后一张中奖票，避免整除截断凭空吞币
+                        actual = target - allocated.get(key, 0)
+                    else:
+                        share = Decimal(settings.prizes[tier]) / Decimal(merited[key])
+                        actual = int(Decimal(target) * share)
+                    allocated[key] = allocated.get(key, 0) + actual
+
+                    bet.prize_tier = tier.value
+                    bet.merited_amount = settings.prizes[tier]
+                    bet.prize_amount = actual
+                    bet.settled_at = now
+                    if actual:
+                        self._apply_balance_change(
+                            user,
+                            actual,
+                            f"公司双色球第{round_row.round_number}期中奖",
+                            now,
+                        )
+                    winners.append(
+                        CompanyLotteryWinner(
+                            display_name=user.display_name,
+                            tier=tier.value,
+                            amount=actual,
+                        )
+                    )
+
+                if settlement.paid_total:
+                    self._company_lottery_pool_append(
+                        session,
+                        round_row.id,
+                        "pool",
+                        "payout",
+                        -settlement.paid_total,
+                        now,
+                        note=f"第{round_row.round_number}期派奖",
+                    )
+                if settlement.overflow:
+                    self._company_lottery_pool_append(
+                        session,
+                        round_row.id,
+                        "pool",
+                        "overflow",
+                        -settlement.overflow,
+                        now,
+                        note="奖池超上限",
+                    )
+                    self._company_lottery_pool_append(
+                        session,
+                        round_row.id,
+                        "adjustment",
+                        "overflow",
+                        settlement.overflow,
+                        now,
+                        note="来自奖池溢出",
+                    )
+
+                round_row.state = "drawn"
+                round_row.drawn_at = now
+                round_row.pool_opening = pool_total - round_row.gross_amount
+                round_row.pool_overflow = settlement.overflow
+                round_row.pool_available = settlement.pool_available
+                round_row.pool_closing = settlement.pool_closing
+                round_row.payable = settlement.payable
+                round_row.paid_total = settlement.paid_total
+                round_row.haircut_ratio = settlement.haircut
+                round_row.capped_count = len(settlement.capped_users)
+                round_row.winner_count = len(judged)
+
+                next_round = self._open_company_lottery_round(
+                    session,
+                    settings_record,
+                    round_number=round_row.round_number + 1,
+                    now=now,
+                )
+
+                return CompanyLotteryDrawResult(
+                    round_number=round_row.round_number,
+                    answer=answer,
+                    salt=round_row.salt or "",
+                    tickets_sold=round_row.tickets_sold,
+                    gross_amount=round_row.gross_amount,
+                    winner_count=len(judged),
+                    paid_total=settlement.paid_total,
+                    payable=settlement.payable,
+                    haircut=settlement.haircut,
+                    capped_users=settlement.capped_users,
+                    winners=tuple(winners),
+                    pool_balance=settlement.pool_closing,
+                    adjustment_balance=self._company_lottery_pool_balance(
+                        session, "adjustment"
+                    ),
+                    next_round_number=next_round.round_number,
+                )
+
+    # ----------------------------------------------------------- 公司双色球·福利
+
+    def run_company_lottery_jobs(self, now: datetime) -> None:
+        """停售提醒、停售、开奖与全员福利。由 run_daily_jobs 周期性调用。
+
+        期次、奖池与调节金是全公司共用的一套，所以这里只跑一遍业务逻辑，
+        公告再广播到所有已配置的群。
+        """
+        now = now.astimezone(BEIJING)
+        settings = self.get_company_lottery_settings()
+        if not settings.enabled:
+            return
+
+        # 冷启动或上一期已结算时把新一期开出来
+        self.ensure_company_lottery_round(now)
+
+        view = self.current_company_lottery_round()
+        if view is not None and view.state == "open":
+            self._remind_company_lottery_close(settings, now)
+
+        self.close_company_lottery_round(now)
+
+        drawn = self.draw_company_lottery_round(now)
+        if drawn is not None:
+            self._company_lottery_announce(_render_lottery_draw(drawn, settings))
+
+        welfare = self.settle_company_lottery_welfare(now)
+        if welfare.status == "paid":
+            self._company_lottery_announce(_render_lottery_welfare(welfare))
+
+    def _remind_company_lottery_close(
+        self,
+        settings: CompanyLotterySettings,
+        now: datetime,
+    ) -> None:
+        """停售提醒：进入提醒窗口、全公司足够冷清、且本期还没提醒过时才发。
+
+        Worker 每秒都会跑一次任务，所以「本期是否已提醒」必须落库占位
+        （`reminded_at`），否则会被同一条提醒刷屏。刚有人说话时只跳过本次、
+        不占位，等下一次 tick 再判。
+        """
+        with self.transaction():
+            with self._session() as session:
+                round_row = session.scalar(
+                    select(CompanyLotteryRoundRecord)
+                    .where(
+                        CompanyLotteryRoundRecord.state == "open",
+                    )
+                    .with_for_update()
+                )
+                if round_row is None or round_row.reminded_at is not None:
+                    return
+
+                latest = session.scalar(select(func.max(InboundRecord.received_at)))
+                idle = (
+                    10**9 if latest is None else int((now - latest).total_seconds())
+                )
+                if not should_notify_close(
+                    now=now,
+                    close_at=round_row.close_at,
+                    notify_offset_minutes=settings.notify_offset_minutes,
+                    seconds_since_last_message=idle,
+                ):
+                    return
+
+                round_row.reminded_at = now
+                notice = _render_lottery_close_notice(
+                    self._company_lottery_round_view(session, round_row, None),
+                    settings,
+                )
+        self._company_lottery_announce(notice)
+
+    def count_registered_employees(
+        self, *, min_tenure_hours: int = 0, now: datetime | None = None
+    ) -> int:
+        """当前已注册员工总数，也就是全员福利的发放门槛。"""
+        with self._session() as session:
+            return len(
+                self._company_lottery_employee_ids(session, min_tenure_hours, now)
+            )
+
+    def settle_company_lottery_welfare(
+        self, now: datetime
+    ) -> CompanyLotteryWelfareResult:
+        """调节金攒够员工总数就全员发一轮；不足则什么都不做。
+
+        读取余额、判定门槛、全员加币、写发放明细、扣调节金在同一个事务里完成，
+        中途失败整体回滚，下次开奖后再试。
+        """
+        with self.transaction():
+            with self._session() as session:
+                settings = _company_lottery_settings(
+                    self._company_lottery_settings_record(session)
+                )
+                if not settings.welfare_enabled:
+                    return CompanyLotteryWelfareResult(status="disabled")
+
+                fund = self._company_lottery_pool_balance(session, "adjustment")
+                user_ids = self._company_lottery_employee_ids(
+                    session, settings.welfare_min_tenure_hours, now
+                )
+                check = check_welfare(
+                    fund=fund,
+                    employee_count=len(user_ids),
+                    per_person=settings.welfare_per_person,
+                )
+                if not check.triggered:
+                    return CompanyLotteryWelfareResult(
+                        status="not_due",
+                        employee_count=check.employee_count,
+                        per_person=check.per_person,
+                        fund_before=check.fund_before,
+                        fund_after=check.fund_after,
+                    )
+
+                latest_round = session.scalar(
+                    select(CompanyLotteryRoundRecord)
+                    .order_by(CompanyLotteryRoundRecord.round_number.desc())
+                    .limit(1)
+                )
+                welfare = CompanyLotteryWelfareRecord(
+                    round_id=None if latest_round is None else latest_round.id,
+                    employee_count=check.employee_count,
+                    per_person=check.per_person,
+                    paid_total=check.paid_total,
+                    fund_before=check.fund_before,
+                    fund_after=check.fund_after,
+                    created_at=now,
+                )
+                session.add(welfare)
+                session.flush()
+
+                for user_id in user_ids:
+                    user = session.get(UserRecord, user_id)
+                    if user is None:
+                        continue
+                    self._apply_balance_change(
+                        user, check.per_person, "公司双色球全员福利", now
+                    )
+                    session.add(
+                        CompanyLotteryWelfarePayoutRecord(
+                            welfare_id=welfare.id,
+                            user_id=user_id,
+                            amount=check.per_person,
+                            created_at=now,
+                        )
+                    )
+
+                self._company_lottery_pool_append(
+                    session,
+                    welfare.round_id,
+                    "adjustment",
+                    "welfare",
+                    -check.paid_total,
+                    now,
+                    note=f"全员福利 {check.employee_count} 人",
+                )
+
+                return CompanyLotteryWelfareResult(
+                    status="paid",
+                    employee_count=check.employee_count,
+                    per_person=check.per_person,
+                    paid_total=check.paid_total,
+                    fund_before=check.fund_before,
+                    fund_after=check.fund_after,
+                )
+
+    @staticmethod
+    def _company_lottery_inbound_id(
+        session: Session,
+        inbound_message_id: UUID | str,
+        platform_id: str,
+    ) -> UUID:
+        """命令层传平台消息号，仓储层解析成入站记录主键。"""
+        if isinstance(inbound_message_id, UUID):
+            return inbound_message_id
+        inbound_id = session.scalar(
+            select(InboundRecord.id).where(
+                InboundRecord.platform_message_id == inbound_message_id,
+                InboundRecord.sender_platform_id == platform_id,
+            )
+        )
+        if inbound_id is None:
+            raise ValueError("公司双色球入站消息不存在")
+        return inbound_id
+
+    @staticmethod
+    def _company_lottery_employee_ids(
+        session: Session, min_tenure_hours: int, now: datetime | None
+    ) -> list[UUID]:
+        statement = select(UserRecord.id)
+        if min_tenure_hours > 0 and now is not None:
+            statement = statement.where(
+                UserRecord.joined_at <= now - timedelta(hours=min_tenure_hours)
+            )
+        return list(session.scalars(statement.order_by(UserRecord.employee_number)))
+
+    def _company_lottery_purchase(
+        self,
+        inbound_message_id: UUID | str,
+        platform_id: str,
+        now: datetime,
+        *,
+        tickets: tuple[Ticket, ...] | None = None,
+        quick_quantity: int | None = None,
+        is_quick_pick: bool = False,
+    ) -> CompanyLotteryPurchaseResult:
+        is_quick = quick_quantity is not None
+        with self.transaction():
+            with self._session() as session:
+                settings = _company_lottery_settings(
+                    self._company_lottery_settings_record(session)
+                )
+                if not settings.enabled:
+                    return CompanyLotteryPurchaseResult(status="disabled")
+
+                # 同一条消息重复投递：直接返回，不重复扣款
+                inbound_id = self._company_lottery_inbound_id(
+                    session, inbound_message_id, platform_id
+                )
+                replay = session.scalar(
+                    select(CompanyLotteryBetRecord.id)
+                    .where(CompanyLotteryBetRecord.inbound_message_id == inbound_id)
+                    .limit(1)
+                )
+                if replay is not None:
+                    return CompanyLotteryPurchaseResult(status="duplicate_request")
+
+                round_row = session.scalar(
+                    select(CompanyLotteryRoundRecord)
+                    .where(
+                        CompanyLotteryRoundRecord.state == "open",
+                    )
+                    .with_for_update()
+                )
+                if round_row is None or round_row.close_at <= now:
+                    return CompanyLotteryPurchaseResult(
+                        status="closed",
+                        close_at=None if round_row is None else round_row.close_at,
+                    )
+
+                user = session.scalar(
+                    select(UserRecord).where(UserRecord.platform_id == platform_id)
+                )
+                if user is None:
+                    return CompanyLotteryPurchaseResult(status="not_joined")
+
+                existing_keys = set(
+                    session.scalars(
+                        select(CompanyLotteryBetRecord.ticket_key).where(
+                            CompanyLotteryBetRecord.round_id == round_row.id,
+                            CompanyLotteryBetRecord.user_id == user.id,
+                        )
+                    )
+                )
+
+                wanted = int(quick_quantity) if is_quick else len(tickets or ())
+                day_start = now.astimezone(BEIJING).replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                )
+                today_count = int(
+                    session.scalar(
+                        select(func.count())
+                        .select_from(CompanyLotteryBetRecord)
+                        .where(
+                            CompanyLotteryBetRecord.user_id == user.id,
+                            CompanyLotteryBetRecord.created_at >= day_start,
+                        )
+                    )
+                    or 0
+                )
+                remaining = settings.max_tickets_per_day - today_count
+                if remaining <= 0 or wanted > remaining:
+                    return CompanyLotteryPurchaseResult(
+                        status="daily_limit", remaining=max(remaining, 0)
+                    )
+
+                if round_row.tickets_sold + wanted > settings.max_tickets_per_round:
+                    return CompanyLotteryPurchaseResult(status="round_full")
+
+                if is_quick:
+                    fresh = tuple(
+                        quick_tickets(
+                            quantity=wanted,
+                            red_pool=settings.red_pool,
+                            red_count=settings.red_count,
+                            blue_pool=settings.blue_pool,
+                            exclude=existing_keys,
+                        )
+                    )
+                else:
+                    fresh = tuple(tickets or ())
+                    if any(ticket.as_key() in existing_keys for ticket in fresh):
+                        return CompanyLotteryPurchaseResult(status="duplicate")
+
+                cost = settings.ticket_price * len(fresh)
+                if user.balance < cost:
+                    return CompanyLotteryPurchaseResult(
+                        status="insufficient_balance", needed=cost - user.balance
+                    )
+
+                for ticket in fresh:
+                    session.add(
+                        CompanyLotteryBetRecord(
+                            round_id=round_row.id,
+                            user_id=user.id,
+                            red_1=ticket.reds[0],
+                            red_2=ticket.reds[1],
+                            red_3=ticket.reds[2],
+                            red_4=ticket.reds[3],
+                            blue=ticket.blue,
+                            ticket_key=ticket.as_key(),
+                            cost=settings.ticket_price,
+                            is_quick_pick=is_quick or is_quick_pick,
+                            inbound_message_id=inbound_id,
+                            created_at=now,
+                        )
+                    )
+                round_row.tickets_sold += len(fresh)
+                round_row.gross_amount += cost
+
+                self._apply_balance_change(
+                    user,
+                    -cost,
+                    f"公司双色球第{round_row.round_number}期购票",
+                    now,
+                )
+                self._company_lottery_pool_append(
+                    session, round_row.id, "pool", "sales", cost, now
+                )
+
+                return CompanyLotteryPurchaseResult(
+                    status="bought",
+                    round_number=round_row.round_number,
+                    tickets=fresh,
+                    cost=cost,
+                    balance=user.balance,
+                    remaining=remaining - len(fresh),
+                    is_quick_pick=is_quick or is_quick_pick,
+                    close_at=round_row.close_at,
+                )
+
+    @staticmethod
+    def _company_lottery_settings_record(
+        session: Session,
+    ) -> CompanyLotterySettingsRecord:
+        record = session.get(CompanyLotterySettingsRecord, 1)
+        if record is None:
+            record = CompanyLotterySettingsRecord(id=1)
+            session.add(record)
+            session.flush()
+        return record
+
+    def _company_lottery_round_view(
+        self,
+        session: Session,
+        record: CompanyLotteryRoundRecord,
+        platform_id: str | None,
+    ) -> CompanyLotteryRoundView:
+        my_tickets = 0
+        if platform_id is not None:
+            my_tickets = int(
+                session.scalar(
+                    select(func.count())
+                    .select_from(CompanyLotteryBetRecord)
+                    .join(
+                        UserRecord,
+                        UserRecord.id == CompanyLotteryBetRecord.user_id,
+                    )
+                    .where(
+                        CompanyLotteryBetRecord.round_id == record.id,
+                        UserRecord.platform_id == platform_id,
+                    )
+                )
+                or 0
+            )
+
+        answer: Ticket | None = None
+        salt: str | None = None
+        if record.state == "drawn" and record.red_1 is not None:
+            answer = Ticket(
+                reds=(record.red_1, record.red_2, record.red_3, record.red_4),
+                blue=record.blue,
+            )
+            salt = record.salt
+
+        return CompanyLotteryRoundView(
+            id=record.id,
+            round_number=record.round_number,
+            state=record.state,
+            close_at=record.close_at,
+            draw_at=record.draw_at,
+            commit_hash=record.commit_hash,
+            tickets_sold=record.tickets_sold,
+            gross_amount=record.gross_amount,
+            pool_balance=self._company_lottery_pool_balance(session, "pool"),
+            adjustment_balance=self._company_lottery_pool_balance(
+                session, "adjustment"
+            ),
+            my_tickets=my_tickets,
+            answer=answer,
+            salt=salt,
+        )
+
+    @staticmethod
+    def _company_lottery_pool_balance(session: Session, account: str) -> int:
+        """账本按流水求和取余额，与写入顺序无关；balance_after 只作对账留痕。"""
+        total = session.scalar(
+            select(func.coalesce(func.sum(CompanyLotteryPoolLedgerRecord.amount), 0)).where(
+                CompanyLotteryPoolLedgerRecord.account == account,
+            )
+        )
+        return int(total or 0)
+
+    @staticmethod
+    def _company_lottery_pool_has_history(session: Session, account: str) -> bool:
+        """这个账本是否已经有任何流水（用于判断是不是首期）。"""
+        return (
+            session.scalar(
+                select(CompanyLotteryPoolLedgerRecord.id)
+                .where(
+                    CompanyLotteryPoolLedgerRecord.account == account,
+                )
+                .limit(1)
+            )
+            is not None
+        )
+
+    def _company_lottery_pool_append(
+        self,
+        session: Session,
+        round_id: UUID | None,
+        account: str,
+        kind: str,
+        amount: int,
+        now: datetime,
+        note: str | None = None,
+    ) -> int:
+        balance = self._company_lottery_pool_balance(session, account)
+        session.add(
+            CompanyLotteryPoolLedgerRecord(
+                round_id=round_id,
+                account=account,
+                kind=kind,
+                amount=amount,
+                balance_after=balance + amount,
+                note=note,
+                created_at=now,
+            )
+        )
+        return balance + amount
+
+    def _open_company_lottery_round(
+        self,
+        session: Session,
+        settings: CompanyLotterySettingsRecord,
+        *,
+        round_number: int,
+        now: datetime,
+    ) -> CompanyLotteryRoundRecord:
+        # 停售与开奖时刻按北京时间整点计算，调用方可能传 UTC（核心层 clock 就是 UTC）
+        now = now.astimezone(BEIJING)
+        answer = draw_numbers(
+            red_pool=settings.red_pool,
+            red_count=settings.red_count,
+            blue_pool=settings.blue_pool,
+        )
+        salt = new_salt()
+        # 启动奖池全公司只注入一次：迁移通常已经写过，这里兜住没有迁移数据的库。
+        if not self._company_lottery_pool_has_history(session, "pool"):
+            self._company_lottery_pool_append(
+                session,
+                None,
+                "pool",
+                "deposit",
+                settings.pool_seed,
+                now,
+                "首期启动奖池",
+            )
+        close_at, draw_at = round_timing(
+            now=now,
+            draw_hour=settings.draw_hour,
+            draw_minute=settings.draw_minute,
+            close_offset_minutes=settings.close_offset_minutes,
+        )
+        record = CompanyLotteryRoundRecord(
+            round_number=round_number,
+            state="open",
+            open_at=now,
+            close_at=close_at,
+            draw_at=draw_at,
+            commit_hash=commit_hash(answer, salt),
+            red_1=answer.reds[0],
+            red_2=answer.reds[1],
+            red_3=answer.reds[2],
+            red_4=answer.reds[3],
+            blue=answer.blue,
+            salt=salt,
+            pool_opening=self._company_lottery_pool_balance(session, "pool"),
+            created_at=now,
+        )
+        session.add(record)
+        session.flush()
+        return record
+
+
+def _company_lottery_settings(
+    record: CompanyLotterySettingsRecord,
+) -> CompanyLotterySettings:
+    return CompanyLotterySettings(
+        enabled=record.enabled,
+        red_pool=record.red_pool,
+        red_count=record.red_count,
+        blue_pool=record.blue_pool,
+        ticket_price=record.ticket_price,
+        prizes={
+            PrizeTier.HEAD: record.head_prize,
+            PrizeTier.SECOND: record.second_prize,
+            PrizeTier.THIRD: record.third_prize,
+            PrizeTier.FOURTH: record.fourth_prize,
+            PrizeTier.FIFTH: record.fifth_prize,
+        },
+        pool_ceiling=record.pool_ceiling,
+        pool_seed=record.pool_seed,
+        per_person_cap=record.per_person_cap,
+        max_tickets_per_day=record.max_tickets_per_day,
+        max_tickets_per_round=record.max_tickets_per_round,
+        draw_hour=record.draw_hour,
+        draw_minute=record.draw_minute,
+        close_offset_minutes=record.close_offset_minutes,
+        notify_offset_minutes=record.notify_offset_minutes,
+        draft_timeout_minutes=record.draft_timeout_minutes,
+        welfare_enabled=record.welfare_enabled,
+        welfare_per_person=record.welfare_per_person,
+        welfare_min_tenure_hours=record.welfare_min_tenure_hours,
+    )
+
+
+_COMPANY_LOTTERY_TIER_LABELS: dict[str, str] = {
+    "head": "🏆 一等奖",
+    "second": "🥈 二等奖",
+    "third": "🥉 三等奖",
+    "fourth": "🎖 四等奖",
+    "fifth": "　 五等奖",
+}
+
+_COMPANY_LOTTERY_TIER_ORDER: tuple[str, ...] = (
+    "head",
+    "second",
+    "third",
+    "fourth",
+    "fifth",
+)
+
+_COMPANY_LOTTERY_NAME_LIMIT = 5
+
+
+def _company_lottery_winner_lines(
+    winners: Sequence[CompanyLotteryWinner],
+) -> list[str]:
+    grouped: dict[str, list[CompanyLotteryWinner]] = {}
+    for winner in winners:
+        grouped.setdefault(winner.tier, []).append(winner)
+
+    lines: list[str] = []
+    for tier in _COMPANY_LOTTERY_TIER_ORDER:
+        entries = grouped.get(tier)
+        if not entries:
+            continue
+        label = _COMPANY_LOTTERY_TIER_LABELS[tier]
+        amount = entries[0].amount
+        names = " ".join(entry.display_name for entry in entries[:_COMPANY_LOTTERY_NAME_LIMIT])
+        if len(entries) > _COMPANY_LOTTERY_NAME_LIMIT:
+            names = f"{names} 等 {len(entries)} 人"
+        lines.append(f"{label} {amount} —— {names}")
+    return lines
+
+
+def _render_lottery_close_notice(
+    view: CompanyLotteryRoundView, settings: CompanyLotterySettings
+) -> str:
+    return (
+        f"⏰ 第 {view.round_number} 期还有 {settings.notify_offset_minutes} 分钟停售\n"
+        f"已售 {view.tickets_sold} 注 ｜ 奖池 {view.pool_balance} 币\n"
+        "现在买还来得及 → /购买彩票 机选"
+    )
+
+
+def _render_lottery_draw(
+    result: CompanyLotteryDrawResult, settings: CompanyLotterySettings
+) -> str:
+    lines = [
+        "【公司双色球开奖】",
+        f"本期奖池：{result.pool_balance} 摸鱼币",
+        f"单人中奖上限：{settings.per_person_cap} 摸鱼币",
+        "━━━━━━━━━━━━━━━━━━",
+        result.answer.display(),
+        f"本期售出 {result.tickets_sold} 注 ｜ 流水 {result.gross_amount} 币",
+    ]
+
+    if result.winner_count:
+        lines.append(f"中奖 {result.winner_count} 注 ｜ 实付 {result.paid_total} 币")
+        lines.extend(_company_lottery_winner_lines(result.winners))
+    else:
+        lines.append("本期无人中奖，奖池继续滚存")
+
+    if result.haircut is not None:
+        lines.append(f"⚠️ 本期可付款不足，奖金按 {result.haircut:.0%} 折算")
+    if result.capped_users:
+        lines.append(f"（{len(result.capped_users)} 人触及单人中奖上限）")
+
+    lines.append(
+        f"奖池 {result.pool_balance} 币 ｜ 调节金 {result.adjustment_balance} 币"
+    )
+    lines.append(f"第 {result.next_round_number} 期已开卖 → /购买彩票 机选")
+    return "\n".join(lines)
+
+
+def _render_lottery_welfare(result: CompanyLotteryWelfareResult) -> str:
+    return (
+        "🎉 公司福利发放\n"
+        f"调节金累计达 {result.fund_before} 摸鱼币"
+        f"（当前 {result.employee_count} 名员工）\n"
+        f"全员各获得 {result.per_person} 摸鱼币\n"
+        "\n"
+        f"调节金剩余 {result.fund_after} 摸鱼币，继续累积"
+    )
 
 
 def _event_time_minutes(value: str, *, allow_midnight: bool = False) -> int | None:

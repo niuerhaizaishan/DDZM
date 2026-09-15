@@ -145,6 +145,88 @@ class FakeCore:
             ],
         }
     )
+    company_lottery_draws: list[dict] = field(default_factory=list)
+    company_lottery_deposits: list[dict] = field(default_factory=list)
+    company_lottery_settings: dict = field(
+        default_factory=lambda: {
+            "enabled": True,
+            "red_pool": 10,
+            "red_count": 4,
+            "blue_pool": 6,
+            "ticket_price": 2,
+            "head_prize": 100,
+            "second_prize": 50,
+            "third_prize": 15,
+            "fourth_prize": 5,
+            "fifth_prize": 1,
+            "pool_ceiling": 200,
+            "pool_seed": 100,
+            "per_person_cap": 100,
+            "max_tickets_per_day": 5,
+            "max_tickets_per_round": 2000,
+            "draw_hour": 22,
+            "draw_minute": 0,
+            "close_offset_minutes": 10,
+            "notify_offset_minutes": 5,
+            "draft_timeout_minutes": 15,
+            "welfare_enabled": True,
+            "welfare_per_person": 1,
+            "welfare_min_tenure_hours": 0,
+            "combinations": 1260,
+        }
+    )
+    company_lottery_overview: dict = field(
+        default_factory=lambda: {
+            "group_chat_id": "00000000-0000-0000-0000-000000000001",
+            "group_name": "主群聊",
+            "enabled": True,
+            "pool_balance": 100,
+            "adjustment_balance": 0,
+            "employee_count": 2,
+            "current_round_number": 1,
+            "rounds": [
+                {
+                    "round_number": 1,
+                    "state": "open",
+                    "open_at": "2026-09-14T12:00:00+08:00",
+                    "close_at": "2026-09-14T21:50:00+08:00",
+                    "draw_at": "2026-09-14T22:00:00+08:00",
+                    "drawn_at": None,
+                    "tickets_sold": 0,
+                    "gross_amount": 0,
+                    "winner_count": 0,
+                    "payable": 0,
+                    "paid_total": 0,
+                    "pool_opening": 100,
+                    "pool_overflow": 0,
+                    "pool_closing": 100,
+                    "answer": None,
+                    "salt": None,
+                }
+            ],
+            "ledger": [
+                {
+                    "created_at": "2026-09-14T11:00:00+08:00",
+                    "account": "pool",
+                    "kind": "deposit",
+                    "amount": 100,
+                    "balance_after": 100,
+                    "round_number": None,
+                    "note": "首期启动奖池",
+                }
+            ],
+            "prizes": [],
+            "employees": [
+                {
+                    "display_name": "小明",
+                    "tickets": 0,
+                    "cost": 0,
+                    "prize": 0,
+                    "net": 0,
+                }
+            ],
+        }
+    )
     dark_market_listings: list[dict] = field(
         default_factory=lambda: [
             {
@@ -847,6 +929,39 @@ class FakeCore:
             complaint_decision="approved" if approve else "rejected",
         )
         return {"status": "approved" if approve else "rejected"}
+
+    def get_company_lottery_settings(self):
+        return self.company_lottery_settings
+
+    def set_company_lottery_settings(self, settings):
+        self.company_lottery_settings = settings
+        return self.company_lottery_settings
+
+    def get_company_lottery_overview(self):
+        return self.company_lottery_overview
+
+    def draw_company_lottery_round(self, actor, now):
+        self.company_lottery_draws.append({"actor": actor, "now": now})
+        return {
+            "round_number": 1,
+            "answer": "03  07  09  10　　🔵 05",
+            "winner_count": 1,
+            "paid_total": 100,
+            "pool_balance": 2,
+            "adjustment_balance": 0,
+            "next_round_number": 2,
+        }
+
+    def deposit_company_lottery_pool(self, account, amount, actor, now):
+        self.company_lottery_deposits.append(
+            {
+                "account": account,
+                "amount": amount,
+                "actor": actor,
+                "now": now,
+            }
+        )
+        return {"pool_balance": 100, "adjustment_balance": amount}
 
     def get_red_packet_settings(self):
         return self.red_packet_settings
@@ -3491,6 +3606,144 @@ def test_admin_rejects_invalid_dark_market_settings_before_relay(
     )
     assert response.status_code == 422
     assert core.dark_market_settings == original
+
+
+def test_admin_proxies_company_lottery_settings_overview_and_actions(
+    client, headers, core
+):
+    assert client.get("/api/game/company-lottery/settings").status_code == 401
+    initial = client.get("/api/game/company-lottery/settings", headers=headers)
+    assert initial.status_code == 200
+    assert initial.json()["combinations"] == 1260
+    assert "version" in initial.json()
+
+    payload = {
+        key: value
+        for key, value in core.company_lottery_settings.items()
+        if key != "combinations"
+    }
+    payload.update({"pool_seed": 40, "fifth_prize": 3, "welfare_per_person": 2})
+    write_headers = {
+        **headers,
+        "If-Match": str(initial.json()["version"]),
+        "Idempotency-Key": "company-lottery-settings-1",
+    }
+    updated = client.patch(
+        "/api/game/company-lottery/settings", headers=write_headers, json=payload
+    )
+
+    assert updated.status_code == 200
+    assert updated.json()["pool_seed"] == 40
+    assert updated.json()["fifth_prize"] == 3
+    assert core.company_lottery_settings == payload
+
+    replayed = client.patch(
+        "/api/game/company-lottery/settings", headers=write_headers, json=payload
+    )
+    assert replayed.json() == updated.json()
+
+    overview = client.get(
+        "/api/game/company-lottery/overview",
+        headers=headers,
+    )
+    assert overview.status_code == 200
+    assert overview.json()["enabled"] is True
+    assert overview.json()["pool_balance"] == 100
+    assert overview.json()["rounds"][0]["state"] == "open"
+    assert overview.json()["ledger"][0]["kind"] == "deposit"
+
+    drawn = client.post(
+        "/api/game/company-lottery/draw",
+        headers={**headers, "Idempotency-Key": "company-lottery-draw-1"},
+    )
+    assert drawn.status_code == 200
+    assert drawn.json()["round_number"] == 1
+    assert drawn.json()["next_round_number"] == 2
+    assert core.company_lottery_draws[0]["actor"]
+
+    deposited = client.post(
+        "/api/game/company-lottery/pool",
+        headers={**headers, "Idempotency-Key": "company-lottery-pool-1"},
+        json={"account": "adjustment", "amount": 25},
+    )
+    assert deposited.status_code == 200
+    assert deposited.json()["adjustment_balance"] == 25
+    assert core.company_lottery_deposits[0]["account"] == "adjustment"
+    assert core.company_lottery_deposits[0]["amount"] == 25
+
+
+def test_admin_rejects_invalid_company_lottery_settings_before_relay(
+    client, headers, core
+):
+    initial = client.get("/api/game/company-lottery/settings", headers=headers)
+    original = dict(core.company_lottery_settings)
+    base = {
+        key: value for key, value in original.items() if key != "combinations"
+    }
+    for invalid in (
+        {**base, "red_count": 11},
+        {**base, "draw_hour": 24},
+        {**base, "max_tickets_per_day": 0},
+        {**base, "close_offset_minutes": 5, "notify_offset_minutes": 5},
+        {**base, "red_pool": 5, "red_count": 6},
+        {**base, "enabled": "yes"},
+        {**base, "extra": 1},
+    ):
+        response = client.patch(
+            "/api/game/company-lottery/settings",
+            headers={
+                **headers,
+                "If-Match": str(initial.json()["version"]),
+                "Idempotency-Key": "company-lottery-settings-invalid",
+            },
+            json=invalid,
+        )
+        assert response.status_code == 422
+    assert core.company_lottery_settings == original
+
+    assert (
+        client.post(
+            "/api/game/company-lottery/pool"
+            "?group_chat_id=00000000-0000-0000-0000-000000000001",
+            headers={**headers, "Idempotency-Key": "company-lottery-pool-invalid"},
+            json={"account": "wallet", "amount": 10},
+        ).status_code
+        == 422
+    )
+    assert core.company_lottery_deposits == []
+
+
+def test_admin_page_contains_company_lottery_controls(client, headers):
+    page = client.get("/").text
+    script = client.get("/static/admin.js").text
+
+    for marker in (
+        'id="nav-company-lottery"',
+        'data-view="company-lottery"',
+        'id="company-lottery-view"',
+        'id="company-lottery-settings-card"',
+        'id="company-lottery-rounds"',
+        'id="company-lottery-ledger"',
+        'id="company-lottery-prizes"',
+        'id="company-lottery-employees"',
+        'id="company-lottery-settings-modal"',
+        'id="save-company-lottery-settings"',
+        'id="edit-company-lottery-settings"',
+        'id="refresh-company-lottery"',
+        'id="company-lottery-draw"',
+        'id="company-lottery-pool-deposit"',
+    ):
+        assert marker in page
+
+    for marker in (
+        "/api/game/company-lottery/settings",
+        "/api/game/company-lottery/overview",
+        "/api/game/company-lottery/draw",
+        "/api/game/company-lottery/pool",
+        "renderCompanyLotterySettings",
+        "loadCompanyLottery",
+    ):
+        assert marker in script
 
 
 def test_admin_proxies_versioned_red_packet_settings_idempotently(

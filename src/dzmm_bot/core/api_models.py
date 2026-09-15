@@ -5,6 +5,7 @@ from uuid import UUID
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from dzmm_bot.runtime.contracts import LoginState
+from .ai_knowledge import KNOWLEDGE_TOPICS
 from .group_games import GROUP_GAME_TYPES, GroupGameType
 from .schema import PRIMARY_GROUP_CHAT_ID
 
@@ -809,11 +810,7 @@ AIImpressionCategory = Literal[
     "boundaries",
 ]
 
-AIKnowledgeTopic = Literal[
-    "economy", "departments", "ranks", "shop", "checkin_activity",
-    "random_events", "hide_and_seek", "memory_assessment", "undercover",
-    "blame_bomb", "number_bomb", "texas_holdem", "commands_help", "player_activity",
-]
+AIKnowledgeTopic = Literal[*KNOWLEDGE_TOPICS]
 
 
 class AIKnowledgeCardResponse(ApiModel):
@@ -1130,6 +1127,155 @@ class SetDarkMarketSettingsRequest(ApiModel):
 class ReviewDarkMarketComplaintRequest(ApiModel):
     actor: str = Field(min_length=1, max_length=100)
     now: AwareDatetime
+
+
+class CompanyLotterySettingsResponse(ApiModel):
+    enabled: bool
+    red_pool: int
+    red_count: int
+    blue_pool: int
+    ticket_price: int
+    head_prize: int
+    second_prize: int
+    third_prize: int
+    fourth_prize: int
+    fifth_prize: int
+    pool_ceiling: int
+    pool_seed: int
+    per_person_cap: int
+    max_tickets_per_day: int
+    max_tickets_per_round: int
+    draw_hour: int
+    draw_minute: int
+    close_offset_minutes: int
+    notify_offset_minutes: int
+    draft_timeout_minutes: int
+    welfare_enabled: bool
+    welfare_per_person: int
+    welfare_min_tenure_hours: int
+    combinations: int
+
+
+class SetCompanyLotterySettingsRequest(ApiModel):
+    enabled: bool
+    red_pool: int = Field(ge=5, le=99)
+    red_count: int = Field(ge=1, le=10)
+    blue_pool: int = Field(ge=1, le=99)
+    ticket_price: int = Field(ge=1, le=1000)
+    head_prize: int = Field(ge=0, le=1_000_000)
+    second_prize: int = Field(ge=0, le=1_000_000)
+    third_prize: int = Field(ge=0, le=1_000_000)
+    fourth_prize: int = Field(ge=0, le=1_000_000)
+    fifth_prize: int = Field(ge=0, le=1_000_000)
+    pool_ceiling: int = Field(ge=0, le=1_000_000)
+    pool_seed: int = Field(ge=0, le=1_000_000)
+    per_person_cap: int = Field(ge=0, le=1_000_000)
+    max_tickets_per_day: int = Field(ge=1, le=1000)
+    max_tickets_per_round: int = Field(ge=1, le=100_000)
+    draw_hour: int = Field(ge=0, le=23)
+    draw_minute: int = Field(ge=0, le=59)
+    close_offset_minutes: int = Field(ge=1, le=720)
+    notify_offset_minutes: int = Field(ge=1, le=720)
+    draft_timeout_minutes: int = Field(ge=1, le=240)
+    welfare_enabled: bool
+    welfare_per_person: int = Field(ge=0, le=1000)
+    welfare_min_tenure_hours: int = Field(ge=0, le=8760)
+
+    @model_validator(mode="after")
+    def validate_shape(self):
+        if self.red_count > self.red_pool:
+            raise ValueError("红球选球数不能超过红球池")
+        if self.notify_offset_minutes >= self.close_offset_minutes:
+            raise ValueError("停售提醒必须早于停售")
+        if self.draw_hour * 60 + self.draw_minute < self.close_offset_minutes:
+            raise ValueError("开奖时刻太早，无法在当天完成停售")
+        return self
+
+
+class CompanyLotteryRoundSummaryResponse(ApiModel):
+    round_number: int
+    state: str
+    open_at: AwareDatetime
+    close_at: AwareDatetime
+    draw_at: AwareDatetime
+    drawn_at: AwareDatetime | None
+    tickets_sold: int
+    gross_amount: int
+    winner_count: int
+    payable: int
+    paid_total: int
+    pool_opening: int
+    pool_overflow: int
+    pool_closing: int
+    answer: str | None
+    salt: str | None
+
+
+class CompanyLotteryLedgerEntryResponse(ApiModel):
+    created_at: AwareDatetime
+    account: str
+    kind: str
+    amount: int
+    balance_after: int
+    round_number: int | None
+    note: str | None
+
+
+class CompanyLotteryPrizeResponse(ApiModel):
+    round_number: int
+    display_name: str
+    ticket: str
+    tier: str
+    merited_amount: int
+    prize_amount: int
+    settled_at: AwareDatetime | None
+
+
+class CompanyLotteryEmployeeTotalResponse(ApiModel):
+    display_name: str
+    tickets: int
+    cost: int
+    prize: int
+    net: int
+
+
+class CompanyLotteryOverviewResponse(ApiModel):
+    enabled: bool
+    pool_balance: int
+    adjustment_balance: int
+    employee_count: int
+    current_round_number: int | None
+    rounds: list[CompanyLotteryRoundSummaryResponse]
+    ledger: list[CompanyLotteryLedgerEntryResponse]
+    prizes: list[CompanyLotteryPrizeResponse]
+    employees: list[CompanyLotteryEmployeeTotalResponse]
+
+
+class DrawCompanyLotteryRoundRequest(ApiModel):
+    actor: str = Field(min_length=1, max_length=100)
+    now: AwareDatetime
+
+
+class DepositCompanyLotteryPoolRequest(ApiModel):
+    actor: str = Field(min_length=1, max_length=100)
+    now: AwareDatetime
+    account: Literal["pool", "adjustment"] = "pool"
+    amount: int = Field(ge=1, le=1_000_000)
+
+
+class CompanyLotteryPoolBalancesResponse(ApiModel):
+    pool_balance: int
+    adjustment_balance: int
+
+
+class CompanyLotteryDrawResponse(ApiModel):
+    round_number: int
+    answer: str
+    winner_count: int
+    paid_total: int
+    pool_balance: int
+    adjustment_balance: int
+    next_round_number: int
 
 
 class DarkMarketBidResponse(ApiModel):

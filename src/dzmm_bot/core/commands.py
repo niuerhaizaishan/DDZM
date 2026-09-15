@@ -6,6 +6,18 @@ from zoneinfo import ZoneInfo
 from dzmm_bot.runtime.contracts import InboundMessage
 
 from .group_games import GROUP_GAME_COMMANDS, GROUP_GAME_LABELS
+from .company_lottery import (
+    ALL_TIERS,
+    OrderKind,
+    PrizeTier,
+    TicketParseError,
+    is_quick_pick,
+    parse_order,
+    parse_single,
+    tier_counts,
+    total_combinations,
+    winning_combinations,
+)
 from .memory_guild_match import (
     parse_guild_match_start,
     parse_series_command,
@@ -32,7 +44,16 @@ from .service import CommandReply
 
 _BEIJING = ZoneInfo("Asia/Shanghai")
 _COMMANDS = {
-    "/入职", "/我的物品", "/购买", "/使用", "/邀请参与", "/取消使用", "/同意使用", "/拒绝使用", "/打卡", "/余额", "/修改名称", "/编辑档案", "/编辑档案形象", "/我的档案", "/公司的故事集", "/发奖金", "/发红包", "/抢红包", "/打赏", "/我", "/商店", "/帮助", "/当前游戏", "/加入", "/退出", "/开始", "/摸鱼躲猫猫", "/记忆考核", "/答案", "/继续", "/收手", "/投降", "/队伍1", "/队伍2", "/队伍1人员", "/队伍2人员", "/公会赛场次", "/开始对战", "/上场", "/部门", "/部门人数", "/我的部门人数", "/加入部门", "/切换部门", "/部门申请列表", "/同意部门", "/全部同意部门", "/拒绝部门", "/全部拒绝部门", "/职位", "/晋升", "/晋升申请列表", "/同意", "/全部同意", "/拒绝", "/全部拒绝", "/谁是卧底", "/开始投票", "/投票", "/退出谁是卧底", "/结束游戏", "/甩锅游戏", "/甩锅", "/退出甩锅", "/我有你没有", "/发言", "/扣", "/不扣", "/国王游戏", "/国王游戏数据", "/蹦蹦数字炸弹", "/报数", "/跳过", "/德州扑克", "/看牌", "/过牌", "/跟注", "/加注", "/全下", "/弃牌", "/上架暗网", "/取消上架", "/确认", "/报价", "/公开", "/不公开", "/查看暗网", "/确认收货", "/投诉", "/预约公演", "/我的公演预约", "/取消公演预约", "/公演日程", "/延期", "/end",
+    "/入职", "/我的物品", "/购买", "/使用", "/邀请参与", "/取消使用", "/同意使用", "/拒绝使用", "/打卡", "/余额", "/修改名称", "/编辑档案", "/编辑档案形象", "/我的档案", "/公司的故事集", "/发奖金", "/发红包", "/抢红包", "/打赏", "/我", "/商店", "/帮助", "/当前游戏", "/加入", "/退出", "/开始", "/摸鱼躲猫猫", "/记忆考核", "/答案", "/继续", "/收手", "/投降", "/队伍1", "/队伍2", "/队伍1人员", "/队伍2人员", "/公会赛场次", "/开始对战", "/上场", "/部门", "/部门人数", "/我的部门人数", "/加入部门", "/切换部门", "/部门申请列表", "/同意部门", "/全部同意部门", "/拒绝部门", "/全部拒绝部门", "/职位", "/晋升", "/晋升申请列表", "/同意", "/全部同意", "/拒绝", "/全部拒绝", "/谁是卧底", "/开始投票", "/投票", "/退出谁是卧底", "/结束游戏", "/甩锅游戏", "/甩锅", "/退出甩锅", "/我有你没有", "/发言", "/扣", "/不扣", "/国王游戏", "/国王游戏数据", "/蹦蹦数字炸弹", "/报数", "/跳过", "/德州扑克", "/看牌", "/过牌", "/跟注", "/加注", "/全下", "/弃牌", "/上架暗网", "/取消上架", "/确认", "/报价", "/公开", "/不公开", "/查看暗网", "/确认收货", "/投诉", "/预约公演", "/我的公演预约", "/取消公演预约", "/公演日程", "/延期", "/end", "/购买彩票", "/彩票", "/我的彩票", "/确认彩票", "/取消彩票", "/彩票验证",
+}
+
+_LOTTERY_COMMANDS = {
+    "/购买彩票",
+    "/彩票",
+    "/我的彩票",
+    "/确认彩票",
+    "/取消彩票",
+    "/彩票验证",
 }
 
 _DARK_MARKET_QUERY_ALIASES = {
@@ -67,8 +88,10 @@ class GroupCommandHandler:
             command = "/摸鱼躲猫猫"
         if command == "/me":
             command = "/我"
+        if command == "/买彩票":
+            command = "/购买彩票"
         if command not in _COMMANDS:
-            return None
+            return self._company_lottery_draft_step(message, content)
         self._repository.ensure_command_definitions()
         if not self._repository.is_command_enabled(command):
             return None
@@ -79,6 +102,10 @@ class GroupCommandHandler:
             else None
         )
         group_chat_id = None if group is None else group.id
+        if command in _LOTTERY_COMMANDS:
+            return self._company_lottery(
+                message, command, content, received_at, group_chat_id
+            )
         if command == "/上场":
             return self._memory_guild_lineup(message, content, received_at)
         if command == "/答案":
@@ -4155,6 +4182,22 @@ class GroupCommandHandler:
                     ("/全部拒绝", "/全部拒绝：拒绝全部可处理申请"),
                 ),
             ),
+            "彩票": (
+                "【公司双色球】",
+                (
+                    ("/彩票", "/彩票：查看本期期号、停售与开奖时刻、奖池、调节金与各奖级概率"),
+                    ("/购买彩票", "/购买彩票 03 07 09 10 + 05：手选一注，红球 01-10 选 4 个不重复，蓝球 01-06 选 1 个"),
+                    ("/购买彩票", "/购买彩票 机选 [注数]：随机一注或多注；也可写「随机」「机」「random」"),
+                    ("/购买彩票", "/购买彩票 N 注：进入逐注填写，手选与「机选」可以混用"),
+                    ("/确认彩票", "/确认彩票：一次性扣款并提交草稿里的全部号码"),
+                    ("/取消彩票", "/取消彩票：放弃草稿，不扣款"),
+                    ("/我的彩票", "/我的彩票：查看本人近期投注、累计投入、累计中奖与净收益"),
+                    ("/彩票验证", "/彩票验证 期号：查看已开奖期次的号码、盐与承诺哈希"),
+                    ("/彩票", "规则：每注 2 摸鱼币，每人每个自然日最多 5 注，同一期同一组号码只能买一次；开奖前 10 分钟停售，22:00 开奖"),
+                    ("/彩票", "奖级：一等奖 100、二等奖 50、三等奖 15、四等奖 5、五等奖 1；任意中奖概率 26.59%，每注长期期望返回约 1.19 摸鱼币"),
+                    ("/彩票", "奖池上限 200 摸鱼币，超出部分转入调节金；调节金累计到当前员工总数时全员各发 1 摸鱼币"),
+                ),
+            ),
         }
 
         def category_available(category: str) -> bool:
@@ -4184,6 +4227,7 @@ class GroupCommandHandler:
                     "/帮助 游戏：玩法总览；/帮助 摸鱼躲藏、/帮助 记忆考核、/帮助 谁是卧底、/帮助 甩锅游戏、/帮助 蹦蹦数字炸弹、/帮助 德州扑克、/帮助 我有你没有、/帮助 暗网交易所、/帮助 公演预约",
                 ),
                 ("随机事件", "/帮助 随机事件：报名与退出"),
+                ("彩票", "/帮助 彩票：公司双色球的玩法、奖级与开奖规则"),
                 ("部门", "/帮助 部门：部门申请与审批"),
                 ("职位", "/帮助 职位：职位晋升与审批"),
             )
@@ -4230,6 +4274,303 @@ class GroupCommandHandler:
             received_at,
             {"{指令列表}": guide},
         )
+
+    # ------------------------------------------------------------- 公司双色球
+
+    _LOTTERY_TIER_LABELS = {
+        PrizeTier.HEAD: "一等奖",
+        PrizeTier.SECOND: "二等奖",
+        PrizeTier.THIRD: "三等奖",
+        PrizeTier.FOURTH: "四等奖",
+        PrizeTier.FIFTH: "五等奖",
+    }
+
+    _LOTTERY_DRAFT_SCENARIOS = {
+        "started": "draft_started",
+        "appended": "draft_appended",
+        "ready": "draft_ready",
+        "expired": "draft_expired",
+        "duplicate": "draft_duplicate",
+        "no_draft": "draft_missing",
+        "limit": "draft_limit",
+        "not_joined": "not_joined",
+        "closed": "closed",
+        "disabled": "disabled",
+    }
+
+    _LOTTERY_PURCHASE_SCENARIOS = {
+        "bought": "bought",
+        "disabled": "disabled",
+        "closed": "closed",
+        "not_joined": "not_joined",
+        "daily_limit": "daily_limit",
+        "round_full": "round_full",
+        "duplicate": "duplicate",
+        "duplicate_request": "bought",
+        "insufficient_balance": "insufficient_balance",
+    }
+
+    def _company_lottery_draft_step(
+        self, message: InboundMessage, content: str
+    ) -> str | None:
+        """非指令消息：正在逐注填写草稿时，把它当成号码或「机选」。
+
+        不是草稿续填就返回 None，让这条消息照常走闲聊；号码格式对得上但草稿刚好
+        超时的话，给一次明确提示而不是静默丢弃。
+        """
+        if message.source_type != "group":
+            return None
+        received_at = message.received_at.astimezone(_BEIJING)
+        quick = is_quick_pick(content)
+        ticket = None if quick else self._company_lottery_parse_single(content)
+        if not quick and ticket is None:
+            return None
+
+        status = self._repository.company_lottery_draft_status(
+            message.sender_platform_id, received_at
+        )
+        if status == "expired":
+            return self._reply("/购买彩票", "draft_expired", received_at)
+        if status != "active":
+            return None
+
+        if quick:
+            result = self._repository.append_quick_pick_to_draft(
+                message.sender_platform_id, received_at
+            )
+        else:
+            result = self._repository.append_company_lottery_draft(
+                message.sender_platform_id, ticket, received_at
+            )
+        return self._company_lottery_draft_reply(result, received_at)
+
+    def _company_lottery_parse_single(self, content: str):
+        settings = self._repository.get_company_lottery_settings()
+        try:
+            return parse_single(
+                content,
+                red_pool=settings.red_pool,
+                red_count=settings.red_count,
+                blue_pool=settings.blue_pool,
+            )
+        except TicketParseError:
+            return None
+
+    def _company_lottery(
+        self, message: InboundMessage, command: str, content: str,
+        received_at, group_chat_id,
+    ) -> str | list[str] | None:
+        if message.source_type != "group" or group_chat_id is None:
+            return self._reply(command, "group_only", received_at)
+
+        if command == "/彩票":
+            view = self._repository.current_company_lottery_round(
+                message.sender_platform_id
+            )
+            if view is None:
+                return self._reply("/彩票", "not_open", received_at)
+            return self._reply(
+                "/彩票", "menu", received_at, self._company_lottery_menu_values(view)
+            )
+
+        if command == "/我的彩票":
+            history = self._repository.own_company_lottery_bets(
+                message.sender_platform_id
+            )
+            if not history.bets:
+                return self._reply("/我的彩票", "empty", received_at)
+            return self._reply(
+                "/我的彩票",
+                "shown",
+                received_at,
+                self._company_lottery_history_values(history),
+            )
+
+        if command == "/彩票验证":
+            parts = content.split()
+            if len(parts) != 2 or not parts[1].lstrip("#").isdigit():
+                return self._reply("/彩票验证", "usage", received_at)
+            view = self._repository.company_lottery_round_by_number(
+                int(parts[1].lstrip("#"))
+            )
+            if view is None or view.state != "drawn" or view.answer is None:
+                return self._reply("/彩票验证", "not_found", received_at)
+            return self._reply(
+                "/彩票验证",
+                "shown",
+                received_at,
+                {
+                    "{期号}": f"{view.round_number:04d}",
+                    "{号码}": view.answer.display(),
+                    "{盐}": view.salt or "",
+                    "{哈希}": view.commit_hash,
+                },
+            )
+
+        if command == "/取消彩票":
+            cancelled = self._repository.cancel_company_lottery_draft(
+                message.sender_platform_id
+            )
+            return self._reply(
+                "/取消彩票", "cancelled" if cancelled else "no_draft", received_at
+            )
+
+        if command == "/确认彩票":
+            result = self._repository.confirm_company_lottery_draft(
+                message.platform_message_id,
+                message.sender_platform_id,
+                received_at,
+            )
+            if result.status in {"no_draft", "empty_draft"}:
+                return self._reply("/确认彩票", result.status, received_at)
+            purchase = result.purchase
+            return self._reply(
+                "/购买彩票",
+                self._LOTTERY_PURCHASE_SCENARIOS.get(purchase.status, "closed"),
+                received_at,
+                self._company_lottery_purchase_values(purchase),
+            )
+
+        settings = self._repository.get_company_lottery_settings()
+        try:
+            order = parse_order(
+                content,
+                red_pool=settings.red_pool,
+                red_count=settings.red_count,
+                blue_pool=settings.blue_pool,
+                max_quantity=settings.max_tickets_per_day,
+            )
+        except TicketParseError as error:
+            scenario = (
+                "invalid_format"
+                if error.scenario in {"format", "empty"}
+                else "invalid_number"
+            )
+            return self._reply(
+                "/购买彩票",
+                scenario,
+                received_at,
+                {
+                    "{错误}": error.detail,
+                    "{红球池}": settings.red_pool,
+                    "{红球数}": settings.red_count,
+                    "{蓝球池}": settings.blue_pool,
+                },
+            )
+
+        if order.kind is OrderKind.GUIDED:
+            draft = self._repository.start_company_lottery_draft(
+                message.sender_platform_id, order.quantity, received_at
+            )
+            return self._company_lottery_draft_reply(draft, received_at)
+
+        if order.kind is OrderKind.QUICK:
+            purchase = self._repository.buy_quick_picks(
+                message.platform_message_id,
+                message.sender_platform_id,
+                order.quantity,
+                received_at,
+            )
+        else:
+            purchase = self._repository.buy_company_lottery_tickets(
+                message.platform_message_id,
+                message.sender_platform_id,
+                [order.ticket],
+                received_at,
+            )
+        return self._reply(
+            "/购买彩票",
+            self._LOTTERY_PURCHASE_SCENARIOS.get(purchase.status, "closed"),
+            received_at,
+            self._company_lottery_purchase_values(purchase),
+        )
+
+    def _company_lottery_draft_reply(self, result, received_at) -> str:
+        scenario = self._LOTTERY_DRAFT_SCENARIOS.get(result.status, "draft_missing")
+        return self._reply(
+            "/购买彩票",
+            scenario,
+            received_at,
+            {
+                "{目标注数}": result.target,
+                "{已填注数}": result.collected,
+                "{剩余注数}": max(result.target - result.collected, 0),
+                "{当前注}": "" if result.latest is None else result.latest.display(),
+            },
+        )
+
+    def _company_lottery_purchase_values(self, purchase) -> dict:
+        if purchase.is_quick_pick:
+            lines = ["　🎲 机选号码"] + [
+                f"　{ticket.display()}" for ticket in purchase.tickets
+            ]
+        else:
+            lines = [f"　{ticket.display()}" for ticket in purchase.tickets]
+        return {
+            "{注数}": len(purchase.tickets),
+            "{花费}": purchase.cost,
+            "{余额}": purchase.balance or 0,
+            "{剩余注数}": purchase.remaining or 0,
+            "{差额}": purchase.needed or 0,
+            "{号码列表}": "\n".join(lines),
+            "{截止时刻}": (
+                purchase.close_at.strftime("%H:%M")
+                if purchase.close_at is not None
+                else "刚刚"
+            ),
+        }
+
+    def _company_lottery_menu_values(self, view) -> dict:
+        settings = self._repository.get_company_lottery_settings()
+        counts = tier_counts(
+            red_pool=settings.red_pool,
+            red_count=settings.red_count,
+            blue_pool=settings.blue_pool,
+        )
+        total = total_combinations(
+            red_pool=settings.red_pool,
+            red_count=settings.red_count,
+            blue_pool=settings.blue_pool,
+        )
+        lines = [
+            f"{self._LOTTERY_TIER_LABELS[tier]} 1/{total / counts[tier]:.4g} → "
+            f"{settings.prizes[tier]}"
+            for tier in ALL_TIERS
+        ]
+        win_rate = winning_combinations(
+            red_pool=settings.red_pool,
+            red_count=settings.red_count,
+            blue_pool=settings.blue_pool,
+        ) / total
+        return {
+            "{期数}": view.round_number,
+            "{票价}": settings.ticket_price,
+            "{已售}": view.tickets_sold,
+            "{我的注数}": view.my_tickets,
+            "{截止时刻}": view.close_at.strftime("%H:%M"),
+            "{开奖时刻}": view.draw_at.strftime("%H:%M"),
+            "{奖池}": view.pool_balance,
+            "{调节金}": view.adjustment_balance,
+            "{哈希}": view.commit_hash[:16],
+            "{红球池}": settings.red_pool,
+            "{红球数}": settings.red_count,
+            "{蓝球池}": settings.blue_pool,
+            "{奖级表}": "\n".join(lines),
+            "{中奖率}": f"{win_rate:.2%}",
+        }
+
+    def _company_lottery_history_values(self, history) -> dict:
+        lines = []
+        for bet in history.bets[:8]:
+            mark = "✗" if bet.prize_tier is None else f"+{bet.prize_amount}"
+            quick = "（机选）" if bet.is_quick_pick else ""
+            lines.append(f"第 {bet.round_number} 期 {bet.ticket.display()}{quick} {mark}")
+        return {
+            "{记录}": "\n".join(lines),
+            "{累计投入}": history.total_cost,
+            "{累计中奖}": history.total_prize,
+            "{净收益}": history.total_prize - history.total_cost,
+        }
 
     def _reply(self, command: str, scenario: str, received_at, values=None) -> str:
         definition = template_definition(command, scenario)

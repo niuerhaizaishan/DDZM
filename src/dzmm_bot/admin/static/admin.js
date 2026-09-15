@@ -20,6 +20,9 @@ let performances = [];
 let performanceMessagePage = 1;
 let performanceMessagesRequestId = 0;
 let darkMarketPage = 1;
+let companyLotterySettings = null;
+let companyLotteryOverview = null;
+let companyLotteryPage = 1;
 let redPacketSettings = null;
 let currentGameplay = null;
 let gameplayVersion = null;
@@ -101,6 +104,7 @@ const pageContext = {
   "blame-bomb": {crumb: "游戏运营 / 甩锅游戏", title: "甩锅游戏运营", description: "管理事故卡、逐人数时长规则和当前公开对局。"},
   "texas-holdem": {crumb: "游戏运营 / 德州扑克", title: "德州扑克运营", description: "配置现金桌规则并查看不含底牌的公开牌局状态。"},
   "dark-market": {crumb: "游戏运营 / 暗网交易所", title: "暗网交易所", description: "配置匿名市场并查看真实交易记录、报价链与结算状态。"},
+  "company-lottery": {crumb: "游戏运营 / 公司双色球", title: "公司双色球", description: "配置号码池、奖级与奖池，并核对每个群的期次、流水与派奖。"},
   performances: {crumb: "游戏运营 / 公演预约", title: "公演预约", description: "审核公演预约，管理未来、进行中与历史场次。"},
   "ai-assistant": {crumb: "机器人运营 / AI 总监事", title: "AI 总监事", description: "配置群内 AI 人设、系统提示词与各职位每日调用上限。"},
   settings: {crumb: "玩法与资源 / 玩法配置", title: "玩法配置", description: "集中维护经济、打卡、全勤和日活跃度规则。"},
@@ -297,6 +301,9 @@ const kingGameSettingsModal = document.querySelector("#king-game-settings-modal"
 const texasHoldemSettingsModal = document.querySelector("#texas-holdem-settings-modal");
 const darkMarketSettingsModal = document.querySelector("#dark-market-settings-modal");
 const darkMarketDetailModal = document.querySelector("#dark-market-detail-modal");
+const companyLotterySettingsModal = document.querySelector("#company-lottery-settings-modal");
+const companyLotteryPoolAccount = document.querySelector("#company-lottery-pool-account");
+const companyLotteryPoolAmount = document.querySelector("#company-lottery-pool-amount");
 const numberBombEnabled = document.querySelector("#number-bomb-enabled");
 const numberBombSignupMinutes = document.querySelector("#number-bomb-signup-minutes");
 const numberBombReminderSeconds = document.querySelector("#number-bomb-reminder-seconds");
@@ -484,6 +491,10 @@ function closeDarkMarketDetailModal() {
   darkMarketDetailModal.hidden = true;
 }
 
+function closeCompanyLotterySettingsModal() {
+  companyLotterySettingsModal.hidden = true;
+}
+
 function closeRedPacketSettingsModal() {
   redPacketSettingsModal.hidden = true;
 }
@@ -589,6 +600,51 @@ function renderDarkMarketListings(records) {
     <article class="data-row"><div><b>#${item.public_number} ${escapeHtml(item.name)}</b><small>${statusBadge(darkMarketStateLabel(item.state), item.state === "active" ? "success" : item.state === "complaint_pending" ? "warning" : "")}</small><small>卖家：${escapeHtml(item.seller_display_name)}（#${String(item.seller_employee_number).padStart(4, "0")}） · 当前报价者：${escapeHtml(item.current_bidder_display_name || "无")} · 起拍 ${item.starting_price}</small><small>创建：${escapeHtml(formatHeartbeat(item.created_at))} · 截止：${escapeHtml(formatHeartbeat(item.ends_at))}${item.final_amount == null ? "" : ` · 成交 ${item.final_amount} · 手续费 ${item.state === "complained" ? "无" : item.fee_amount ?? "待结算"}`}${item.receipt_deadline == null ? "" : ` · 收货期限 ${escapeHtml(formatHeartbeat(item.receipt_deadline))}`}</small></div><div class="command-actions"><button class="secondary" data-dark-market-detail="${escapeHtml(item.id)}" type="button">查看详情</button>${item.state === "active" ? `<button class="danger-button" data-action="force-delist-dark-market" data-listing-id="${escapeHtml(item.id)}" type="button">强制下架</button>` : ""}${darkMarketComplaintActions(item)}</div></article>`).join("") || '<p class="muted">没有符合条件的暗网交易记录。</p>';
   records.pages = Math.max(1, Math.ceil(records.total / records.page_size));
   renderPagination(document.querySelector("#dark-market-pagination"), records, "笔交易", loadDarkMarketListings);
+}
+
+function companyLotteryStateLabel(state) {
+  return ({open: "销售中", closed: "已停售", drawn: "已开奖", cancelled: "已取消"})[state] || state;
+}
+
+function companyLotteryAccountLabel(account) {
+  return ({pool: "奖池", adjustment: "调节金"})[account] || account;
+}
+
+function companyLotteryLedgerKindLabel(kind) {
+  return ({deposit: "启动注入", sales: "售票", payout: "派奖", overflow: "溢出转入", manual: "手动注入", welfare: "全员福利"})[kind] || kind;
+}
+
+function companyLotteryTierLabel(tier) {
+  return ({head: "一等奖", second: "二等奖", third: "三等奖", fourth: "四等奖", fifth: "五等奖"})[tier] || tier;
+}
+
+function renderCompanyLotterySettings(settings) {
+  const drawTime = `${String(settings.draw_hour).padStart(2, "0")}:${String(settings.draw_minute).padStart(2, "0")}`;
+  document.querySelector("#company-lottery-settings-card").innerHTML = `
+    <article><span>玩法状态</span><strong>${settings.enabled ? "已启用" : "已停用"}</strong><small>停用只阻止新的购票与草稿</small></article>
+    <article><span>号码池</span><strong>红球 ${settings.red_pool} 选 ${settings.red_count} + 蓝球 ${settings.blue_pool} 选 1</strong><small>共 ${settings.combinations} 种组合</small></article>
+    <article><span>单注价格</span><strong>${settings.ticket_price}</strong><small>每人每日最多 ${settings.max_tickets_per_day} 注，单期最多 ${settings.max_tickets_per_round} 注</small></article>
+    <article><span>奖级奖金</span><strong>${settings.head_prize} / ${settings.second_prize} / ${settings.third_prize} / ${settings.fourth_prize} / ${settings.fifth_prize}</strong><small>一至五等奖固定奖金</small></article>
+    <article><span>奖池</span><strong>上限 ${settings.pool_ceiling}</strong><small>启动奖池 ${settings.pool_seed}（只在每个群首期注入） · 单人单期上限 ${settings.per_person_cap}</small></article>
+    <article><span>投注时间</span><strong>${drawTime} 开奖</strong><small>提前 ${settings.close_offset_minutes} 分钟停售，提前 ${settings.notify_offset_minutes} 分钟提醒</small></article>
+    <article><span>全员福利</span><strong>${settings.welfare_enabled ? `每人 ${settings.welfare_per_person}` : "已停用"}</strong><small>调节金达到当前员工总数时发放一轮；入职满 ${settings.welfare_min_tenure_hours} 小时才计入</small></article>
+    <article><span>购票草稿</span><strong>${settings.draft_timeout_minutes} 分钟</strong><small>草稿超时作废且不扣款</small></article>`;
+}
+
+function renderCompanyLotteryOverview(overview) {
+  companyLotteryOverview = overview;
+
+  document.querySelector("#company-lottery-rounds").innerHTML = overview.rounds.map((item) => `
+    <article class="data-row"><div><b>第 ${item.round_number} 期</b><small>${statusBadge(companyLotteryStateLabel(item.state), item.state === "open" ? "success" : item.state === "drawn" ? "" : "warning")}</small><small>售票 ${item.tickets_sold} 注 · 流水 ${item.gross_amount} 摸鱼币 · 开奖 ${escapeHtml(formatHeartbeat(item.draw_at))} · 停售 ${escapeHtml(formatHeartbeat(item.close_at))}</small><small>期初 ${item.pool_opening} · 溢出 ${item.pool_overflow} · 期末 ${item.pool_closing} · 中奖 ${item.winner_count} 人 · 应发 ${item.payable} · 实发 ${item.paid_total}</small><small>${item.answer ? `号码：${escapeHtml(item.answer)} · 盐：${escapeHtml(item.salt || "")}` : "号码将在开奖后公布"}</small></div></article>`).join("") || '<p class="muted">还没有彩票期次。</p>';
+
+  document.querySelector("#company-lottery-ledger").innerHTML = overview.ledger.map((item) => `
+    <article class="data-row"><div><b>${escapeHtml(companyLotteryAccountLabel(item.account))} · ${escapeHtml(companyLotteryLedgerKindLabel(item.kind))} ${item.amount > 0 ? "+" : ""}${item.amount}</b><small>余额 ${item.balance_after} 摸鱼币${item.round_number == null ? "" : ` · 第 ${item.round_number} 期`}</small><small>${escapeHtml(formatHeartbeat(item.created_at))}${item.note ? ` · ${escapeHtml(item.note)}` : ""}</small></div></article>`).join("") || '<p class="muted">没有奖池流水。</p>';
+
+  document.querySelector("#company-lottery-prizes").innerHTML = overview.prizes.map((item) => `
+    <article class="data-row"><div><b>第 ${item.round_number} 期 · ${escapeHtml(item.display_name)} · ${escapeHtml(companyLotteryTierLabel(item.tier))}</b><small>号码：${escapeHtml(item.ticket)}</small><small>面值 ${item.merited_amount} → 实发 ${item.prize_amount} 摸鱼币${item.settled_at ? ` · ${escapeHtml(formatHeartbeat(item.settled_at))}` : ""}</small></div></article>`).join("") || '<p class="muted">还没有中奖记录。</p>';
+
+  document.querySelector("#company-lottery-employees").innerHTML = overview.employees.map((item) => `
+    <article class="data-row"><div><b>${escapeHtml(item.display_name)}</b><small>投注 ${item.tickets} 注 · 累计投入 ${item.cost} · 累计中奖 ${item.prize} 摸鱼币</small><small>净收益 ${item.net > 0 ? "+" : ""}${item.net} 摸鱼币</small></div></article>`).join("") || '<p class="muted">本群还没有员工买过彩票。</p>';
 }
 
 function renderDarkMarketDetail(item) {
@@ -1586,6 +1642,25 @@ async function loadDarkMarket() {
   await loadDarkMarketListings(1);
 }
 
+async function loadCompanyLotterySettings() {
+  if (!groupChats.length) await loadGroupChats();
+  companyLotterySettings = await requestGame("/api/game/company-lottery/settings");
+  configurationVersion = companyLotterySettings.version;
+  renderCompanyLotterySettings(companyLotterySettings);
+  return companyLotterySettings;
+}
+
+async function loadCompanyLotteryOverview() {
+  companyLotteryOverview = await requestGame("/api/game/company-lottery/overview");
+  renderCompanyLotteryOverview(companyLotteryOverview);
+  return companyLotteryOverview;
+}
+
+async function loadCompanyLottery() {
+  await loadCompanyLotterySettings();
+  await loadCompanyLotteryOverview();
+}
+
 async function loadRedPacketSettings() {
   redPacketSettings = await requestGame("/api/game/red-packet/settings");
   configurationVersion = redPacketSettings.version;
@@ -1649,6 +1724,27 @@ async function openDarkMarketSettingsModal() {
   document.querySelector("#dark-market-rank-limits").innerHTML = settings.rank_limits.map((item) => `<label>${escapeHtml(item.rank_name)}（${escapeHtml(item.level_label)}）<input data-dark-market-rank-id="${escapeHtml(item.rank_id)}" type="number" min="-1" value="${item.daily_limit}" required></label>`).join("");
   darkMarketSettingsModal.hidden = false;
   document.querySelector("#dark-market-group").focus();
+}
+
+async function openCompanyLotterySettingsModal() {
+  const settings = companyLotterySettings || await loadCompanyLotterySettings();
+  const field = (name) => document.querySelector(`#company-lottery-${name}`);
+  document.querySelector("#company-lottery-enabled").checked = settings.enabled;
+  document.querySelector("#company-lottery-welfare-enabled").checked = settings.welfare_enabled;
+  for (const name of [
+    "red-pool", "red-count", "blue-pool", "ticket-price",
+    "head-prize", "second-prize", "third-prize", "fourth-prize", "fifth-prize",
+    "pool-ceiling", "pool-seed", "per-person-cap",
+    "max-tickets-per-day", "max-tickets-per-round",
+    "draw-hour", "draw-minute", "close-offset-minutes",
+    "notify-offset-minutes", "draft-timeout-minutes",
+    "welfare-per-person", "welfare-min-tenure-hours",
+  ]) {
+    const key = name.replaceAll("-", "_");
+    field(name).value = settings[key];
+  }
+  companyLotterySettingsModal.hidden = false;
+  document.querySelector("#company-lottery-red-pool").focus();
 }
 
 async function openRedPacketSettingsModal() {
@@ -2125,6 +2221,7 @@ async function loadGameView(view) {
       return;
     }
     if (view === "dark-market") return loadDarkMarket();
+    if (view === "company-lottery") return loadCompanyLottery();
     if (view === "performances") return loadPerformances();
     if (view === "ai-assistant") return loadAiAssistant();
     if (view === "commands") {
@@ -2406,6 +2503,41 @@ document.querySelector("#edit-dark-market-settings").addEventListener("click", (
 document.querySelector("#refresh-dark-market").addEventListener("click", (event) => void runMutation(event.currentTarget, "刷新中…", () => loadDarkMarketListings()));
 document.querySelector("#dark-market-status-filter").addEventListener("change", () => void loadDarkMarketListings(1));
 document.querySelector("#dark-market-page-size").addEventListener("change", () => void loadDarkMarketListings(1));
+document.querySelector("#edit-company-lottery-settings").addEventListener("click", () => void openCompanyLotterySettingsModal());
+document.querySelector("#refresh-company-lottery").addEventListener("click", (event) => void runMutation(event.currentTarget, "刷新中…", () => loadCompanyLotteryOverview()));
+document.querySelector("#company-lottery-draw").addEventListener("click", async (event) => {
+  if (!window.confirm("确认对全公司当前期次手动开奖？开奖后会立即向所有群发送公告并结算全员福利。")) return;
+  try {
+    await runMutation(event.currentTarget, "开奖中…", async () => {
+      const result = await requestGame("/api/game/company-lottery/draw", {method: "POST"});
+      await loadCompanyLotteryOverview();
+      setResult(`第 ${result.round_number} 期已开奖：${result.answer}，中奖 ${result.winner_count} 人，实发 ${result.paid_total} 摸鱼币。`, "success");
+    });
+  } catch (error) {
+    setResult(`开奖失败（${error.message}）`, "error");
+  }
+});
+document.querySelector("#company-lottery-pool-deposit").addEventListener("click", async (event) => {
+  const account = companyLotteryPoolAccount.value;
+  const amount = Number(companyLotteryPoolAmount.value);
+  if (!Number.isInteger(amount) || amount < 1 || amount > 1000000) {
+    setResult("请填写 1–1000000 的整数金额", "error");
+    return;
+  }
+  try {
+    await runMutation(event.currentTarget, "注入中…", async () => {
+      const result = await requestGame("/api/game/company-lottery/pool", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({account, amount}),
+      });
+      await loadCompanyLotteryOverview();
+      setResult(`已注入 ${amount} 摸鱼币：奖池 ${result.pool_balance}，调节金 ${result.adjustment_balance}。`, "success");
+    });
+  } catch (error) {
+    setResult(`注入失败（${error.message}）`, "error");
+  }
+});
 document.querySelector("#edit-red-packet-settings").addEventListener("click", () => void openRedPacketSettingsModal());
 document.querySelector("#edit-random-event-settings").addEventListener("click", () => void openRandomEventSettingsModal());
 document.querySelector("#create-random-event-scene").addEventListener("click", () => openRandomEventSceneModal());
@@ -3103,6 +3235,73 @@ darkMarketSettingsModal.addEventListener("click", async (event) => {
       closeDarkMarketSettingsModal();
     });
     setResult("暗网交易所设置已保存", "success");
+  } catch (error) {
+    setResult(`保存失败（${error.message}）`, "error");
+  }
+});
+companyLotterySettingsModal.addEventListener("click", async (event) => {
+  if (event.target.closest("[data-close-company-lottery-settings-modal]")) {
+    closeCompanyLotterySettingsModal();
+    return;
+  }
+  if (event.target.id !== "save-company-lottery-settings") return;
+  const numberAt = (name) => Number(document.querySelector(`#company-lottery-${name}`).value);
+  const payload = {
+    enabled: document.querySelector("#company-lottery-enabled").checked,
+    red_pool: numberAt("red-pool"),
+    red_count: numberAt("red-count"),
+    blue_pool: numberAt("blue-pool"),
+    ticket_price: numberAt("ticket-price"),
+    head_prize: numberAt("head-prize"),
+    second_prize: numberAt("second-prize"),
+    third_prize: numberAt("third-prize"),
+    fourth_prize: numberAt("fourth-prize"),
+    fifth_prize: numberAt("fifth-prize"),
+    pool_ceiling: numberAt("pool-ceiling"),
+    pool_seed: numberAt("pool-seed"),
+    per_person_cap: numberAt("per-person-cap"),
+    max_tickets_per_day: numberAt("max-tickets-per-day"),
+    max_tickets_per_round: numberAt("max-tickets-per-round"),
+    draw_hour: numberAt("draw-hour"),
+    draw_minute: numberAt("draw-minute"),
+    close_offset_minutes: numberAt("close-offset-minutes"),
+    notify_offset_minutes: numberAt("notify-offset-minutes"),
+    draft_timeout_minutes: numberAt("draft-timeout-minutes"),
+    welfare_enabled: document.querySelector("#company-lottery-welfare-enabled").checked,
+    welfare_per_person: numberAt("welfare-per-person"),
+    welfare_min_tenure_hours: numberAt("welfare-min-tenure-hours"),
+  };
+  const ranges = {
+    red_pool: [5, 99], red_count: [1, 10], blue_pool: [1, 99], ticket_price: [1, 1000],
+    head_prize: [0, 1000000], second_prize: [0, 1000000], third_prize: [0, 1000000],
+    fourth_prize: [0, 1000000], fifth_prize: [0, 1000000],
+    pool_ceiling: [0, 1000000], pool_seed: [0, 1000000], per_person_cap: [0, 1000000],
+    max_tickets_per_day: [1, 1000], max_tickets_per_round: [1, 100000],
+    draw_hour: [0, 23], draw_minute: [0, 59],
+    close_offset_minutes: [1, 720], notify_offset_minutes: [1, 720],
+    draft_timeout_minutes: [1, 240],
+    welfare_per_person: [0, 1000], welfare_min_tenure_hours: [0, 8760],
+  };
+  const valid = Object.entries(ranges).every(([key, [low, high]]) => Number.isInteger(payload[key]) && payload[key] >= low && payload[key] <= high)
+    && payload.red_count <= payload.red_pool
+    && payload.notify_offset_minutes < payload.close_offset_minutes
+    && payload.draw_hour * 60 + payload.draw_minute >= payload.close_offset_minutes;
+  if (!valid) {
+    setResult("彩票设置无效：请检查号码池、奖金区间，以及停售/提醒/开奖的时间关系", "error");
+    return;
+  }
+  try {
+    await runMutation(event.target, "保存中…", async () => {
+      companyLotterySettings = await requestGame("/api/game/company-lottery/settings", {
+        method: "PATCH",
+        headers: {"Content-Type": "application/json", ...configurationHeaders()},
+        body: JSON.stringify(payload),
+      });
+      configurationVersion = companyLotterySettings.version;
+      renderCompanyLotterySettings(companyLotterySettings);
+      closeCompanyLotterySettingsModal();
+    });
+    setResult("公司双色球设置已保存", "success");
   } catch (error) {
     setResult(`保存失败（${error.message}）`, "error");
   }
@@ -4057,6 +4256,7 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !texasHoldemSettingsModal.hidden) closeTexasHoldemSettingsModal();
   if (event.key === "Escape" && !darkMarketSettingsModal.hidden) closeDarkMarketSettingsModal();
   if (event.key === "Escape" && !darkMarketDetailModal.hidden) closeDarkMarketDetailModal();
+  if (event.key === "Escape" && !companyLotterySettingsModal.hidden) closeCompanyLotterySettingsModal();
   if (event.key === "Escape" && !randomEventSettingsModal.hidden) closeRandomEventSettingsModal();
   if (event.key === "Escape" && !randomEventSceneModal.hidden) closeRandomEventSceneModal();
   if (event.key === "Escape" && !randomEventTimeModal.hidden) closeRandomEventTimeModal();

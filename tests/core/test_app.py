@@ -11,6 +11,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from dzmm_bot.runtime.contracts import InboundMessage
+from dzmm_bot.core.company_lottery import BEIJING, Ticket
 from dzmm_bot.core.schema import (
     AIActivityEventRecord,
     DirectChatRecord,
@@ -664,6 +665,327 @@ def test_dark_market_core_api_validates_settings_bounds(app_context, headers):
         assert app_context.client.patch(
             "/internal/game/dark-market/settings", headers=headers, json=invalid
         ).status_code == 422
+
+
+def test_company_lottery_settings_core_api_round_trip(app_context, headers):
+    initial = app_context.client.get(
+        "/internal/game/company-lottery/settings", headers=headers
+    )
+    assert initial.status_code == 200
+    body = initial.json()
+    assert body["enabled"] is True
+    assert (body["red_pool"], body["red_count"], body["blue_pool"]) == (10, 4, 6)
+    assert body["combinations"] == 1260
+    assert body["pool_seed"] == 100
+
+    payload = {key: value for key, value in body.items() if key != "combinations"}
+    payload.update(
+        {
+            "pool_seed": 40,
+            "per_person_cap": 50,
+            "fifth_prize": 2,
+            "welfare_per_person": 3,
+            "draw_hour": 21,
+            "draw_minute": 30,
+            "close_offset_minutes": 15,
+            "notify_offset_minutes": 5,
+        }
+    )
+    updated = app_context.client.patch(
+        "/internal/game/company-lottery/settings", headers=headers, json=payload
+    )
+
+    assert updated.status_code == 200
+    assert updated.json()["pool_seed"] == 40
+    assert updated.json()["fifth_prize"] == 2
+    assert updated.json()["welfare_per_person"] == 3
+    assert app_context.repository.get_company_lottery_settings().pool_seed == 40
+
+
+def test_company_lottery_settings_core_api_validates_bounds(client, headers):
+    assert client.get("/internal/game/company-lottery/settings").status_code == 401
+    assert (
+        client.get("/internal/game/company-lottery/settings", headers=headers).status_code
+        == 200
+    )
+    initial = client.get(
+        "/internal/game/company-lottery/settings", headers=headers
+    ).json()
+    base = {key: value for key, value in initial.items() if key != "combinations"}
+
+    for invalid in (
+        {**base, "red_count": 11},
+        {**base, "draw_hour": 24},
+        {**base, "draw_minute": 60},
+        {**base, "max_tickets_per_day": 0},
+        {**base, "close_offset_minutes": 0},
+        {**base, "blue_pool": 0},
+        # 停售提醒必须早于停售
+        {**base, "close_offset_minutes": 5, "notify_offset_minutes": 5},
+        # 红球选球数不能超过红球池
+        {**base, "red_pool": 5, "red_count": 6},
+    ):
+        assert (
+            client.patch(
+                "/internal/game/company-lottery/settings", headers=headers, json=invalid
+            ).status_code
+            == 422
+        )
+
+
+def _lottery_answer(repository):
+    """直接读期次记录取出已承诺但未公布的号码，用于构造必中注单。"""
+    from dzmm_bot.core.schema import CompanyLotteryRoundRecord
+
+    view = repository.current_company_lottery_round()
+    with repository._session() as session:
+        record = session.get(CompanyLotteryRoundRecord, view.id)
+    return Ticket(
+        reds=(record.red_1, record.red_2, record.red_3, record.red_4),
+        blue=record.blue,
+    )
+
+
+def test_company_lottery_overview_manual_draw_and_pool_deposit(app_context, headers):
+    repository = app_context.repository
+    group = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=lottery-api", NOW
+    )
+    repository.create_user("lottery-api-1", "接口甲", NOW, 100)
+    repository.create_user("lottery-api-2", "接口乙", NOW, 100)
+    repository.ensure_company_lottery_round(NOW)
+
+    overview = app_context.client.get(
+        "/internal/game/company-lottery/overview",
+        headers=headers,
+    )
+    assert overview.status_code == 200
+    assert overview.json()["enabled"] is True
+    assert overview.json()["pool_balance"] == 100
+    assert overview.json()["employee_count"] == 2
+    assert overview.json()["current_round_number"] == 1
+    assert overview.json()["rounds"][0]["state"] == "open"
+    # 未开奖不泄露号码
+    assert overview.json()["rounds"][0]["answer"] is None
+
+    draw_before_close = app_context.client.post(
+        "/internal/game/company-lottery/draw",
+        headers=headers,
+        json={"actor": "超级管理员", "now": NOW.isoformat()},
+    )
+    assert draw_before_close.status_code == 409
+
+    repository.buy_company_lottery_tickets(
+        UUID(int=401),
+        "lottery-api-1",
+        [_lottery_answer(repository)],
+        NOW,
+    )
+
+    closed_at = NOW.replace(hour=21, minute=55, tzinfo=BEIJING)
+    drawn = app_context.client.post(
+        f"/internal/game/company-lottery/draw",
+        headers=headers,
+        json={"actor": "超级管理员", "now": closed_at.isoformat()},
+    )
+    assert drawn.status_code == 200
+    assert drawn.json()["round_number"] == 1
+    assert drawn.json()["winner_count"] == 1
+    assert drawn.json()["paid_total"] == 100
+    assert drawn.json()["next_round_number"] == 2
+
+    after = app_context.client.get(
+        f"/internal/game/company-lottery/overview",
+        headers=headers,
+    ).json()
+    assert [item["round_number"] for item in after["rounds"]] == [2, 1]
+    assert after["current_round_number"] == 2
+    first_round = after["rounds"][1]
+    assert first_round["state"] == "drawn"
+    assert first_round["answer"] is not None
+    assert first_round["paid_total"] == 100
+    assert after["prizes"][0]["display_name"] == "接口甲"
+    assert after["prizes"][0]["tier"] == "head"
+    assert after["employees"][0] == {
+        "display_name": "接口甲",
+        "tickets": 1,
+        "cost": 2,
+        "prize": 100,
+        "net": 98,
+    }
+    assert any(entry["kind"] == "deposit" for entry in after["ledger"])
+
+    deposited = app_context.client.post(
+        f"/internal/game/company-lottery/pool",
+        headers=headers,
+        json={
+            "actor": "超级管理员",
+            "now": closed_at.isoformat(),
+            "account": "adjustment",
+            "amount": 7,
+        },
+    )
+    assert deposited.status_code == 200
+    assert deposited.json()["adjustment_balance"] == 7
+
+
+def test_company_lottery_end_to_end_from_sale_to_next_round(app_context, headers):
+    """开卖 → 手选/机选/引导购票 → 停售 → 开奖 → 派奖 → 全员福利 → 开下一期。"""
+    from dzmm_bot.core.company_lottery import commit_hash
+
+    repository = app_context.repository
+    client = app_context.client
+    group = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=lottery-e2e", NOW
+    )
+
+    # 先跑一次定时任务把首期开出来（此时还没有员工，不会有任何结算）
+    first_tick = client.post(
+        "/internal/daily-jobs/run", headers=headers, json={"now": NOW.isoformat()}
+    )
+    assert first_tick.status_code == 200
+    assert repository.current_company_lottery_round().round_number == 1
+
+    players = (("e2e-1", "端到端甲"), ("e2e-2", "端到端乙"), ("e2e-3", "端到端丙"))
+    for platform_id, name in players:
+        repository.create_user(platform_id, name, NOW, 200)
+
+    def purge_outbound():
+        with app_context.session_factory.begin() as session:
+            session.query(OutboundRecord).delete()
+
+    def outbound_texts():
+        with app_context.session_factory() as session:
+            return list(
+                session.scalars(
+                    select(OutboundRecord.text).order_by(
+                        OutboundRecord.reply_index, OutboundRecord.created_at
+                    )
+                )
+            )
+
+    def send(message_id, sender, content, when=NOW):
+        purge_outbound()
+        response = client.post(
+            "/internal/inbound",
+            headers=headers,
+            json={
+                "platform_message_id": message_id,
+                "sender_platform_id": sender,
+                "content": content,
+                "received_at": when.isoformat(),
+                "chatroom_id": group.chatroom_id,
+            },
+        )
+        assert response.status_code == 200
+        return "\n".join(outbound_texts())
+
+    answer = _lottery_answer(repository)
+    used: set[str] = set()
+
+    def losing_ticket():
+        for a in range(1, 11):
+            for b in range(a + 1, 11):
+                for c in range(b + 1, 11):
+                    for d in range(c + 1, 11):
+                        if set((a, b, c, d)) & set(answer.reds):
+                            continue
+                        for blue in range(1, 7):
+                            if blue == answer.blue:
+                                continue
+                            candidate = Ticket(reds=(a, b, c, d), blue=blue)
+                            if candidate.as_key() in used:
+                                continue
+                            used.add(candidate.as_key())
+                            return candidate
+        raise AssertionError("找不到必定不中奖的号码")
+
+    # 机选 2 注
+    assert "✅ 已购 2 注（4 摸鱼币）" in send("e2e-q", "e2e-1", "/购买彩票 机选 2")
+
+    # 引导逐注填写 2 注
+    assert "本次要买 2 注" in send("e2e-g0", "e2e-2", "/购买彩票 2 注")
+    for index in (1, 2):
+        ticket = losing_ticket()
+        reply = send(
+            f"e2e-g{index}",
+            "e2e-2",
+            f"{' '.join(f'{value:02d}' for value in ticket.reds)} + {ticket.blue:02d}",
+        )
+        assert "已记录" in reply
+    assert "✅ 已购 2 注（4 摸鱼币）" in send("e2e-g3", "e2e-2", "/确认彩票")
+
+    # 手选一张必中头奖的号码
+    assert (
+        "✅ 已购 1 注（2 摸鱼币）"
+        in send(
+            "e2e-h",
+            "e2e-3",
+            f"/购买彩票 {' '.join(f'{value:02d}' for value in answer.reds)}"
+            f" + {answer.blue:02d}",
+        )
+    )
+    assert repository.find_user("e2e-1").balance == 196
+    assert repository.find_user("e2e-2").balance == 196
+    assert repository.find_user("e2e-3").balance == 198
+    assert repository.company_lottery_balances() == (100 + 10, 0)
+
+    # 停售前提醒：群里已经安静很久
+    client.post(
+        "/internal/daily-jobs/run",
+        headers=headers,
+        json={"now": NOW.replace(hour=21, minute=46, tzinfo=BEIJING).isoformat()},
+    )
+    assert any("停售" in text for text in outbound_texts())
+
+    # 停售：买不了了
+    closed_tick = NOW.replace(hour=21, minute=55, tzinfo=BEIJING)
+    client.post(
+        "/internal/daily-jobs/run", headers=headers, json={"now": closed_tick.isoformat()}
+    )
+    assert repository.current_company_lottery_round().state == "closed"
+    assert "停售" in send("e2e-late", "e2e-1", "/购买彩票 机选", closed_tick)
+
+    # 开奖：公告、派奖与下一期
+    draw_tick = NOW.replace(hour=22, minute=0, tzinfo=BEIJING)
+    client.post(
+        "/internal/daily-jobs/run", headers=headers, json={"now": draw_tick.isoformat()}
+    )
+    announcement = "\n".join(outbound_texts())
+    assert "【公司双色球开奖】" in announcement
+    assert "端到端丙" in announcement
+    assert "第 2 期已开卖" in announcement
+    assert repository.find_user("e2e-3").balance == 198 + 100
+    assert repository.find_user("e2e-2").balance == 196
+
+    settled = repository.company_lottery_round_by_number(1)
+    assert settled.state == "drawn"
+    assert settled.answer == answer
+    assert commit_hash(settled.answer, settled.salt) == settled.commit_hash
+    assert repository.company_lottery_balances()[1] == 0
+
+    # 手动给调节金注资后，下一轮任务把全员福利发出去
+    injected = client.post(
+        f"/internal/game/company-lottery/pool",
+        headers=headers,
+        json={"actor": "超级管理员", "now": draw_tick.isoformat(), "account": "adjustment", "amount": 5},
+    )
+    assert injected.json()["adjustment_balance"] == 5
+    client.post(
+        "/internal/daily-jobs/run", headers=headers, json={"now": draw_tick.isoformat()}
+    )
+    assert any("公司福利发放" in text for text in outbound_texts())
+    assert repository.company_lottery_balances()[1] == 5 - 3
+    assert repository.find_user("e2e-3").balance == 298 + 1
+    assert repository.find_user("e2e-2").balance == 196 + 1
+
+    # 下一期已经开卖且没有泄露号码
+    next_round = repository.current_company_lottery_round()
+    assert next_round.round_number == 2
+    assert next_round.state == "open"
+    assert next_round.tickets_sold == 0
+    assert next_round.answer is None
+    assert "第 2 期" in send("e2e-menu", "e2e-1", "/彩票", draw_tick)
 
 
 def test_red_packet_settings_core_api_validates_bounds(client, headers):
@@ -1558,7 +1880,7 @@ def test_game_management_lists_commands_employees_and_shop_items(client, headers
 
     assert commands.status_code == 200
     assert {record["command"] for record in commands.json()} == {
-            "/入职", "/我的物品", "/购买", "/使用", "/邀请参与", "/取消使用", "/同意使用", "/拒绝使用", "/打卡", "/余额", "/修改名称", "/编辑档案", "/编辑档案形象", "/我的档案", "/公司的故事集", "/发奖金", "/发红包", "/抢红包", "/打赏", "/我", "/商店", "/帮助", "/当前游戏", "/加入", "/退出", "/开始", "/跳过", "/摸鱼躲猫猫", "/记忆考核", "/答案", "/继续", "/收手", "/投降", "/队伍1", "/队伍2", "/队伍1人员", "/队伍2人员", "/公会赛场次", "/开始对战", "/上场", "/谁是卧底", "/开始投票", "/投票", "/退出谁是卧底", "/结束游戏", "/甩锅游戏", "/甩锅", "/退出甩锅", "/我有你没有", "/发言", "/扣", "/不扣", "/国王游戏", "/国王游戏数据", "/蹦蹦数字炸弹", "/报数", "/德州扑克", "/看牌", "/过牌", "/跟注", "/加注", "/全下", "/弃牌", "/上架暗网", "/取消上架", "/确认", "/报价", "/公开", "/不公开", "/查看暗网", "/确认收货", "/投诉", "/预约公演", "/我的公演预约", "/取消公演预约", "/公演日程", "/延期", "/end", "/部门", "/部门人数", "/我的部门人数", "/加入部门", "/切换部门", "/部门申请列表", "/同意部门", "/全部同意部门", "/拒绝部门", "/全部拒绝部门", "/职位", "/晋升", "/晋升申请列表", "/同意", "/全部同意", "/拒绝", "/全部拒绝", "/投稿", "/我的投稿", "/撤回投稿", "/上一步", "/取消投稿", "/确认取消投稿", "/确认投稿", "/继续添加", "/事件完成", "/修改身份", "/删除身份", "/修改事件", "/删除事件"
+            "/入职", "/我的物品", "/购买", "/使用", "/邀请参与", "/取消使用", "/同意使用", "/拒绝使用", "/打卡", "/余额", "/修改名称", "/编辑档案", "/编辑档案形象", "/我的档案", "/公司的故事集", "/发奖金", "/发红包", "/抢红包", "/打赏", "/我", "/商店", "/帮助", "/当前游戏", "/加入", "/退出", "/开始", "/跳过", "/摸鱼躲猫猫", "/记忆考核", "/答案", "/继续", "/收手", "/投降", "/队伍1", "/队伍2", "/队伍1人员", "/队伍2人员", "/公会赛场次", "/开始对战", "/上场", "/谁是卧底", "/开始投票", "/投票", "/退出谁是卧底", "/结束游戏", "/甩锅游戏", "/甩锅", "/退出甩锅", "/我有你没有", "/发言", "/扣", "/不扣", "/国王游戏", "/国王游戏数据", "/蹦蹦数字炸弹", "/报数", "/德州扑克", "/看牌", "/过牌", "/跟注", "/加注", "/全下", "/弃牌", "/上架暗网", "/取消上架", "/确认", "/报价", "/公开", "/不公开", "/查看暗网", "/确认收货", "/投诉", "/预约公演", "/我的公演预约", "/取消公演预约", "/公演日程", "/延期", "/end", "/购买彩票", "/彩票", "/我的彩票", "/确认彩票", "/取消彩票", "/彩票验证", "/部门", "/部门人数", "/我的部门人数", "/加入部门", "/切换部门", "/部门申请列表", "/同意部门", "/全部同意部门", "/拒绝部门", "/全部拒绝部门", "/职位", "/晋升", "/晋升申请列表", "/同意", "/全部同意", "/拒绝", "/全部拒绝", "/投稿", "/我的投稿", "/撤回投稿", "/上一步", "/取消投稿", "/确认取消投稿", "/确认投稿", "/继续添加", "/事件完成", "/修改身份", "/删除身份", "/修改事件", "/删除事件"
             }
     command_records = {record["command"]: record for record in commands.json()}
     for command in ("/部门人数", "/我的部门人数"):
