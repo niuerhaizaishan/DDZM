@@ -90,6 +90,7 @@ class GroupChatResponse(ApiModel):
     announcements_enabled: bool
     adult_shop_enabled: bool
     performances_enabled: bool
+    lottery_enabled: bool
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None
@@ -108,6 +109,7 @@ class CreateGroupChatRequest(ApiModel):
     announcements_enabled: bool = True
     adult_shop_enabled: bool = False
     performances_enabled: bool = False
+    lottery_enabled: bool = True
     now: AwareDatetime
 
 
@@ -121,6 +123,7 @@ class UpdateGroupChatRequest(ApiModel):
     announcements_enabled: bool | None = None
     adult_shop_enabled: bool | None = None
     performances_enabled: bool | None = None
+    lottery_enabled: bool | None = None
     now: AwareDatetime
 
 
@@ -1239,6 +1242,19 @@ class CompanyLotteryEmployeeTotalResponse(ApiModel):
     net: int
 
 
+class CompanyLotteryReconcileResponse(ApiModel):
+    injected_total: int
+    sales_total: int
+    prize_paid_total: int
+    welfare_paid_total: int
+    credited_total: int
+    pool_balance: int
+    adjustment_balance: int
+    expected_balance: int
+    actual_balance: int
+    balanced: bool
+
+
 class CompanyLotteryOverviewResponse(ApiModel):
     enabled: bool
     pool_balance: int
@@ -1249,6 +1265,7 @@ class CompanyLotteryOverviewResponse(ApiModel):
     ledger: list[CompanyLotteryLedgerEntryResponse]
     prizes: list[CompanyLotteryPrizeResponse]
     employees: list[CompanyLotteryEmployeeTotalResponse]
+    reconcile: CompanyLotteryReconcileResponse
 
 
 class DrawCompanyLotteryRoundRequest(ApiModel):

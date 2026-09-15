@@ -5,8 +5,15 @@ import pytest
 from sqlalchemy import create_engine, delete, func, select
 from sqlalchemy.orm import sessionmaker
 
-from dzmm_bot.core.company_lottery import BEIJING, Ticket
+from dzmm_bot.core.company_lottery import (
+    BEIJING,
+    LOTTERY_PRIZE_SOURCE,
+    LOTTERY_PURCHASE_SOURCE,
+    Ticket,
+)
+from dzmm_bot.core.repository import balance_source_label
 from dzmm_bot.core.schema import (
+    BalanceTransactionRecord,
     Base,
     CompanyLotteryBetRecord,
     CompanyLotteryPoolLedgerRecord,
@@ -1317,9 +1324,219 @@ def test_run_jobs_draws_and_announces_at_the_draw_time(repository, seeded, now):
     assert "【公司双色球开奖】" in texts[0]
     assert "🏆 一等奖 100 —— 小明" in texts[0]
     assert "第 2 期已开卖" in texts[0]
+    # 开奖公告里的对账行必须与结算结果一致
+    assert "流水校验：期初 100 ＋ 售票 2 ＝ 派奖 100 ＋ 溢出 0 ＋ 期末 2" in texts[0]
 
     assert repository.company_lottery_round_by_number(1).state == "drawn"
     assert repository.current_company_lottery_round().round_number == 2
+
+
+def test_draw_announcement_stays_a_single_group_message(repository, seeded, now):
+    """群消息上限是 10 个换行；对账信息不能把开奖公告挤成两条。"""
+    repository.run_company_lottery_jobs(now)
+    view = repository.current_company_lottery_round()
+    seed_pool(repository, 100)
+    repository.buy_company_lottery_tickets(
+        UUID("00000000-0000-0000-0000-0000000004a1"),
+        "p1",
+        [answer_for(repository, view.id)],
+        now,
+    )
+
+    repository.run_company_lottery_jobs(DRAW_AT)
+
+    assert len(outbound_texts(repository)) == 1
+
+
+# --------------------------------------------------------------------------- 对账
+
+def test_reconcile_reports_a_balanced_ledger(repository, seeded, now):
+    repository.run_company_lottery_jobs(now)
+    view = repository.current_company_lottery_round()
+    seed_pool(repository, 100)
+    repository.buy_company_lottery_tickets(
+        UUID("00000000-0000-0000-0000-0000000005a1"),
+        "p1",
+        [answer_for(repository, view.id)],
+        now,
+    )
+    repository.run_company_lottery_jobs(DRAW_AT)
+
+    recon = repository.company_lottery_overview().reconcile
+
+    assert recon.injected_total == 100
+    assert recon.sales_total == 2
+    assert recon.prize_paid_total == 100
+    assert recon.welfare_paid_total == 0
+    assert (recon.pool_balance, recon.adjustment_balance) == (2, 0)
+    assert recon.expected_balance == 2
+    assert recon.actual_balance == 2
+    assert recon.balanced is True
+
+
+def test_reconcile_counts_welfare_and_manual_deposits(repository, seeded, now):
+    repository.ensure_company_lottery_round(now)
+    repository.deposit_company_lottery_pool(7, now)
+    seed_account(repository, "adjustment", 5)
+
+    assert repository.settle_company_lottery_welfare(now).status == "paid"
+    recon = repository.company_lottery_overview().reconcile
+
+    # 启动奖池 100 + 后台注资 7 + 调节金注入 5，全部算系统注入
+    assert recon.injected_total == 112
+    assert recon.sales_total == 0
+    assert recon.welfare_paid_total == 2
+    assert recon.credited_total == 2
+    assert recon.expected_balance == 110
+    assert recon.actual_balance == 110
+    assert recon.balanced is True
+
+
+def test_draw_is_idempotent_across_repeated_ticks(repository, seeded, now):
+    repository.run_company_lottery_jobs(now)
+    view = repository.current_company_lottery_round()
+    seed_pool(repository, 100)
+    repository.buy_company_lottery_tickets(
+        UUID("00000000-0000-0000-0000-0000000005a2"),
+        "p1",
+        [answer_for(repository, view.id)],
+        now,
+    )
+
+    for _ in range(3):
+        repository.run_company_lottery_jobs(DRAW_AT)
+
+    recon = repository.company_lottery_overview().reconcile
+    assert recon.prize_paid_total == 100
+    assert recon.balanced is True
+    assert len(repository.company_lottery_overview().rounds) == 2
+
+
+# --------------------------------------------------------------------------- 余额流水来源
+
+def test_balance_sources_are_stable_tokens_with_labels(repository, seeded, now):
+    repository.run_company_lottery_jobs(now)
+    view = repository.current_company_lottery_round()
+    seed_pool(repository, 100)
+    repository.buy_company_lottery_tickets(
+        UUID("00000000-0000-0000-0000-0000000006a1"),
+        "p1",
+        [answer_for(repository, view.id)],
+        now,
+    )
+    repository.run_company_lottery_jobs(DRAW_AT)
+
+    with repository._session() as session:
+        sources = set(
+            session.scalars(
+                select(BalanceTransactionRecord.source).where(
+                    BalanceTransactionRecord.source.like("company_lottery%")
+                )
+            )
+        )
+
+    assert sources == {LOTTERY_PURCHASE_SOURCE, LOTTERY_PRIZE_SOURCE}
+    for source in sources:
+        assert balance_source_label(source) != source
+
+
+def test_lottery_flows_stay_out_of_daily_income(repository, seeded, now):
+    """中奖不是劳动收益：一次头奖不该把人顶上今日收益榜。"""
+    repository.run_company_lottery_jobs(now)
+    view = repository.current_company_lottery_round()
+    seed_pool(repository, 100)
+    repository.buy_company_lottery_tickets(
+        UUID("00000000-0000-0000-0000-0000000006a2"),
+        "p1",
+        [answer_for(repository, view.id)],
+        now,
+    )
+    repository.run_company_lottery_jobs(DRAW_AT)
+    with repository._session() as session:
+        user_id = session.scalar(
+            select(UserRecord.id).where(UserRecord.platform_id == "p1")
+        )
+
+    assert balance_of(repository, "p1") == 198
+    assert repository.today_income(user_id, DRAW_AT) == 0
+    with repository._session() as session:
+        assert repository._income_rankings(session, DRAW_AT) == []
+
+
+def test_daily_income_before_the_draw_only_has_the_ticket_cost(repository, seeded, now):
+    """购票是负数，本来就不进收益；这里确认它没有意外变成正数。"""
+    repository.run_company_lottery_jobs(now)
+    view = repository.current_company_lottery_round()
+    repository.buy_company_lottery_tickets(
+        UUID("00000000-0000-0000-0000-0000000006a3"),
+        "p1",
+        [ticket((1, 2, 3, 4), 1)],
+        now,
+    )
+    with repository._session() as session:
+        user_id = session.scalar(
+            select(UserRecord.id).where(UserRecord.platform_id == "p1")
+        )
+
+    assert repository.today_income(user_id, now) == 0
+
+
+# --------------------------------------------------------------------------- 群级入口开关
+
+def set_group_switch(repository, group_id, **flags):
+    """测试辅助建的群没有 chat_url，走不了 update_group_chat，直接改列。"""
+    with repository._session() as session:
+        record = session.get(GroupChatRecord, group_id)
+        for name, value in flags.items():
+            setattr(record, name, value)
+
+
+def test_disabled_group_skips_lottery_announcements(repository, seeded, now):
+    set_group_switch(repository, SECOND_GROUP_CHAT_ID, lottery_enabled=False)
+    repository.run_company_lottery_jobs(now)
+    view = repository.current_company_lottery_round()
+    seed_pool(repository, 100)
+    repository.buy_company_lottery_tickets(
+        UUID("00000000-0000-0000-0000-0000000007a1"),
+        "p1",
+        [answer_for(repository, view.id)],
+        now,
+    )
+
+    repository.run_company_lottery_jobs(DRAW_AT)
+
+    assert outbound_texts(repository, PRIMARY_GROUP_CHAT_ID)
+    assert outbound_texts(repository, SECOND_GROUP_CHAT_ID) == []
+
+
+def test_announcements_respect_the_announcement_switch(repository, seeded, now):
+    set_group_switch(repository, SECOND_GROUP_CHAT_ID, announcements_enabled=False)
+    repository.run_company_lottery_jobs(now)
+    view = repository.current_company_lottery_round()
+    seed_pool(repository, 100)
+    repository.buy_company_lottery_tickets(
+        UUID("00000000-0000-0000-0000-0000000007a2"),
+        "p1",
+        [answer_for(repository, view.id)],
+        now,
+    )
+
+    repository.run_company_lottery_jobs(DRAW_AT)
+
+    assert any(
+        "【公司双色球开奖】" in text
+        for text in outbound_texts(repository, PRIMARY_GROUP_CHAT_ID)
+    )
+    assert outbound_texts(repository, SECOND_GROUP_CHAT_ID) == []
+
+
+def test_disabled_group_cannot_buy_but_the_round_still_runs(repository, seeded, now):
+    set_group_switch(repository, PRIMARY_GROUP_CHAT_ID, lottery_enabled=False)
+    repository.run_company_lottery_jobs(now)
+
+    # 期次是全公司的，开卖与否不受单群开关影响
+    assert repository.current_company_lottery_round().round_number == 1
+
 
 
 def test_run_jobs_does_not_draw_before_the_draw_time(repository, seeded, now):

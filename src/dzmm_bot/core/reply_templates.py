@@ -574,6 +574,7 @@ TEMPLATE_DEFINITIONS = (
     TemplateDefinition("/撤回投稿", "withdrawn", "投稿已撤回", "投稿 #{投稿编号} 已撤回。", ("{投稿编号}", "{日期}")),
     # ---------------------------------------------------------------- 公司双色球
     TemplateDefinition("/购买彩票", "group_only", "仅限群聊", "请回到群里购买彩票。", ("{日期}",)),
+    TemplateDefinition("/购买彩票", "group_disabled", "本群未开放", "本群未开放公司双色球，去开放了的群玩吧。", ("{日期}",)),
     TemplateDefinition("/购买彩票", "not_joined", "未入职", "请先用 /入职 名字 加入摸鱼公司。", ("{日期}",)),
     TemplateDefinition("/购买彩票", "disabled", "玩法关闭", "本群暂未开放公司双色球。", ("{日期}",)),
     TemplateDefinition("/购买彩票", "closed", "已停售", "本期已于 {截止时刻} 停售，下一期开卖后可以再买。", ("{截止时刻}", "{日期}")),
@@ -665,6 +666,7 @@ TEMPLATE_DEFINITIONS = (
     ),
     TemplateDefinition("/彩票", "not_open", "暂无期次", "当前没有开放的彩票期次，稍后再来。", ("{日期}",)),
     TemplateDefinition("/彩票", "group_only", "仅限群聊", "请回到群里查看彩票信息。", ("{日期}",)),
+    TemplateDefinition("/彩票", "group_disabled", "本群未开放", "本群未开放公司双色球，去开放了的群看吧。", ("{日期}",)),
     TemplateDefinition(
         "/我的彩票",
         "shown",
@@ -674,6 +676,7 @@ TEMPLATE_DEFINITIONS = (
     ),
     TemplateDefinition("/我的彩票", "empty", "还没有记录", "你还没有买过彩票。", ("{日期}",)),
     TemplateDefinition("/我的彩票", "group_only", "仅限群聊", "请回到群里查看彩票记录。", ("{日期}",)),
+    TemplateDefinition("/我的彩票", "group_disabled", "本群未开放", "本群未开放公司双色球，去开放了的群看吧。", ("{日期}",)),
     TemplateDefinition(
         "/彩票验证",
         "shown",
@@ -683,10 +686,13 @@ TEMPLATE_DEFINITIONS = (
     ),
     TemplateDefinition("/彩票验证", "usage", "核验格式", "格式：/彩票验证 期号", ("{日期}",)),
     TemplateDefinition("/彩票验证", "not_found", "期次不存在", "没有找到该期已开奖记录。", ("{日期}",)),
+    TemplateDefinition("/彩票验证", "group_disabled", "本群未开放", "本群未开放公司双色球，去开放了的群核验吧。", ("{日期}",)),
     TemplateDefinition("/取消彩票", "cancelled", "草稿已取消", "已放弃购票草稿，未扣款。", ("{日期}",)),
     TemplateDefinition("/取消彩票", "no_draft", "没有草稿", "你当前没有正在填写的购票草稿。", ("{日期}",)),
+    TemplateDefinition("/取消彩票", "group_disabled", "本群未开放", "本群未开放公司双色球，去开放了的群买吧。", ("{日期}",)),
     TemplateDefinition("/确认彩票", "no_draft", "没有草稿", "你当前没有正在填写的购票草稿。", ("{日期}",)),
     TemplateDefinition("/确认彩票", "empty_draft", "草稿为空", "草稿里还没有号码，先发一注号码或「机选」。", ("{日期}",)),
+    TemplateDefinition("/确认彩票", "group_disabled", "本群未开放", "本群未开放公司双色球，去开放了的群买吧。", ("{日期}",)),
 )
 
 

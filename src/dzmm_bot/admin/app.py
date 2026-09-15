@@ -406,6 +406,10 @@ def create_app(
                 and not isinstance(request["performances_enabled"], bool)
             )
             or (
+                "lottery_enabled" in request
+                and not isinstance(request["lottery_enabled"], bool)
+            )
+            or (
                 "enabled_game_types" in request
                 and (
                     not isinstance(request["enabled_game_types"], list)
@@ -423,6 +427,7 @@ def create_app(
             **{key: request[key] for key in required},
             "adult_shop_enabled": request.get("adult_shop_enabled", False),
             "performances_enabled": request.get("performances_enabled", False),
+            "lottery_enabled": request.get("lottery_enabled", True),
             "enabled_game_types": request.get(
                 "enabled_game_types", list(GROUP_GAME_TYPES)
             ),
@@ -457,6 +462,7 @@ def create_app(
             "announcements_enabled",
             "adult_shop_enabled",
             "performances_enabled",
+            "lottery_enabled",
         }
         if not request or set(request) - allowed:
             raise HTTPException(

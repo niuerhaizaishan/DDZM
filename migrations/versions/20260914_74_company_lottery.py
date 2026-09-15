@@ -359,6 +359,21 @@ def _seed_knowledge_card() -> None:
     )
 
 
+def _add_group_switch() -> None:
+    """每个群一个彩票入口开关；默认开启，让升级后的行为与升级前一致。"""
+    if not sa.inspect(op.get_bind()).has_table("group_chats"):
+        return
+    with op.batch_alter_table("group_chats") as batch:
+        batch.add_column(
+            sa.Column(
+                "lottery_enabled",
+                sa.Boolean(),
+                nullable=False,
+                server_default=sa.true(),
+            )
+        )
+
+
 def upgrade() -> None:
     _create_settings()
     _create_rounds()
@@ -366,12 +381,16 @@ def upgrade() -> None:
     _create_drafts()
     _create_pool_ledger()
     _create_welfare()
+    _add_group_switch()
     _seed_settings()
     _seed_pool()
     _seed_knowledge_card()
 
 
 def downgrade() -> None:
+    if sa.inspect(op.get_bind()).has_table("group_chats"):
+        with op.batch_alter_table("group_chats") as batch:
+            batch.drop_column("lottery_enabled")
     if sa.inspect(op.get_bind()).has_table("ai_knowledge_cards"):
         cards = sa.table("ai_knowledge_cards", sa.column("id", sa.Uuid()))
         op.get_bind().execute(

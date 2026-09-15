@@ -644,7 +644,13 @@ function renderCompanyLotteryOverview(overview) {
     <article class="data-row"><div><b>第 ${item.round_number} 期 · ${escapeHtml(item.display_name)} · ${escapeHtml(companyLotteryTierLabel(item.tier))}</b><small>号码：${escapeHtml(item.ticket)}</small><small>面值 ${item.merited_amount} → 实发 ${item.prize_amount} 摸鱼币${item.settled_at ? ` · ${escapeHtml(formatHeartbeat(item.settled_at))}` : ""}</small></div></article>`).join("") || '<p class="muted">还没有中奖记录。</p>';
 
   document.querySelector("#company-lottery-employees").innerHTML = overview.employees.map((item) => `
-    <article class="data-row"><div><b>${escapeHtml(item.display_name)}</b><small>投注 ${item.tickets} 注 · 累计投入 ${item.cost} · 累计中奖 ${item.prize} 摸鱼币</small><small>净收益 ${item.net > 0 ? "+" : ""}${item.net} 摸鱼币</small></div></article>`).join("") || '<p class="muted">本群还没有员工买过彩票。</p>';
+    <article class="data-row"><div><b>${escapeHtml(item.display_name)}</b><small>投注 ${item.tickets} 注 · 累计投入 ${item.cost} · 累计中奖 ${item.prize} 摸鱼币</small><small>净收益 ${item.net > 0 ? "+" : ""}${item.net} 摸鱼币</small></div></article>`).join("") || '<p class="muted">还没有员工买过彩票。</p>';
+
+  const recon = overview.reconcile;
+  document.querySelector("#company-lottery-reconcile").innerHTML = `
+    <article><span>对账结果</span><strong>${recon.balanced ? "收入与支出平衡" : "⚠️ 账目不符"}</strong><small>系统注入 ${recon.injected_total} + 售票 ${recon.sales_total} − 员工入账 ${recon.credited_total} = 应余 ${recon.expected_balance}</small></article>
+    <article><span>实际余额</span><strong>${recon.actual_balance} 摸鱼币</strong><small>奖池 ${recon.pool_balance} ＋ 调节金 ${recon.adjustment_balance}</small></article>
+    <article><span>员工侧入账</span><strong>${recon.credited_total} 摸鱼币</strong><small>中奖 ${recon.prize_paid_total} ＋ 全员福利 ${recon.welfare_paid_total}</small></article>`;
 }
 
 function renderDarkMarketDetail(item) {
@@ -1885,6 +1891,7 @@ function renderGroupChats(items) {
       ["公告", group.announcements_enabled],
       ["成人商店", group.adult_shop_enabled],
       ["公演预约", group.performances_enabled],
+      ["彩票入口", group.lottery_enabled],
     ].map(([label, enabled]) => `${label}：${enabled ? "开" : "关"}`).join(" · ");
     return `<article class="data-row"><div><b>${escapeHtml(group.name)}</b><small>${statusBadge(groupConnectionLabel(runtime.connection_state), runtime.connection_state === "connected" ? "success" : runtime.connection_state === "failed" ? "warning" : "")}</small><small>群聊 ID：${escapeHtml(group.chatroom_id || "未识别")} · ${escapeHtml(switches)}</small><small>已开启玩法：${escapeHtml(gameSummary)}</small><small>${escapeHtml(group.chat_url || "未配置链接")}</small><small>最近接收：${formatHeartbeat(runtime.last_inbound_at)} · 最近发送：${formatHeartbeat(runtime.last_outbound_at)}</small>${runtime.last_error_summary ? `<small class="form-error">${escapeHtml(runtime.last_error_summary)}</small>` : ""}</div><div class="command-actions"><button class="secondary" data-add-group-chat-bot="${group.id}" type="button" ${group.chatroom_id ? "" : "disabled"}>添加长消息 Bot</button><button class="secondary" data-edit-group-chat="${group.id}" type="button">编辑</button><button class="danger-button" data-delete-group-chat="${group.id}" type="button" ${group.listening_enabled ? "disabled" : ""}>删除</button></div></article>`;
   }).join("") || '<p class="muted">还没有可管理的群聊。</p>';
@@ -1914,6 +1921,7 @@ function openGroupChatModal(group = null) {
   document.querySelector("#group-chat-announcements-enabled").checked = group?.announcements_enabled ?? true;
   document.querySelector("#group-chat-adult-shop-enabled").checked = group?.adult_shop_enabled ?? false;
   document.querySelector("#group-chat-performances-enabled").checked = group?.performances_enabled ?? false;
+  document.querySelector("#group-chat-lottery-enabled").checked = group?.lottery_enabled ?? true;
   groupChatModal.hidden = false;
   document.querySelector("#group-chat-name").focus();
 }
@@ -2617,6 +2625,7 @@ document.querySelector("#save-group-chat").addEventListener("click", async (even
     announcements_enabled: document.querySelector("#group-chat-announcements-enabled").checked,
     adult_shop_enabled: document.querySelector("#group-chat-adult-shop-enabled").checked,
     performances_enabled: document.querySelector("#group-chat-performances-enabled").checked,
+    lottery_enabled: document.querySelector("#group-chat-lottery-enabled").checked,
   };
   try {
     await runMutation(event.currentTarget, "保存中…", async () => {

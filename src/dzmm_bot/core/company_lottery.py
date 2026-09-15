@@ -68,6 +68,15 @@ class OrderKind(StrEnum):
 QUICK_ALIASES: frozenset[str] = frozenset({"机选", "随机", "机", "random", "quick"})
 COMMAND_ALIASES: dict[str, str] = {"买彩票": "购买彩票"}
 
+# 余额流水的来源用稳定 token（与红包、德州扑克一致），中文标签在仓储层的
+# _BALANCE_SOURCE_LABELS 里；这样「今日收益」与收益榜才能按来源过滤掉彩票。
+LOTTERY_PURCHASE_SOURCE = "company_lottery_purchase"
+LOTTERY_PRIZE_SOURCE = "company_lottery_prize"
+LOTTERY_WELFARE_SOURCE = "company_lottery_welfare"
+LOTTERY_BALANCE_SOURCES: frozenset[str] = frozenset(
+    {LOTTERY_PURCHASE_SOURCE, LOTTERY_PRIZE_SOURCE, LOTTERY_WELFARE_SOURCE}
+)
+
 _SPLIT = re.compile(r"[\s,+，]+")
 
 
@@ -127,6 +136,34 @@ class WelfareCheck:
     fund_after: int
     per_person: int
     paid_total: int
+
+
+def verify_round_conservation(settlement: RoundSettlement) -> None:
+    """奖池守恒：期初 + 本期售票 = 溢出转出 + 实付派奖 + 奖池期末。
+
+    彩票是唯一「有系统净注入、奖池跨期滚存、还分两本账」的玩法，一旦结算或账本
+    写入出错，摸鱼币会静默消失或多出来，所以这里做成硬断言而不是只显示数字。
+    """
+    if (
+        settlement.pool_opening + settlement.sales
+        != settlement.overflow + settlement.paid_total + settlement.pool_closing
+    ):
+        raise RuntimeError(
+            "公司双色球奖池不守恒："
+            f"期初 {settlement.pool_opening} + 售票 {settlement.sales} != "
+            f"溢出 {settlement.overflow} + 派奖 {settlement.paid_total} + "
+            f"期末 {settlement.pool_closing}"
+        )
+    if sum(settlement.per_user_paid.values()) != settlement.paid_total:
+        raise RuntimeError("公司双色球员工侧派奖合计与实付不一致")
+
+
+def verify_welfare_conservation(check: WelfareCheck) -> None:
+    """福利守恒：调节金发放前 = 发放额 + 剩余，且发放额按人头整除。"""
+    if check.fund_before != check.paid_total + check.fund_after:
+        raise RuntimeError("公司双色球调节金不守恒")
+    if check.triggered and check.employee_count * check.per_person != check.paid_total:
+        raise RuntimeError("公司双色球福利发放额与人数不一致")
 
 
 def draw_numbers(*, red_pool: int = DEFAULT_RED_POOL,

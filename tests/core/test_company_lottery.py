@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -24,6 +25,8 @@ from dzmm_bot.core.company_lottery import (
     should_notify_close,
     tier_counts,
     total_combinations,
+    verify_round_conservation,
+    verify_welfare_conservation,
     winning_combinations,
 )
 
@@ -278,6 +281,73 @@ def test_settle_round_pool_recovers_after_a_head_prize():
         trail.append(pool)
 
     assert trail == [100, 160, 200, 200, 200]
+
+
+# --------------------------------------------------------------------------- 守恒校验
+
+@pytest.mark.parametrize(
+    ("sales", "winners", "pool_opening"),
+    [
+        (0, [], 0),
+        (2, [("u1", PrizeTier.HEAD)], 100),
+        (60, [], 200),
+        (60, [("u1", PrizeTier.HEAD), ("u2", PrizeTier.THIRD)], 150),
+        (4, [("u1", PrizeTier.FIFTH)], 0),
+        (100, [("u1", PrizeTier.SECOND)] * 5, 200),
+    ],
+)
+def test_round_conservation_holds_for_every_settlement(sales, winners, pool_opening):
+    settlement = settle_round(
+        pool_opening=pool_opening,
+        sales=sales,
+        winners=winners,
+        prizes=DEFAULT_PRIZES,
+    )
+
+    verify_round_conservation(settlement)
+
+
+def test_round_conservation_rejects_a_broken_settlement():
+    settlement = settle_round(
+        pool_opening=100, sales=2, winners=[], prizes=DEFAULT_PRIZES
+    )
+    broken = replace(settlement, pool_closing=settlement.pool_closing + 1)
+
+    with pytest.raises(RuntimeError, match="奖池不守恒"):
+        verify_round_conservation(broken)
+
+
+def test_round_conservation_rejects_a_payout_mismatch():
+    settlement = settle_round(
+        pool_opening=100,
+        sales=2,
+        winners=[("u1", PrizeTier.HEAD)],
+        prizes=DEFAULT_PRIZES,
+    )
+    broken = replace(settlement, per_user_paid={"u1": settlement.paid_total - 1})
+
+    with pytest.raises(RuntimeError, match="派奖合计"):
+        verify_round_conservation(broken)
+
+
+@pytest.mark.parametrize(
+    ("fund", "employee_count", "per_person"),
+    [(0, 3, 1), (2, 3, 1), (3, 3, 1), (5, 3, 1), (100, 7, 3), (0, 0, 1), (10, 3, 0)],
+)
+def test_welfare_conservation_holds_for_every_check(fund, employee_count, per_person):
+    check = check_welfare(
+        fund=fund, employee_count=employee_count, per_person=per_person
+    )
+
+    verify_welfare_conservation(check)
+
+
+def test_welfare_conservation_rejects_a_broken_check():
+    check = check_welfare(fund=5, employee_count=3, per_person=1)
+    broken = replace(check, fund_after=check.fund_after + 1)
+
+    with pytest.raises(RuntimeError, match="调节金不守恒"):
+        verify_welfare_conservation(broken)
 
 
 # --------------------------------------------------------------------------- 全员福利

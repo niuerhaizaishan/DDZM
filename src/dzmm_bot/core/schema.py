@@ -82,6 +82,9 @@ class GroupChatRecord(Base):
     performances_enabled: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=false(), nullable=False
     )
+    lottery_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=true(), nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
     deleted_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)

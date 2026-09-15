@@ -130,6 +130,36 @@ def test_commands_are_group_only():
     assert reply == "请回到群里查看彩票信息。"
 
 
+def test_group_switch_blocks_the_whole_command_set():
+    from dzmm_bot.core.schema import GroupChatRecord
+
+    service, repository, factory, group, now = _setup()
+    with repository._session() as session:
+        session.get(GroupChatRecord, group.id).lottery_enabled = False
+
+    _send(service, group, "m1", "p1", "/彩票", now)
+    assert _reply(factory) == "本群未开放公司双色球，去开放了的群看吧。"
+    _send(service, group, "m2", "p1", "/购买彩票 机选", now)
+    assert _reply(factory) == "本群未开放公司双色球，去开放了的群玩吧。"
+    _send(service, group, "m3", "p1", "/我的彩票", now)
+    assert _reply(factory) == "本群未开放公司双色球，去开放了的群看吧。"
+    _send(service, group, "m4", "p1", "/彩票验证 1", now)
+    assert _reply(factory) == "本群未开放公司双色球，去开放了的群核验吧。"
+
+
+def test_group_switch_also_blocks_the_draft_step():
+    from dzmm_bot.core.schema import GroupChatRecord
+
+    service, repository, factory, group, now = _setup()
+    _send(service, group, "m1", "p1", "/购买彩票 2 注", now)
+    with repository._session() as session:
+        session.get(GroupChatRecord, group.id).lottery_enabled = False
+
+    _send(service, group, "m2", "p1", "03 07 09 10 + 05", now)
+
+    assert _reply(factory) == "本群未开放公司双色球，去开放了的群玩吧。"
+
+
 def test_help_explains_the_lottery_rules_and_expectation():
     service, repository, factory, group, now = _setup()
 

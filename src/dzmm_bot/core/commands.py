@@ -104,7 +104,7 @@ class GroupCommandHandler:
         group_chat_id = None if group is None else group.id
         if command in _LOTTERY_COMMANDS:
             return self._company_lottery(
-                message, command, content, received_at, group_chat_id
+                message, command, content, received_at, group
             )
         if command == "/上场":
             return self._memory_guild_lineup(message, content, received_at)
@@ -4334,6 +4334,12 @@ class GroupCommandHandler:
         if status != "active":
             return None
 
+        group = self._company_lottery_group(message)
+        if group is None:
+            return None
+        if not group.lottery_enabled:
+            return self._reply("/购买彩票", "group_disabled", received_at)
+
         if quick:
             result = self._repository.append_quick_pick_to_draft(
                 message.sender_platform_id, received_at
@@ -4343,6 +4349,12 @@ class GroupCommandHandler:
                 message.sender_platform_id, ticket, received_at
             )
         return self._company_lottery_draft_reply(result, received_at)
+
+    def _company_lottery_group(self, message: InboundMessage):
+        """取来源群的配置；解析不到（非群消息、没监听、已删除）就返回 None。"""
+        if message.source_type != "group" or message.chatroom_id is None:
+            return None
+        return self._repository.resolve_enabled_group_chat(message.chatroom_id)
 
     def _company_lottery_parse_single(self, content: str):
         settings = self._repository.get_company_lottery_settings()
@@ -4358,10 +4370,12 @@ class GroupCommandHandler:
 
     def _company_lottery(
         self, message: InboundMessage, command: str, content: str,
-        received_at, group_chat_id,
+        received_at, group,
     ) -> str | list[str] | None:
-        if message.source_type != "group" or group_chat_id is None:
+        if message.source_type != "group" or group is None:
             return self._reply(command, "group_only", received_at)
+        if not group.lottery_enabled:
+            return self._reply(command, "group_disabled", received_at)
 
         if command == "/彩票":
             view = self._repository.current_company_lottery_round(

@@ -102,6 +102,7 @@ from .api_models import (
     CompanyLotteryPrizeResponse,
     CompanyLotteryEmployeeTotalResponse,
     CompanyLotteryOverviewResponse,
+    CompanyLotteryReconcileResponse,
     CompanyLotteryDrawResponse,
     CompanyLotteryPoolBalancesResponse,
     DrawCompanyLotteryRoundRequest,
@@ -335,6 +336,7 @@ def create_app(
                 enabled_game_types=request.enabled_game_types,
                 adult_shop_enabled=request.adult_shop_enabled,
                 performances_enabled=request.performances_enabled,
+                lottery_enabled=request.lottery_enabled,
             )
         except (ValueError, GroupChatConflict) as error:
             raise HTTPException(status.HTTP_409_CONFLICT, str(error))
@@ -421,6 +423,7 @@ def create_app(
                 announcements_enabled=request.announcements_enabled,
                 adult_shop_enabled=request.adult_shop_enabled,
                 performances_enabled=request.performances_enabled,
+                lottery_enabled=request.lottery_enabled,
                 now=request.now,
             )
         except LookupError as error:
@@ -3309,6 +3312,7 @@ def _group_chat_response(group, runtime) -> GroupChatResponse:
         announcements_enabled=group.announcements_enabled,
         adult_shop_enabled=group.adult_shop_enabled,
         performances_enabled=group.performances_enabled,
+        lottery_enabled=group.lottery_enabled,
         created_at=group.created_at,
         updated_at=group.updated_at,
         deleted_at=group.deleted_at,
@@ -3935,6 +3939,18 @@ def _company_lottery_overview_response(
             )
             for item in overview.employees
         ],
+        reconcile=CompanyLotteryReconcileResponse(
+            injected_total=overview.reconcile.injected_total,
+            sales_total=overview.reconcile.sales_total,
+            prize_paid_total=overview.reconcile.prize_paid_total,
+            welfare_paid_total=overview.reconcile.welfare_paid_total,
+            credited_total=overview.reconcile.credited_total,
+            pool_balance=overview.reconcile.pool_balance,
+            adjustment_balance=overview.reconcile.adjustment_balance,
+            expected_balance=overview.reconcile.expected_balance,
+            actual_balance=overview.reconcile.actual_balance,
+            balanced=overview.reconcile.balanced,
+        ),
     )
 
 

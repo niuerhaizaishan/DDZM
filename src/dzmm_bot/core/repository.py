@@ -62,6 +62,10 @@ from .company_lottery import (
     DEFAULT_RED_POOL,
     DEFAULT_TICKET_PRICE,
     DEFAULT_WELFARE_PER_PERSON,
+    LOTTERY_BALANCE_SOURCES,
+    LOTTERY_PRIZE_SOURCE,
+    LOTTERY_PURCHASE_SOURCE,
+    LOTTERY_WELFARE_SOURCE,
     PrizeTier,
     Ticket,
     commit_hash,
@@ -74,6 +78,8 @@ from .company_lottery import (
     settle_round,
     should_notify_close,
     total_combinations,
+    verify_round_conservation,
+    verify_welfare_conservation,
 )
 from .dark_market import (
     DarkMarketListingView,
@@ -310,6 +316,7 @@ class GroupChatConfig:
     announcements_enabled: bool
     adult_shop_enabled: bool
     performances_enabled: bool
+    lottery_enabled: bool
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None
@@ -428,6 +435,7 @@ def _group_chat_config(record: GroupChatRecord) -> GroupChatConfig:
         announcements_enabled=record.announcements_enabled,
         adult_shop_enabled=record.adult_shop_enabled,
         performances_enabled=record.performances_enabled,
+        lottery_enabled=record.lottery_enabled,
         created_at=record.created_at,
         updated_at=record.updated_at,
         deleted_at=record.deleted_at,
@@ -497,6 +505,9 @@ _BALANCE_SOURCE_LABELS = {
     "shop_gift": "赠送卡到账",
     "shop_scratch": "刮刮卡奖励",
     "shop_compensation": "卡片作废补偿",
+    "company_lottery_purchase": "公司双色球购票",
+    "company_lottery_prize": "公司双色球中奖",
+    "company_lottery_welfare": "公司双色球全员福利",
 }
 _DEFAULT_RED_PACKET_EXPIRY_MINUTES = 10
 _DEFAULT_RED_PACKET_EMPTY_PROBABILITY_PERCENT = 5
@@ -2247,6 +2258,9 @@ class CompanyLotteryDrawResult:
     haircut: Decimal | None
     capped_users: tuple[str, ...]
     winners: tuple[CompanyLotteryWinner, ...]
+    pool_opening: int
+    pool_overflow: int
+    pool_closing: int
     pool_balance: int
     adjustment_balance: int
     next_round_number: int
@@ -2317,6 +2331,35 @@ class CompanyLotteryEmployeeTotal:
 
 
 @dataclass(frozen=True)
+class CompanyLotteryReconcile:
+    """全公司彩票对账：系统注入了多少、收了多少、发出去了多少、账上还剩多少。"""
+
+    injected_total: int
+    sales_total: int
+    prize_paid_total: int
+    welfare_paid_total: int
+    pool_balance: int
+    adjustment_balance: int
+
+    @property
+    def credited_total(self) -> int:
+        return self.prize_paid_total + self.welfare_paid_total
+
+    @property
+    def expected_balance(self) -> int:
+        """注入 + 售票 − 员工侧入账，应该正好等于两本账的余额之和。"""
+        return self.injected_total + self.sales_total - self.credited_total
+
+    @property
+    def actual_balance(self) -> int:
+        return self.pool_balance + self.adjustment_balance
+
+    @property
+    def balanced(self) -> bool:
+        return self.expected_balance == self.actual_balance
+
+
+@dataclass(frozen=True)
 class CompanyLotteryOverview:
     enabled: bool
     pool_balance: int
@@ -2327,6 +2370,7 @@ class CompanyLotteryOverview:
     ledger: tuple[CompanyLotteryLedgerEntry, ...]
     prizes: tuple[CompanyLotteryPrizeRecord, ...]
     employees: tuple[CompanyLotteryEmployeeTotal, ...]
+    reconcile: CompanyLotteryReconcile
 
 
 class CoreRepository:
@@ -2468,6 +2512,7 @@ class CoreRepository:
         enabled_game_types: Sequence[str] | None = None,
         adult_shop_enabled: bool = False,
         performances_enabled: bool = False,
+        lottery_enabled: bool = True,
     ) -> GroupChatConfig:
         normalized_name = self._validate_group_chat_name(name)
         with self._session() as session:
@@ -2495,6 +2540,7 @@ class CoreRepository:
                 announcements_enabled=announcements_enabled,
                 adult_shop_enabled=adult_shop_enabled,
                 performances_enabled=performances_enabled,
+                lottery_enabled=lottery_enabled,
                 created_at=now,
                 updated_at=now,
             )
@@ -2524,6 +2570,7 @@ class CoreRepository:
         announcements_enabled: bool | None = None,
         adult_shop_enabled: bool | None = None,
         performances_enabled: bool | None = None,
+        lottery_enabled: bool | None = None,
         now: datetime,
     ) -> GroupChatConfig:
         with self._session() as session:
@@ -2593,6 +2640,8 @@ class CoreRepository:
                 record.adult_shop_enabled = adult_shop_enabled
             if performances_enabled is not None:
                 record.performances_enabled = performances_enabled
+            if lottery_enabled is not None:
+                record.lottery_enabled = lottery_enabled
             record.updated_at = now
             runtime = session.get(GroupChatRuntimeStateRecord, group_id)
             if runtime is not None:
@@ -22548,6 +22597,9 @@ class CoreRepository:
                 select(func.coalesce(func.sum(BalanceTransactionRecord.amount), 0)).where(
                     BalanceTransactionRecord.user_id == user_id,
                     BalanceTransactionRecord.amount > 0,
+                    # 彩票是零和再分配，中奖不是劳动收益；购票是负数也不抵扣，
+                    # 混进来会让一次头奖直接霸榜，所以整个玩法排除在收益之外。
+                    BalanceTransactionRecord.source.not_in(LOTTERY_BALANCE_SOURCES),
                     BalanceTransactionRecord.occurred_at >= start,
                     BalanceTransactionRecord.occurred_at < end,
                 )
@@ -22988,6 +23040,8 @@ class CoreRepository:
                 )
                 .where(
                     BalanceTransactionRecord.amount > 0,
+                    # 与 today_income 同一口径：彩票中奖不计入收益榜
+                    BalanceTransactionRecord.source.not_in(LOTTERY_BALANCE_SOURCES),
                     BalanceTransactionRecord.occurred_at >= start,
                     BalanceTransactionRecord.occurred_at < end,
                 )
@@ -27647,6 +27701,37 @@ class CoreRepository:
 
             employee_count = len(self._company_lottery_employee_ids(session, 0, None))
 
+            injected_total = int(
+                session.scalar(
+                    select(
+                        func.coalesce(func.sum(CompanyLotteryPoolLedgerRecord.amount), 0)
+                    ).where(
+                        # 系统凭空注入的钱：迁移种入的启动奖池、首期兜底、后台手动注资，
+                        # 两本账都要算，否则对账等式不成立。
+                        CompanyLotteryPoolLedgerRecord.kind.in_(("deposit", "manual")),
+                    )
+                )
+                or 0
+            )
+            sales_total = int(
+                session.scalar(
+                    select(func.coalesce(func.sum(CompanyLotteryRoundRecord.gross_amount), 0))
+                )
+                or 0
+            )
+            prize_paid_total = int(
+                session.scalar(
+                    select(func.coalesce(func.sum(CompanyLotteryRoundRecord.paid_total), 0))
+                )
+                or 0
+            )
+            welfare_paid_total = int(
+                session.scalar(
+                    select(func.coalesce(func.sum(CompanyLotteryWelfareRecord.paid_total), 0))
+                )
+                or 0
+            )
+
             return CompanyLotteryOverview(
                 enabled=settings.enabled,
                 pool_balance=pool,
@@ -27717,12 +27802,30 @@ class CoreRepository:
                     )
                     for display_name, tickets, cost, prize in total_rows
                 ),
+                reconcile=CompanyLotteryReconcile(
+                    injected_total=injected_total,
+                    sales_total=sales_total,
+                    prize_paid_total=prize_paid_total,
+                    welfare_paid_total=welfare_paid_total,
+                    pool_balance=pool,
+                    adjustment_balance=adjustment,
+                ),
             )
 
     def _company_lottery_announce(self, text: str) -> int:
-        """把公告广播到所有已配置的群；返回实际投递的群数。"""
+        """把公告广播到所有开着彩票、已启用监听、且愿意接收定时公告的群。
+
+        期次是全公司唯一的，但一个群关掉彩票入口之后不该还被开奖播报刷屏；
+        「接收定时活动/公告」与收入榜等全局定时消息同一口径。
+        """
         delivered = 0
         for group in self.list_group_chats():
+            if (
+                not group.lottery_enabled
+                or not group.listening_enabled
+                or not group.announcements_enabled
+            ):
+                continue
             destination = self.group_chat_destination(group.id)
             if destination is None:
                 continue
@@ -28242,6 +28345,7 @@ class CoreRepository:
                     per_person_cap=settings.per_person_cap,
                     pool_ceiling=settings.pool_ceiling,
                 )
+                verify_round_conservation(settlement)
 
                 merited: dict[str, int] = {}
                 for bet, _, tier in judged:
@@ -28273,7 +28377,7 @@ class CoreRepository:
                         self._apply_balance_change(
                             user,
                             actual,
-                            f"公司双色球第{round_row.round_number}期中奖",
+                            LOTTERY_PRIZE_SOURCE,
                             now,
                         )
                     winners.append(
@@ -28326,6 +28430,14 @@ class CoreRepository:
                 round_row.capped_count = len(settlement.capped_users)
                 round_row.winner_count = len(judged)
 
+                # 账本必须与结算结果一致：派奖与溢出都写完之后，奖池余额应等于期末
+                session.flush()
+                if (
+                    self._company_lottery_pool_balance(session, "pool")
+                    != settlement.pool_closing
+                ):
+                    raise RuntimeError("公司双色球奖池账本与结算结果不一致")
+
                 next_round = self._open_company_lottery_round(
                     session,
                     settings_record,
@@ -28345,6 +28457,9 @@ class CoreRepository:
                     haircut=settlement.haircut,
                     capped_users=settlement.capped_users,
                     winners=tuple(winners),
+                    pool_opening=settlement.pool_opening,
+                    pool_overflow=settlement.overflow,
+                    pool_closing=settlement.pool_closing,
                     pool_balance=settlement.pool_closing,
                     adjustment_balance=self._company_lottery_pool_balance(
                         session, "adjustment"
@@ -28458,6 +28573,7 @@ class CoreRepository:
                     employee_count=len(user_ids),
                     per_person=settings.welfare_per_person,
                 )
+                verify_welfare_conservation(check)
                 if not check.triggered:
                     return CompanyLotteryWelfareResult(
                         status="not_due",
@@ -28489,7 +28605,7 @@ class CoreRepository:
                     if user is None:
                         continue
                     self._apply_balance_change(
-                        user, check.per_person, "公司双色球全员福利", now
+                        user, check.per_person, LOTTERY_WELFARE_SOURCE, now
                     )
                     session.add(
                         CompanyLotteryWelfarePayoutRecord(
@@ -28676,7 +28792,7 @@ class CoreRepository:
                 self._apply_balance_change(
                     user,
                     -cost,
-                    f"公司双色球第{round_row.round_number}期购票",
+                    LOTTERY_PURCHASE_SOURCE,
                     now,
                 )
                 self._company_lottery_pool_append(
@@ -28963,8 +29079,13 @@ def _render_lottery_draw(
     if result.capped_users:
         lines.append(f"（{len(result.capped_users)} 人触及单人中奖上限）")
 
+    # 对账信息和余额写在同一行：群消息上限是 10 个换行，多一行就会把开奖公告
+    # 拆成两条（requires_bot_group_sender），这里刻意不新增换行。
     lines.append(
-        f"奖池 {result.pool_balance} 币 ｜ 调节金 {result.adjustment_balance} 币"
+        f"奖池 {result.pool_balance} 币 ｜ 调节金 {result.adjustment_balance} 币 ｜ "
+        f"流水校验：期初 {result.pool_opening} ＋ 售票 {result.gross_amount} ＝ "
+        f"派奖 {result.paid_total} ＋ 溢出 {result.pool_overflow} ＋ "
+        f"期末 {result.pool_closing}"
     )
     lines.append(f"第 {result.next_round_number} 期已开卖 → /购买彩票 机选")
     return "\n".join(lines)
@@ -28977,7 +29098,11 @@ def _render_lottery_welfare(result: CompanyLotteryWelfareResult) -> str:
         f"（当前 {result.employee_count} 名员工）\n"
         f"全员各获得 {result.per_person} 摸鱼币\n"
         "\n"
-        f"调节金剩余 {result.fund_after} 摸鱼币，继续累积"
+        f"调节金剩余 {result.fund_after} 摸鱼币，继续累积\n"
+        "\n【摸鱼币流水】\n"
+        f"调节金 {result.fund_before} ｜ 发放 -{result.paid_total} ｜ "
+        f"剩余 {result.fund_after}\n"
+        "流水校验：发放前 = 发放额 + 剩余"
     )
 
 
