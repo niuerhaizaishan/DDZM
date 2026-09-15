@@ -197,7 +197,7 @@
                 <div id="company-lottery-reconcile" class="settings-card" aria-live="polite"></div>
                 <hr>
                 <div class="list-toolbar"><div class="list-toolbar-controls"><span class="muted">全公司共用一期；公告广播到所有已启用监听的群。</span></div><button id="refresh-company-lottery" class="secondary" type="button">刷新报表</button></div>
-                <div class="panel-heading"><div><h2>现场操作</h2><p class="muted">手动开奖只对已经过了停售时刻的期次生效，并会照常发送开奖公告与全员福利。</p></div></div>
+                <div class="panel-heading"><div><h2>现场操作</h2><p class="muted">手动开奖只对已经过了停售时刻的期次生效，并会照常发送开奖公告。全员福利不在开奖里自动发，需要核心董事会在群里发 <code>/发放福利</code>。</p></div></div>
                 <div class="list-toolbar"><div class="list-toolbar-controls"><label>注入账户<select id="company-lottery-pool-account"><option value="pool">奖池</option><option value="adjustment">调节金</option></select></label><label>金额<input id="company-lottery-pool-amount" type="number" min="1" max="1000000" step="1" value="100"></label></div><button id="company-lottery-draw" class="secondary" type="button">手动开奖</button><button id="company-lottery-pool-deposit" class="secondary" type="button">手动注资</button></div>
                 <div class="panel-heading"><div><h2>期次记录</h2><p class="muted">开奖前不展示号码；开奖后展示号码、盐与派奖结果。</p></div></div>
                 <div id="company-lottery-rounds" class="data-list" aria-live="polite"></div>
@@ -556,7 +556,7 @@
           <label>全员福利每人金额<input id="company-lottery-welfare-per-person" type="number" min="0" max="1000" required></label>
           <label>福利入职时长门槛（小时）<input id="company-lottery-welfare-min-tenure-hours" type="number" min="0" max="8760" required></label>
         </div>
-        <label><input id="company-lottery-welfare-enabled" type="checkbox"> 启用调节金全员福利</label>
+        <label><input id="company-lottery-welfare-enabled" type="checkbox"> 启用调节金全员福利（不自动发放，开奖后由核心董事会发 <code>/发放福利</code> 触发）</label>
         <div class="template-modal-actions"><button class="secondary" data-close-company-lottery-settings-modal type="button">取消</button><button id="save-company-lottery-settings" class="primary" type="button">保存设置</button></div>
       </section>
     </div>

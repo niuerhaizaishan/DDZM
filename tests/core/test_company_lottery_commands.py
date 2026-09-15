@@ -203,6 +203,8 @@ def test_group_switch_blocks_the_whole_command_set():
     assert _reply(factory) == "本群未开放公司双色球，去开放了的群看吧。"
     _send(service, group, "m4", "p1", "/彩票验证 1", now)
     assert _reply(factory) == "本群未开放公司双色球，去开放了的群核验吧。"
+    _send(service, group, "m5", "p1", "/发放福利", now)
+    assert _reply(factory) == "本群未开放公司双色球，去开放了的群发吧。"
 
 
 def test_group_switch_also_blocks_the_draft_step():
@@ -235,6 +237,70 @@ def test_help_index_lists_the_lottery_category():
     _send(service, group, "m1", "p1", "/帮助", now)
 
     assert "/帮助 彩票：公司双色球的玩法、奖级与开奖规则" in _reply(factory)
+
+
+# --------------------------------------------------------------------------- 全员福利
+
+def _promote_to_board(repository, platform_id="p1"):
+    from dzmm_bot.core.schema import RankRecord, UserRecord
+
+    with repository.transaction():
+        with repository._session() as session:
+            board_rank = session.scalar(
+                select(RankRecord).where(RankRecord.is_board.is_(True))
+            )
+            session.scalar(
+                select(UserRecord).where(UserRecord.platform_id == platform_id)
+            ).rank_id = board_rank.id
+
+
+def test_welfare_command_refuses_a_plain_employee():
+    """`/发放福利` 只认核心董事会：普通员工发不动调节金。"""
+    service, repository, factory, group, now = _setup()
+    repository.draw_company_lottery_round(DRAW_AT)
+    repository.deposit_company_lottery_pool(2, DRAW_AT, account="adjustment")
+
+    _send(service, group, "m1", "p1", "/发放福利", DRAW_AT)
+    assert _reply(factory) == "只有核心董事会成员可以发放全员福利。"
+    assert repository.find_user("p1").balance == 100
+    assert repository.find_user("p2").balance == 100
+    assert repository.company_lottery_balances()[1] == 2
+
+
+def test_welfare_command_pays_once_the_board_asks():
+    service, repository, factory, group, now = _setup()
+    repository.draw_company_lottery_round(DRAW_AT)
+    repository.deposit_company_lottery_pool(2, DRAW_AT, account="adjustment")
+    _promote_to_board(repository)
+
+    _send(service, group, "m1", "p1", "/发放福利", DRAW_AT)
+    assert "已发放全员福利" in _reply(factory)
+    assert repository.find_user("p2").balance == 101
+    assert repository.company_lottery_balances()[1] == 0
+
+    # 同一个开奖周期只发得动一轮
+    _send(service, group, "m2", "p1", "/发放福利", DRAW_AT)
+    assert _reply(factory) == "这次开奖的福利已经发过了，下次开奖后再来。"
+    assert repository.find_user("p2").balance == 101
+
+
+def test_welfare_command_refuses_an_outsider():
+    service, repository, factory, group, now = _setup()
+
+    _send(service, group, "m1", "outsider", "/发放福利", DRAW_AT)
+
+    assert _reply(factory) == "请先用 /入职 名称 加入摸鱼公司。"
+
+
+def test_welfare_command_refuses_before_the_draw():
+    service, repository, factory, group, now = _setup()
+    repository.deposit_company_lottery_pool(2, DRAW_AT, account="adjustment")
+    _promote_to_board(repository)
+
+    _send(service, group, "m1", "p1", "/发放福利", DRAW_AT)
+
+    assert _reply(factory) == "还没有开奖记录，开奖结算之后才能发福利。"
+    assert repository.company_lottery_balances()[1] == 2
 
 
 # --------------------------------------------------------------------------- 购票

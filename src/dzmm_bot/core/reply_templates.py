@@ -738,6 +738,20 @@ TEMPLATE_DEFINITIONS = (
     TemplateDefinition("/发放福利", "disabled", "玩法关闭", "本群暂未开放公司双色球。", ("{日期}",)),
     TemplateDefinition("/发放福利", "group_only", "仅限群聊", "请回到群里发放福利。", ("{日期}",)),
     TemplateDefinition("/发放福利", "group_disabled", "本群未开放", "本群未开放公司双色球，去开放了的群发吧。", ("{日期}",)),
+    TemplateDefinition(
+        "/发放福利",
+        "not_joined",
+        "尚未入职",
+        "请先用 /入职 名称 加入摸鱼公司。",
+        ("{日期}",),
+    ),
+    TemplateDefinition(
+        "/发放福利",
+        "not_authorized",
+        "无发放权限",
+        "只有核心董事会成员可以发放全员福利。",
+        ("{日期}",),
+    ),
 )
 
 

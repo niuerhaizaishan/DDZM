@@ -4194,10 +4194,10 @@ class GroupCommandHandler:
                     ("/取消彩票", "/取消彩票：放弃草稿，不扣款"),
                     ("/我的彩票", "/我的彩票：查看本人近期投注、累计投入、累计中奖与净收益"),
                     ("/彩票验证", "/彩票验证 期号：查看已开奖期次的号码、盐与承诺哈希"),
-                    ("/发放福利", "/发放福利：开奖之后手动把调节金按人头发给全公司（不会自动发）"),
+                    ("/发放福利", "/发放福利：开奖之后由核心董事会手动把调节金按人头发给全公司（不会自动发）"),
                     ("/彩票", "规则：每注 2 摸鱼币，每人每个自然日最多 5 注，同一期同一组号码只能买一次；开奖前 10 分钟停售，22:00 开奖"),
                     ("/彩票", "奖级：一等奖 100、二等奖 50、三等奖 15、四等奖 5、五等奖 1；任意中奖概率 26.59%，每注长期期望返回约 1.19 摸鱼币"),
-                    ("/彩票", "奖池上限 200 摸鱼币，超出部分转入调节金；调节金累计到当前员工总数后由 /发放福利 手动发放，每人 1 摸鱼币"),
+                    ("/彩票", "奖池上限 200 摸鱼币，超出部分转入调节金；调节金累计到当前员工总数后由核心董事会发 /发放福利 手动发放，每人 1 摸鱼币"),
                 ),
             ),
         }
@@ -4306,6 +4306,8 @@ class GroupCommandHandler:
         "not_drawn": "not_drawn",
         "already_paid": "already_paid",
         "disabled": "disabled",
+        "not_joined": "not_joined",
+        "not_authorized": "not_authorized",
     }
 
     _LOTTERY_PURCHASE_SCENARIOS = {
@@ -4414,7 +4416,7 @@ class GroupCommandHandler:
 
         if command == "/发放福利":
             result = self._repository.settle_company_lottery_welfare_manually(
-                received_at
+                message.sender_platform_id, received_at
             )
             return self._reply(
                 "/发放福利",

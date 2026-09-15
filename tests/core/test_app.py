@@ -830,8 +830,9 @@ def test_company_lottery_overview_manual_draw_and_pool_deposit(app_context, head
 
 
 def test_company_lottery_end_to_end_from_sale_to_next_round(app_context, headers):
-    """开卖 → 手选/机选/引导购票 → 停售 → 开奖 → 派奖 → 全员福利 → 开下一期。"""
+    """开卖 → 购票 → 停售 → 开奖 → 派奖 → 董事会手动发福利 → 开下一期。"""
     from dzmm_bot.core.company_lottery import commit_hash
+    from dzmm_bot.core.schema import RankRecord
 
     repository = app_context.repository
     client = app_context.client
@@ -849,6 +850,16 @@ def test_company_lottery_end_to_end_from_sale_to_next_round(app_context, headers
     players = (("e2e-1", "端到端甲"), ("e2e-2", "端到端乙"), ("e2e-3", "端到端丙"))
     for platform_id, name in players:
         repository.create_user(platform_id, name, NOW, 200)
+
+    # e2e-1 提为核心董事会：`/发放福利` 只认这个职位
+    repository.list_ranks()
+    with app_context.session_factory.begin() as session:
+        board_rank = session.scalar(
+            select(RankRecord).where(RankRecord.is_board.is_(True))
+        )
+        session.scalar(
+            select(UserRecord).where(UserRecord.platform_id == "e2e-1")
+        ).rank_id = board_rank.id
 
     def purge_outbound():
         with app_context.session_factory.begin() as session:
@@ -964,7 +975,7 @@ def test_company_lottery_end_to_end_from_sale_to_next_round(app_context, headers
     assert commit_hash(settled.answer, settled.salt) == settled.commit_hash
     assert repository.company_lottery_balances()[1] == 0
 
-    # 手动给调节金注资后，福利要群里发 /发放福利 才发（定时任务不再自动发）
+    # 手动给调节金注资后，福利要由核心董事会发 /发放福利 才发（定时任务不再自动发）
     injected = client.post(
         f"/internal/game/company-lottery/pool",
         headers=headers,
@@ -977,8 +988,14 @@ def test_company_lottery_end_to_end_from_sale_to_next_round(app_context, headers
     assert not any("公司福利发放" in text for text in outbound_texts())
     assert repository.company_lottery_balances()[1] == 5
 
+    # 普通员工发不动：调节金一分不少
+    assert "只有核心董事会成员可以发放全员福利" in send(
+        "e2e-welfare-denied", "e2e-2", "/发放福利", draw_tick
+    )
+    assert repository.company_lottery_balances()[1] == 5
+
     assert "已发放全员福利" in send("e2e-welfare", "e2e-1", "/发放福利", draw_tick)
-    assert any("公司福利发放" in text for text in outbound_texts())
+    assert any("本次由 端到端甲 发起" in text for text in outbound_texts())
     assert repository.company_lottery_balances()[1] == 5 - 3
     assert repository.find_user("e2e-3").balance == 298 + 1
     assert repository.find_user("e2e-2").balance == 196 + 1

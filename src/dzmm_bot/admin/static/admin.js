@@ -627,7 +627,7 @@ function renderCompanyLotterySettings(settings) {
     <article><span>奖级奖金</span><strong>${settings.head_prize} / ${settings.second_prize} / ${settings.third_prize} / ${settings.fourth_prize} / ${settings.fifth_prize}</strong><small>一至五等奖固定奖金</small></article>
     <article><span>奖池</span><strong>上限 ${settings.pool_ceiling}</strong><small>启动奖池 ${settings.pool_seed}（只在每个群首期注入） · 单人单期上限 ${settings.per_person_cap}</small></article>
     <article><span>投注时间</span><strong>${drawTime} 开奖</strong><small>提前 ${settings.close_offset_minutes} 分钟停售，提前 ${settings.notify_offset_minutes} 分钟提醒</small></article>
-    <article><span>全员福利</span><strong>${settings.welfare_enabled ? `每人 ${settings.welfare_per_person}` : "已停用"}</strong><small>调节金达到当前员工总数时发放一轮；入职满 ${settings.welfare_min_tenure_hours} 小时才计入</small></article>
+    <article><span>全员福利</span><strong>${settings.welfare_enabled ? `每人 ${settings.welfare_per_person}` : "已停用"}</strong><small>开奖后由核心董事会发 /发放福利 手动发放一轮；调节金需达到当前员工总数，入职满 ${settings.welfare_min_tenure_hours} 小时才计入</small></article>
     <article><span>购票草稿</span><strong>${settings.draft_timeout_minutes} 分钟</strong><small>草稿超时作废且不扣款</small></article>`;
 }
 
@@ -2514,7 +2514,7 @@ document.querySelector("#dark-market-page-size").addEventListener("change", () =
 document.querySelector("#edit-company-lottery-settings").addEventListener("click", () => void openCompanyLotterySettingsModal());
 document.querySelector("#refresh-company-lottery").addEventListener("click", (event) => void runMutation(event.currentTarget, "刷新中…", () => loadCompanyLotteryOverview()));
 document.querySelector("#company-lottery-draw").addEventListener("click", async (event) => {
-  if (!window.confirm("确认对全公司当前期次手动开奖？开奖后会立即向所有群发送公告并结算全员福利。")) return;
+  if (!window.confirm("确认对全公司当前期次手动开奖？开奖后会立即向所有群发送公告并派奖；全员福利不在此处发放。")) return;
   try {
     await runMutation(event.currentTarget, "开奖中…", async () => {
       const result = await requestGame("/api/game/company-lottery/draw", {method: "POST"});

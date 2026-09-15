@@ -13,6 +13,7 @@ from dzmm_bot.core.company_lottery import (
 )
 from dzmm_bot.core.repository import balance_source_label
 from dzmm_bot.core.schema import (
+    AuditEventRecord,
     BalanceTransactionRecord,
     Base,
     CompanyLotteryBetRecord,
@@ -116,6 +117,36 @@ def seed_account(repository, account, amount):
 
 def ticket(reds, blue):
     return Ticket(reds=tuple(reds), blue=blue)
+
+
+BOARD_PLATFORM_ID = "p1"
+
+
+def promote_to_board(repository, platform_id=BOARD_PLATFORM_ID):
+    """把某位员工提为核心董事会：`/发放福利` 是特权指令，只有董事会能触发。
+
+    用「提升已有员工」而不是新建账号，是为了不改变福利门槛所依赖的员工人数。
+    """
+    from dzmm_bot.core.schema import RankRecord
+
+    repository.list_ranks()
+    with repository.transaction():
+        with repository._session() as session:
+            board_rank = session.scalar(
+                select(RankRecord).where(RankRecord.is_board.is_(True))
+            )
+            assert board_rank is not None
+            user = session.scalar(
+                select(UserRecord).where(UserRecord.platform_id == platform_id)
+            )
+            assert user is not None
+            user.rank_id = board_rank.id
+
+
+def open_and_draw(repository, now):
+    """先把第一期开出来——全员福利只能在开奖之后发。"""
+    repository.ensure_company_lottery_round(now)
+    repository.draw_company_lottery_round(DRAW_AT)
 
 
 # --------------------------------------------------------------------------- 基础
@@ -1066,10 +1097,13 @@ def test_employee_headcount_is_the_welfare_threshold(repository, seeded):
 
 
 def test_welfare_does_nothing_below_the_threshold(repository, seeded, now):
-    repository.ensure_company_lottery_round(now)
+    open_and_draw(repository, now)
+    promote_to_board(repository)
     seed_account(repository, "adjustment", 1)
 
-    result = repository.settle_company_lottery_welfare(now)
+    result = repository.settle_company_lottery_welfare_manually(
+        BOARD_PLATFORM_ID, DRAW_AT
+    )
 
     assert result.status == "not_due"
     assert result.employee_count == 2
@@ -1080,10 +1114,13 @@ def test_welfare_does_nothing_below_the_threshold(repository, seeded, now):
 
 
 def test_welfare_pays_every_employee_once(repository, seeded, now):
-    repository.ensure_company_lottery_round(now)
+    open_and_draw(repository, now)
+    promote_to_board(repository)
     seed_account(repository, "adjustment", 2)
 
-    result = repository.settle_company_lottery_welfare(now)
+    result = repository.settle_company_lottery_welfare_manually(
+        BOARD_PLATFORM_ID, DRAW_AT
+    )
 
     assert result.status == "paid"
     assert result.employee_count == 2
@@ -1091,6 +1128,7 @@ def test_welfare_pays_every_employee_once(repository, seeded, now):
     assert result.paid_total == 2
     assert result.fund_before == 2
     assert result.fund_after == 0
+    assert result.issuer_display_name == "小明"
     assert balance_of(repository, "p1") == 101
     assert balance_of(repository, "p2") == 101
     _, adjustment = repository.company_lottery_balances()
@@ -1098,10 +1136,13 @@ def test_welfare_pays_every_employee_once(repository, seeded, now):
 
 
 def test_welfare_keeps_the_remainder(repository, seeded, now):
-    repository.ensure_company_lottery_round(now)
+    open_and_draw(repository, now)
+    promote_to_board(repository)
     seed_account(repository, "adjustment", 5)
 
-    result = repository.settle_company_lottery_welfare(now)
+    result = repository.settle_company_lottery_welfare_manually(
+        BOARD_PLATFORM_ID, DRAW_AT
+    )
 
     assert result.paid_total == 2
     assert result.fund_after == 3
@@ -1110,10 +1151,13 @@ def test_welfare_keeps_the_remainder(repository, seeded, now):
 
 
 def test_welfare_pays_only_one_round_even_with_a_large_fund(repository, seeded, now):
-    repository.ensure_company_lottery_round(now)
+    open_and_draw(repository, now)
+    promote_to_board(repository)
     seed_account(repository, "adjustment", 100)
 
-    result = repository.settle_company_lottery_welfare(now)
+    result = repository.settle_company_lottery_welfare_manually(
+        BOARD_PLATFORM_ID, DRAW_AT
+    )
 
     assert result.paid_total == 2
     assert result.fund_after == 98
@@ -1121,12 +1165,15 @@ def test_welfare_pays_only_one_round_even_with_a_large_fund(repository, seeded, 
 
 
 def test_welfare_threshold_follows_the_latest_headcount(repository, seeded, now):
-    repository.ensure_company_lottery_round(now)
+    open_and_draw(repository, now)
+    promote_to_board(repository)
     seed_account(repository, "adjustment", 2)
     with seeded.begin() as session:
         add_user(session, "p3", "小刚", 3)
 
-    result = repository.settle_company_lottery_welfare(now)
+    result = repository.settle_company_lottery_welfare_manually(
+        BOARD_PLATFORM_ID, DRAW_AT
+    )
 
     assert result.status == "not_due"
     assert result.employee_count == 3
@@ -1147,8 +1194,12 @@ def test_welfare_can_skip_recent_hires(repository, session_factory, now):
         min_tenure_hours=24, now=now
     ) == 1
 
+    open_and_draw(repository, now)
+    promote_to_board(repository, "veteran")
     seed_account(repository, "adjustment", 1)
-    result = repository.settle_company_lottery_welfare(now)
+    result = repository.settle_company_lottery_welfare_manually(
+        "veteran", DRAW_AT
+    )
 
     assert result.status == "paid"
     assert result.employee_count == 1
@@ -1157,15 +1208,23 @@ def test_welfare_can_skip_recent_hires(repository, session_factory, now):
 
 
 def test_welfare_writes_ledger_and_payout_rows(repository, seeded, now):
-    repository.ensure_company_lottery_round(now)
+    open_and_draw(repository, now)
+    promote_to_board(repository)
     seed_account(repository, "adjustment", 6)
 
-    result = repository.settle_company_lottery_welfare(now)
+    result = repository.settle_company_lottery_welfare_manually(
+        BOARD_PLATFORM_ID, DRAW_AT
+    )
 
     with repository._session() as session:
         welfare_rows = session.scalars(select(CompanyLotteryWelfareRecord)).all()
         payout_rows = session.scalars(
             select(CompanyLotteryWelfarePayoutRecord)
+        ).all()
+        audits = session.scalars(
+            select(AuditEventRecord).where(
+                AuditEventRecord.event_type == "company_lottery_welfare"
+            )
         ).all()
 
     assert result.status == "paid"
@@ -1175,14 +1234,27 @@ def test_welfare_writes_ledger_and_payout_rows(repository, seeded, now):
     assert welfare_rows[0].fund_after == 4
     assert len(payout_rows) == 2
     assert {row.amount for row in payout_rows} == {1}
+    # 特权操作要留痕：谁在什么时候发了多少
+    assert len(audits) == 1
+    assert audits[0].actor == BOARD_PLATFORM_ID
+    assert audits[0].payload["issuer_display_name"] == "小明"
+    assert audits[0].payload["paid_total"] == 2
 
 
-def test_welfare_does_nothing_without_employees(repository, session_factory, now):
+def test_welfare_does_nothing_without_eligible_employees(repository, session_factory, now):
+    """只有一位刚入职的董事：他自己还没过入职时长门槛，所以人数为 0。"""
     with session_factory.begin() as session:
         add_group(session, PRIMARY_GROUP_CHAT_ID, "主群聊")
+        add_user(session, "board", "董事", 1)
+        session.scalar(
+            select(UserRecord).where(UserRecord.platform_id == "board")
+        ).joined_at = now
+    repository.update_company_lottery_settings(welfare_min_tenure_hours=24)
+    open_and_draw(repository, now)
+    promote_to_board(repository, "board")
     seed_account(repository, "adjustment", 50)
 
-    result = repository.settle_company_lottery_welfare(now)
+    result = repository.settle_company_lottery_welfare_manually("board", DRAW_AT)
 
     assert result.status == "not_due"
     assert result.employee_count == 0
@@ -1190,11 +1262,65 @@ def test_welfare_does_nothing_without_employees(repository, session_factory, now
     assert adjustment == 50
 
 
-def test_welfare_can_be_disabled(repository, seeded, now):
-    repository.update_company_lottery_settings(welfare_enabled=False)
+def test_welfare_is_refused_for_a_plain_employee(repository, seeded, now):
+    """`/发放福利` 是特权指令：普通员工发不动调节金。"""
+    open_and_draw(repository, now)
     seed_account(repository, "adjustment", 10)
 
-    result = repository.settle_company_lottery_welfare(now)
+    result = repository.settle_company_lottery_welfare_manually("p1", DRAW_AT)
+
+    assert result.status == "not_authorized"
+    assert result.issuer_display_name == "小明"
+    assert balance_of(repository, "p1") == 100
+    _, adjustment = repository.company_lottery_balances()
+    assert adjustment == 10
+    with repository._session() as session:
+        assert session.scalars(select(CompanyLotteryWelfareRecord)).all() == []
+
+
+def test_welfare_is_refused_for_the_second_highest_rank(repository, seeded, now):
+    """Lv10 公司负责人也不行——只有核心董事会（is_board）能发。"""
+    from dzmm_bot.core.schema import RankRecord
+
+    open_and_draw(repository, now)
+    repository.list_ranks()
+    with repository.transaction():
+        with repository._session() as session:
+            chief_rank = session.scalar(
+                select(RankRecord).where(RankRecord.name == "公司负责人")
+            )
+            assert chief_rank is not None and not chief_rank.is_board
+            session.scalar(
+                select(UserRecord).where(UserRecord.platform_id == "p1")
+            ).rank_id = chief_rank.id
+    seed_account(repository, "adjustment", 10)
+
+    result = repository.settle_company_lottery_welfare_manually("p1", DRAW_AT)
+
+    assert result.status == "not_authorized"
+    _, adjustment = repository.company_lottery_balances()
+    assert adjustment == 10
+
+
+def test_welfare_is_refused_for_an_outsider(repository, seeded, now):
+    open_and_draw(repository, now)
+    seed_account(repository, "adjustment", 10)
+
+    result = repository.settle_company_lottery_welfare_manually("nobody", DRAW_AT)
+
+    assert result.status == "not_joined"
+    _, adjustment = repository.company_lottery_balances()
+    assert adjustment == 10
+
+
+def test_welfare_can_be_disabled(repository, seeded, now):
+    repository.update_company_lottery_settings(welfare_enabled=False)
+    promote_to_board(repository)
+    seed_account(repository, "adjustment", 10)
+
+    result = repository.settle_company_lottery_welfare_manually(
+        BOARD_PLATFORM_ID, DRAW_AT
+    )
 
     assert result.status == "disabled"
     assert balance_of(repository, "p1") == 100
@@ -1203,7 +1329,8 @@ def test_welfare_can_be_disabled(repository, seeded, now):
 def test_welfare_rolls_back_entirely_on_failure(
     repository, seeded, now, monkeypatch
 ):
-    repository.ensure_company_lottery_round(now)
+    open_and_draw(repository, now)
+    promote_to_board(repository)
     seed_account(repository, "adjustment", 10)
 
     calls = {"count": 0}
@@ -1218,7 +1345,9 @@ def test_welfare_rolls_back_entirely_on_failure(
     monkeypatch.setattr(repository, "_apply_balance_change", flaky)
 
     with pytest.raises(RuntimeError):
-        repository.settle_company_lottery_welfare(now)
+        repository.settle_company_lottery_welfare_manually(
+            BOARD_PLATFORM_ID, DRAW_AT
+        )
 
     assert balance_of(repository, "p1") == 100
     assert balance_of(repository, "p2") == 100
@@ -1234,18 +1363,26 @@ def test_welfare_rolls_back_entirely_on_failure(
     assert payout_rows == []
 
 
-def test_welfare_runs_once_for_the_whole_company(repository, seeded, now):
-    """福利也是全公司一本账：发过一轮之后立刻再判就是 not_due。"""
-    seed_account(repository, "adjustment", 2)
+def test_welfare_runs_once_per_draw_for_the_whole_company(repository, seeded, now):
+    """福利也是全公司一本账：一期开奖只发得动一轮，再发就是 already_paid。"""
+    open_and_draw(repository, now)
+    promote_to_board(repository)
+    seed_account(repository, "adjustment", 4)
 
-    result = repository.settle_company_lottery_welfare(now)
+    result = repository.settle_company_lottery_welfare_manually(
+        BOARD_PLATFORM_ID, DRAW_AT
+    )
 
     assert result.status == "paid"
     _, adjustment = repository.company_lottery_balances()
-    assert adjustment == 0
+    assert adjustment == 2
 
-    second = repository.settle_company_lottery_welfare(now)
-    assert second.status == "not_due"
+    second = repository.settle_company_lottery_welfare_manually(
+        BOARD_PLATFORM_ID, DRAW_AT
+    )
+    assert second.status == "already_paid"
+    _, adjustment = repository.company_lottery_balances()
+    assert adjustment == 2
 
 
 def test_announcements_are_broadcast_to_every_group(repository, seeded, now):
@@ -1377,9 +1514,16 @@ def test_reconcile_reports_a_balanced_ledger(repository, seeded, now):
 def test_reconcile_counts_welfare_and_manual_deposits(repository, seeded, now):
     repository.ensure_company_lottery_round(now)
     repository.deposit_company_lottery_pool(7, now)
+    repository.draw_company_lottery_round(DRAW_AT)
+    promote_to_board(repository)
     seed_account(repository, "adjustment", 5)
 
-    assert repository.settle_company_lottery_welfare(now).status == "paid"
+    assert (
+        repository.settle_company_lottery_welfare_manually(
+            BOARD_PLATFORM_ID, DRAW_AT
+        ).status
+        == "paid"
+    )
     recon = repository.company_lottery_overview().reconcile
 
     # 启动奖池 100 + 后台注资 7 + 调节金注入 5，全部算系统注入
@@ -1531,9 +1675,13 @@ def test_reconcile_cross_checks_the_employee_ledger(repository, seeded, now):
         now,
     )
     repository.run_company_lottery_jobs(DRAW_AT)
+    promote_to_board(repository)
     seed_account(repository, "adjustment", 4)
     assert (
-        repository.settle_company_lottery_welfare_manually(DRAW_AT).status == "paid"
+        repository.settle_company_lottery_welfare_manually(
+            BOARD_PLATFORM_ID, DRAW_AT
+        ).status
+        == "paid"
     )
 
     recon = repository.company_lottery_overview().reconcile
@@ -1712,8 +1860,9 @@ def test_run_jobs_skips_the_reminder_when_the_group_is_busy(repository, seeded, 
 
 
 def test_welfare_waits_for_a_manual_command_after_the_draw(repository, seeded, now):
-    """定时任务不再自动发福利；开奖后要有人发 /发放福利 才发。"""
+    """定时任务不再自动发福利；开奖后要由核心董事会发 /发放福利 才发。"""
     repository.run_company_lottery_jobs(now)
+    promote_to_board(repository)
     seed_account(repository, "adjustment", 2)
 
     repository.run_company_lottery_jobs(DRAW_AT)
@@ -1724,7 +1873,10 @@ def test_welfare_waits_for_a_manual_command_after_the_draw(repository, seeded, n
     assert repository.company_lottery_balances()[1] == 2
 
     assert (
-        repository.settle_company_lottery_welfare_manually(DRAW_AT).status == "paid"
+        repository.settle_company_lottery_welfare_manually(
+            BOARD_PLATFORM_ID, DRAW_AT
+        ).status
+        == "paid"
     )
 
     texts = outbound_texts(repository)
@@ -1732,12 +1884,14 @@ def test_welfare_waits_for_a_manual_command_after_the_draw(repository, seeded, n
     welfare_text = next(text for text in texts if "公司福利发放" in text)
     assert "调节金累计达 2 摸鱼币" in welfare_text
     assert "全员各获得 1 摸鱼币" in welfare_text
+    assert "本次由 小明 发起" in welfare_text
     assert balance_of(repository, "p1") == 101
 
 
 def test_manual_draw_also_leaves_the_welfare_to_the_command(repository, seeded, now):
     """后台手动开奖与定时任务同口径：都不发福利，避免绕开 /发放福利 的门槛。"""
     repository.run_company_lottery_jobs(now)
+    promote_to_board(repository)
     seed_account(repository, "adjustment", 2)
     view = repository.current_company_lottery_round()
 
@@ -1749,16 +1903,22 @@ def test_manual_draw_also_leaves_the_welfare_to_the_command(repository, seeded, 
     assert repository.company_lottery_balances()[1] == 2
 
     assert (
-        repository.settle_company_lottery_welfare_manually(DRAW_AT).status == "paid"
+        repository.settle_company_lottery_welfare_manually(
+            BOARD_PLATFORM_ID, DRAW_AT
+        ).status
+        == "paid"
     )
     assert balance_of(repository, "p1") == 101
 
 
 def test_welfare_refuses_before_the_round_is_drawn(repository, seeded, now):
     repository.run_company_lottery_jobs(now)
+    promote_to_board(repository)
     seed_account(repository, "adjustment", 2)
 
-    result = repository.settle_company_lottery_welfare_manually(now)
+    result = repository.settle_company_lottery_welfare_manually(
+        BOARD_PLATFORM_ID, now
+    )
 
     assert result.status == "not_drawn"
     assert balance_of(repository, "p1") == 100
@@ -1770,7 +1930,10 @@ def test_welfare_refuses_when_the_lottery_is_disabled(repository, seeded, now):
     repository.update_company_lottery_settings(enabled=False)
 
     assert (
-        repository.settle_company_lottery_welfare_manually(now).status == "disabled"
+        repository.settle_company_lottery_welfare_manually(
+            BOARD_PLATFORM_ID, now
+        ).status
+        == "disabled"
     )
 
 

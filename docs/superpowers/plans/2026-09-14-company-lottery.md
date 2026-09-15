@@ -123,13 +123,16 @@
 - [x] 实现 `count_registered_employees`、`settle_company_lottery_welfare`。
 - [x] 改为手动：`run_company_lottery_jobs` 与 `draw_company_lottery_round_manually` 都不再调用福利结算，新增 `settle_company_lottery_welfare_manually`，判定条件加「存在已开奖期次且晚于上次发放时刻」（开奖后立刻开下一期，看期次状态会永远看到 `open`）。
 - [x] 新增群内指令 `/发放福利`：注册进 `_COMMANDS`、`_LOTTERY_COMMANDS`、`_COMMAND_DEFINITIONS`、`_DIRECT_COMMANDS`，回执区分 `group_only` / `group_disabled` / `disabled` / `not_drawn` / `not_due` / `already_paid` / `paid`。
-- [x] 重新运行福利相关测试（repository 90 passed）。
+- [x] 加权限：`/发放福利` 与 `/发奖金` 同口径，只有核心董事会（`ranks.is_board`）能触发，判定与发放同事务，权限不足回 `not_authorized`、未入职回 `not_joined`；成功后写 `audit_events`（`event_type = company_lottery_welfare`），开奖公告带出「本次由 X 发起」。
+- [x] 顺带修掉群聊开关变更审计里漏记的 `lottery_enabled`。
+- [x] 重新运行福利相关测试（repository 93 passed）。
 
 > 门槛恒取「当前已注册员工总数」，因此新增员工后下一次判定即按新人数计算。
 > 发放全程一个事务，测试用 monkeypatch 让第二个员工的加币抛错，断言余额、
 > 调节金、福利表与明细表全部回滚干净。
 > 踩坑记录：`/发放福利` 只加进 `_COMMANDS` 而漏了 `_COMMAND_DEFINITIONS`，
 > `is_command_enabled` 查不到定义就静默 `return None`——命令看起来「没反应」。
+> 权限用「提升已有员工」而不是新建董事会账号来测，否则会改变福利门槛依赖的员工人数。
 
 ### Task 7: 群命令与回复文案
 
@@ -171,7 +174,7 @@
 
 - Modify: `tests/core/test_app.py`
 
-- [x] 写端到端测试，走通「开卖 → 购票（手选 + 机选 + 引导）→ 停售 → 开奖 → 发奖 → 手动 `/发放福利` → 开下一期」的完整链路；全部经由 `/internal/inbound` 与 `/internal/daily-jobs/run` 两个真实入口。
+- [x] 写端到端测试，走通「开卖 → 购票（手选 + 机选 + 引导）→ 停售 → 开奖 → 发奖 → 普通员工发福利被拒 → 核心董事会 `/发放福利` → 开下一期」的完整链路；全部经由 `/internal/inbound` 与 `/internal/daily-jobs/run` 两个真实入口。
 - [x] 运行 `pytest -q`：与干净 HEAD 对比失败集合完全一致（61 项，全部为仓库既有失败：Linux 桌面/X11 的 `test_auth_desktop`、迁移基线、Windows 权限位、`settings` 环境相关等），未新增失败。
 - [x] 对照 spec 逐条核对：概率与期望（`tier_counts` 1/5/24/120/185/925，合计 1,260，期望返回 1.186508）、结算顺序（入池 → 封顶溢出 → 判档 → 合并 → 封顶 → 折算 → 发放）、封顶与折算、开奖 tick 不自动发福利、`/发放福利` 的门槛与「每次只发一轮」、机选与手选共用判档、全公司单期次、开奖前不泄露号码（含后台手动开奖的停售前置条件）。
 - [ ] 单群灰度上线，核对首周期奖池曲线与调节金累计是否落在预期区间。
