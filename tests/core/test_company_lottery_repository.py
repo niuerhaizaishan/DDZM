@@ -1491,7 +1491,8 @@ def set_group_switch(repository, group_id, **flags):
             setattr(record, name, value)
 
 
-def test_disabled_group_skips_lottery_announcements(repository, seeded, now):
+def test_lottery_switch_does_not_stop_announcements(repository, seeded, now):
+    """开关只控制入口：关掉彩票的群照样能看到今天开出了什么号。"""
     set_group_switch(repository, SECOND_GROUP_CHAT_ID, lottery_enabled=False)
     repository.run_company_lottery_jobs(now)
     view = repository.current_company_lottery_round()
@@ -1505,11 +1506,14 @@ def test_disabled_group_skips_lottery_announcements(repository, seeded, now):
 
     repository.run_company_lottery_jobs(DRAW_AT)
 
-    assert outbound_texts(repository, PRIMARY_GROUP_CHAT_ID)
-    assert outbound_texts(repository, SECOND_GROUP_CHAT_ID) == []
+    assert any(
+        "【公司双色球开奖】" in text
+        for text in outbound_texts(repository, SECOND_GROUP_CHAT_ID)
+    )
 
 
-def test_announcements_respect_the_announcement_switch(repository, seeded, now):
+def test_announcements_ignore_the_announcement_switch(repository, seeded, now):
+    """开奖结果是公司级公共信息，不受「接收定时活动/公告」影响。"""
     set_group_switch(repository, SECOND_GROUP_CHAT_ID, announcements_enabled=False)
     repository.run_company_lottery_jobs(now)
     view = repository.current_company_lottery_round()
@@ -1525,8 +1529,26 @@ def test_announcements_respect_the_announcement_switch(repository, seeded, now):
 
     assert any(
         "【公司双色球开奖】" in text
-        for text in outbound_texts(repository, PRIMARY_GROUP_CHAT_ID)
+        for text in outbound_texts(repository, SECOND_GROUP_CHAT_ID)
     )
+
+
+def test_announcements_skip_groups_with_listening_off(repository, seeded, now):
+    """监听关掉等于该群停止全部新收发，往那儿排队没有意义。"""
+    set_group_switch(repository, SECOND_GROUP_CHAT_ID, listening_enabled=False)
+    repository.run_company_lottery_jobs(now)
+    view = repository.current_company_lottery_round()
+    seed_pool(repository, 100)
+    repository.buy_company_lottery_tickets(
+        UUID("00000000-0000-0000-0000-0000000007a3"),
+        "p1",
+        [answer_for(repository, view.id)],
+        now,
+    )
+
+    repository.run_company_lottery_jobs(DRAW_AT)
+
+    assert outbound_texts(repository, PRIMARY_GROUP_CHAT_ID)
     assert outbound_texts(repository, SECOND_GROUP_CHAT_ID) == []
 
 
@@ -1536,7 +1558,6 @@ def test_disabled_group_cannot_buy_but_the_round_still_runs(repository, seeded, 
 
     # 期次是全公司的，开卖与否不受单群开关影响
     assert repository.current_company_lottery_round().round_number == 1
-
 
 
 def test_run_jobs_does_not_draw_before_the_draw_time(repository, seeded, now):

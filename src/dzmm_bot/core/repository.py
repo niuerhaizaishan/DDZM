@@ -27813,18 +27813,16 @@ class CoreRepository:
             )
 
     def _company_lottery_announce(self, text: str) -> int:
-        """把公告广播到所有开着彩票、已启用监听、且愿意接收定时公告的群。
+        """把公告广播到所有已配置的群。
 
-        期次是全公司唯一的，但一个群关掉彩票入口之后不该还被开奖播报刷屏；
-        「接收定时活动/公告」与收入榜等全局定时消息同一口径。
+        开奖结果是公司级公共信息：**群级彩票开关只控制入口，不影响播报**，
+        关掉了彩票的群照样能看到今天开出了什么号。「接收定时活动/公告」同样
+        不影响它。唯一保留的条件是群必须还开着监听——按 §16.4，关掉监听的群
+        「停止该群全部新收发」，往一个 Worker 已经退出的群排队是没意义的。
         """
         delivered = 0
         for group in self.list_group_chats():
-            if (
-                not group.lottery_enabled
-                or not group.listening_enabled
-                or not group.announcements_enabled
-            ):
+            if not group.listening_enabled:
                 continue
             destination = self.group_chat_destination(group.id)
             if destination is None:
