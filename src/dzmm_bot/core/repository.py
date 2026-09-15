@@ -2127,6 +2127,7 @@ _COMMAND_DEFINITIONS = (
     ("/确认彩票", "/确认彩票", "确认逐注填写的购票草稿"),
     ("/取消彩票", "/取消彩票", "放弃逐注填写的购票草稿"),
     ("/彩票验证", "/彩票验证 期号", "核验指定期次的开奖号码与哈希"),
+    ("/发放福利", "/发放福利", "开奖后手动发放全员福利（从公司双色球调节金支出）"),
 )
 
 
@@ -2338,6 +2339,7 @@ class CompanyLotteryReconcile:
     sales_total: int
     prize_paid_total: int
     welfare_paid_total: int
+    credited_ledger_total: int
     pool_balance: int
     adjustment_balance: int
 
@@ -2356,7 +2358,11 @@ class CompanyLotteryReconcile:
 
     @property
     def balanced(self) -> bool:
-        return self.expected_balance == self.actual_balance
+        # 三边对齐：期次/福利表记的应发、员工余额流水实际入账、两本账的余额
+        return (
+            self.expected_balance == self.actual_balance
+            and self.credited_total == self.credited_ledger_total
+        )
 
 
 @dataclass(frozen=True)
@@ -27731,6 +27737,19 @@ class CoreRepository:
                 )
                 or 0
             )
+            # 员工侧账本：真正打到余额里的彩票入账（中奖 + 福利）
+            credited_ledger_total = int(
+                session.scalar(
+                    select(
+                        func.coalesce(func.sum(BalanceTransactionRecord.amount), 0)
+                    ).where(
+                        BalanceTransactionRecord.source.in_(
+                            (LOTTERY_PRIZE_SOURCE, LOTTERY_WELFARE_SOURCE)
+                        )
+                    )
+                )
+                or 0
+            )
 
             return CompanyLotteryOverview(
                 enabled=settings.enabled,
@@ -27807,6 +27826,7 @@ class CoreRepository:
                     sales_total=sales_total,
                     prize_paid_total=prize_paid_total,
                     welfare_paid_total=welfare_paid_total,
+                    credited_ledger_total=credited_ledger_total,
                     pool_balance=pool,
                     adjustment_balance=adjustment,
                 ),
@@ -27838,7 +27858,11 @@ class CoreRepository:
     def draw_company_lottery_round_manually(
         self, now: datetime
     ) -> CompanyLotteryDrawResult | None:
-        """后台手动开奖：只对已过停售时刻的期次生效，公告与福利与定时任务一致。"""
+        """后台手动开奖：只对已过停售时刻的期次生效，流程与定时任务完全一致。
+
+        定时任务只跑「停售 → 开奖 → 公告」，手动开奖也不额外发福利——全员福利只能由
+        `/发放福利` 在开奖之后单独触发，否则「手动」就成了绕过门槛的后门。
+        """
         now = now.astimezone(BEIJING)
         settings = self.get_company_lottery_settings()
         if not settings.enabled:
@@ -27852,9 +27876,6 @@ class CoreRepository:
         if drawn is None:
             return None
         self._company_lottery_announce(_render_lottery_draw(drawn, settings))
-        welfare = self.settle_company_lottery_welfare(now)
-        if welfare.status == "paid":
-            self._company_lottery_announce(_render_lottery_welfare(welfare))
         return drawn
 
     def deposit_company_lottery_pool(
@@ -28057,6 +28078,12 @@ class CoreRepository:
                     return None
 
                 round_row = session.get(CompanyLotteryRoundRecord, draft.round_id)
+                if round_row is None or round_row.state != "open":
+                    # 草稿是为一期挑的号；那一期一旦停售/开奖就作废，绝不能让它在
+                    # 下一期被默默买掉（玩家看到的号码是上一期的）。
+                    session.delete(draft)
+                    return None
+
                 return CompanyLotteryDraftView(
                     round_number=0 if round_row is None else round_row.round_number,
                     target_count=draft.target_count,
@@ -28071,10 +28098,10 @@ class CoreRepository:
                 )
 
     def company_lottery_draft_status(self, platform_id: str, now: datetime) -> str:
-        """草稿状态：`none` / `active` / `expired`；已过期的草稿就地删除。
+        """草稿状态：`none` / `active` / `expired` / `closed`（那一期已结束）。
 
-        与 load 分开是为了让「刚发号码就超时」这种情况能给出明确提示，
-        而不是被当成闲聊静默丢弃。
+        `closed` 与 `expired` 分开，是因为玩家需要知道「这一期开奖了」而不是
+        「你太慢了」；两种情况都会就地删掉草稿。
         """
         with self.transaction():
             with self._session() as session:
@@ -28090,10 +28117,14 @@ class CoreRepository:
                 )
                 if draft is None:
                     return "none"
-                if draft.expires_at > now:
-                    return "active"
-                session.delete(draft)
-                return "expired"
+                if draft.expires_at <= now:
+                    session.delete(draft)
+                    return "expired"
+                round_row = session.get(CompanyLotteryRoundRecord, draft.round_id)
+                if round_row is None or round_row.state != "open":
+                    session.delete(draft)
+                    return "closed"
+                return "active"
 
     def append_company_lottery_draft(
         self, platform_id: str, ticket: Ticket, now: datetime
@@ -28130,6 +28161,12 @@ class CoreRepository:
         platform_id: str,
         now: datetime,
     ) -> CompanyLotteryDraftResult:
+        # 先判状态：草稿可能已超时，或它对应的那一期已经停售/开奖
+        status = self.company_lottery_draft_status(platform_id, now)
+        if status != "active":
+            return CompanyLotteryDraftResult(
+                status="no_draft" if status == "none" else status
+            )
         view = self.load_company_lottery_draft(platform_id, now)
         if view is None:
             return CompanyLotteryDraftResult(status="no_draft")
@@ -28239,7 +28276,9 @@ class CoreRepository:
                 .select_from(CompanyLotteryBetRecord)
                 .where(
                     CompanyLotteryBetRecord.user_id == user_id,
+                    # 两侧都要卡：只写下界的话，未来日期的注单也会算进今天
                     CompanyLotteryBetRecord.created_at >= day_start,
+                    CompanyLotteryBetRecord.created_at < day_start + timedelta(days=1),
                 )
             )
             or 0
@@ -28491,9 +28530,8 @@ class CoreRepository:
         if drawn is not None:
             self._company_lottery_announce(_render_lottery_draw(drawn, settings))
 
-        welfare = self.settle_company_lottery_welfare(now)
-        if welfare.status == "paid":
-            self._company_lottery_announce(_render_lottery_welfare(welfare))
+        # 全员福利不自动发：调节金攒够之后由群内 /发放福利 手动触发，
+        # 这样发放时刻是可控的，不会在没人注意的时候突然全公司加币。
 
     def _remind_company_lottery_close(
         self,
@@ -28518,7 +28556,10 @@ class CoreRepository:
                 if round_row is None or round_row.reminded_at is not None:
                     return
 
-                latest = session.scalar(select(func.max(InboundRecord.received_at)))
+                # 用「最安静的那个群」判断冷清：公告是广播的，只要有一个群在安静
+                # 等待，提醒就有意义；用 max(最后一条消息) 的话，一个话多的群会让
+                # 全公司永远收不到提醒。
+                latest = session.scalar(select(func.min(InboundRecord.received_at)))
                 idle = (
                     10**9 if latest is None else int((now - latest).total_seconds())
                 )
@@ -28540,11 +28581,46 @@ class CoreRepository:
     def count_registered_employees(
         self, *, min_tenure_hours: int = 0, now: datetime | None = None
     ) -> int:
-        """当前已注册员工总数，也就是全员福利的发放门槛。"""
+        """当前可发放福利的员工总数，也就是全员福利的发放门槛。"""
         with self._session() as session:
             return len(
                 self._company_lottery_employee_ids(session, min_tenure_hours, now)
             )
+
+    def settle_company_lottery_welfare_manually(
+        self, now: datetime
+    ) -> CompanyLotteryWelfareResult:
+        """手动发放全员福利；每次开奖之后最多发一轮。
+
+        开奖会立刻开出下一期，所以不能看「最新一期」的状态，要看**最近一次开奖
+        时刻**：必须有一次开奖，而且那之后还没发过。这样既保证资金已经落定，
+        也避免有人连点指令把调节金一次性抽干。
+        """
+        with self._session() as session:
+            settings = _company_lottery_settings(
+                self._company_lottery_settings_record(session)
+            )
+            if not settings.enabled:
+                return CompanyLotteryWelfareResult(status="disabled")
+
+            drawn_at = session.scalar(
+                select(func.max(CompanyLotteryRoundRecord.drawn_at)).where(
+                    CompanyLotteryRoundRecord.state == "drawn"
+                )
+            )
+            if drawn_at is None:
+                return CompanyLotteryWelfareResult(status="not_drawn")
+
+            last_paid_at = session.scalar(
+                select(func.max(CompanyLotteryWelfareRecord.created_at))
+            )
+            if last_paid_at is not None and last_paid_at >= drawn_at:
+                return CompanyLotteryWelfareResult(status="already_paid")
+
+        result = self.settle_company_lottery_welfare(now)
+        if result.status == "paid":
+            self._company_lottery_announce(_render_lottery_welfare(result))
+        return result
 
     def settle_company_lottery_welfare(
         self, now: datetime
@@ -28733,6 +28809,8 @@ class CoreRepository:
                         .where(
                             CompanyLotteryBetRecord.user_id == user.id,
                             CompanyLotteryBetRecord.created_at >= day_start,
+                            CompanyLotteryBetRecord.created_at
+                            < day_start + timedelta(days=1),
                         )
                     )
                     or 0

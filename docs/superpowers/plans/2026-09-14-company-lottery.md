@@ -18,7 +18,7 @@
 - 奖池上限 200；单人单期中奖上限 100；启动奖池 100（首期系统注入，之后不再注入）。
 - 结算顺序不可调换：入池 → 封顶溢出 → 逐票判档 → **同员工合并** → **合并后封顶** → **可付款不足时折算** → 发放。
 - 任何情况下不超发、不出现负余额、不允许系统凭空补币。
-- 全员福利门槛恒为「当前已注册员工总数」，每次只发一轮，余数保留。
+- 全员福利门槛恒为「当前已注册员工总数」，开奖后由 `/发放福利` 手动触发，每次只发一轮，余数保留。
 - 期次、奖池与调节金按群独立；全局只共享配置。
 - 开奖前任何查询接口不返回开奖号码与盐。
 - 奖池与调节金账本的 `balance_after` 必须与实际余额逐笔一致。
@@ -98,9 +98,10 @@
 
 > 调度挂点确认：`run_daily_jobs(now)` 由 `/internal/daily-jobs/run` 触发，是既有的
 > 周期性入口，因此把 `run_company_lottery_jobs(now)` 接在同一个方法里，而不是新开
-> 定时器。它遍历所有未删除群聊，各自完成「开期次 → 停售提醒 → 停售 → 开奖 →
-> 全员福利」，播报通过 `enqueue_system_outbound` 出队。停售提醒沿用
+> 定时器。它遍历所有未删除群聊，各自完成「开期次 → 停售提醒 → 停售 → 开奖」，
+> 播报通过 `enqueue_system_outbound` 出队。停售提醒沿用
 > `should_notify_close`，只在提醒窗口内且群里超过 30 分钟没说话时才发。
+> 全员福利**不在**这条链路上，见 Task 6。
 
 > 两处实现要点：一是购票时销售额已逐笔进池，结算时必须把期初余额拆成
 > `pool_opening = 池内余额 − 本期销售额` 再交给 `settle_round`，否则会重复计入；
@@ -108,23 +109,27 @@
 > 最后一张中奖票，保证分币不凭空消失（测试 `test_draw_merges_and_caps_per_employee`
 > 断言实发合计恰为 100）。
 
-### Task 6: 全员福利发放
+### Task 6: 全员福利发放（开奖后手动触发）
 
 **Files:**
 
 - Modify: `src/dzmm_bot/core/repository.py`
-- Modify: `src/dzmm_bot/core/app.py`
+- Modify: `src/dzmm_bot/core/commands.py`
+- Modify: `src/dzmm_bot/core/reply_templates.py`
 - Modify: `tests/core/test_company_lottery_repository.py`
 
-- [x] 写失败测试：调节金未达门槛不触发、达到门槛发一轮、超出后余数保留且不连发、每位已入职员工余额 +1、福利表与明细表与账本三方对账一致、员工数为 0 不触发、事务中途失败全量回滚、并发调用只发一轮。
+- [x] 写失败测试：调节金未达门槛不发放、达到门槛发一轮、超出后余数保留且不连发、每位已入职员工余额 +1、福利表与明细表与账本三方对账一致、员工数为 0 不发放、事务中途失败全量回滚、并发调用只发一轮。
 - [x] 运行 `.venv/bin/pytest -q tests/core/test_company_lottery_repository.py -k 'welfare'`，确认失败。
 - [x] 实现 `count_registered_employees`、`settle_company_lottery_welfare`。
-- [x] 在开奖 tick 末尾调用 `settle_company_lottery_welfare` 并渲染发放公告。
-- [x] 重新运行福利相关测试（12 passed）。
+- [x] 改为手动：`run_company_lottery_jobs` 与 `draw_company_lottery_round_manually` 都不再调用福利结算，新增 `settle_company_lottery_welfare_manually`，判定条件加「存在已开奖期次且晚于上次发放时刻」（开奖后立刻开下一期，看期次状态会永远看到 `open`）。
+- [x] 新增群内指令 `/发放福利`：注册进 `_COMMANDS`、`_LOTTERY_COMMANDS`、`_COMMAND_DEFINITIONS`、`_DIRECT_COMMANDS`，回执区分 `group_only` / `group_disabled` / `disabled` / `not_drawn` / `not_due` / `already_paid` / `paid`。
+- [x] 重新运行福利相关测试（repository 90 passed）。
 
 > 门槛恒取「当前已注册员工总数」，因此新增员工后下一次判定即按新人数计算。
 > 发放全程一个事务，测试用 monkeypatch 让第二个员工的加币抛错，断言余额、
 > 调节金、福利表与明细表全部回滚干净。
+> 踩坑记录：`/发放福利` 只加进 `_COMMANDS` 而漏了 `_COMMAND_DEFINITIONS`，
+> `is_command_enabled` 查不到定义就静默 `return None`——命令看起来「没反应」。
 
 ### Task 7: 群命令与回复文案
 
@@ -166,7 +171,7 @@
 
 - Modify: `tests/core/test_app.py`
 
-- [x] 写端到端测试，走通「开卖 → 购票（手选 + 机选 + 引导）→ 停售 → 开奖 → 发奖 → 全员福利 → 开下一期」的完整链路；全部经由 `/internal/inbound` 与 `/internal/daily-jobs/run` 两个真实入口。
-- [x] 运行 `pytest -q`：与干净 HEAD 对比失败集合完全一致（62 项，全部为仓库既有失败：Linux 桌面/X11 的 `test_auth_desktop`、迁移基线、Windows 权限位等），未新增失败。
-- [x] 对照 spec 逐条核对：概率与期望（`tier_counts` 1/5/24/120/185/925，合计 1,260，期望返回 1.186508）、结算顺序（入池 → 封顶溢出 → 判档 → 合并 → 封顶 → 折算 → 发放）、封顶与折算、全员福利门槛与「每次只发一轮」、机选与手选共用判档、按群独立、开奖前不泄露号码（含后台手动开奖的停售前置条件）。
+- [x] 写端到端测试，走通「开卖 → 购票（手选 + 机选 + 引导）→ 停售 → 开奖 → 发奖 → 手动 `/发放福利` → 开下一期」的完整链路；全部经由 `/internal/inbound` 与 `/internal/daily-jobs/run` 两个真实入口。
+- [x] 运行 `pytest -q`：与干净 HEAD 对比失败集合完全一致（61 项，全部为仓库既有失败：Linux 桌面/X11 的 `test_auth_desktop`、迁移基线、Windows 权限位、`settings` 环境相关等），未新增失败。
+- [x] 对照 spec 逐条核对：概率与期望（`tier_counts` 1/5/24/120/185/925，合计 1,260，期望返回 1.186508）、结算顺序（入池 → 封顶溢出 → 判档 → 合并 → 封顶 → 折算 → 发放）、封顶与折算、开奖 tick 不自动发福利、`/发放福利` 的门槛与「每次只发一轮」、机选与手选共用判档、全公司单期次、开奖前不泄露号码（含后台手动开奖的停售前置条件）。
 - [ ] 单群灰度上线，核对首周期奖池曲线与调节金累计是否落在预期区间。

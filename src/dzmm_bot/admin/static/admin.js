@@ -650,7 +650,7 @@ function renderCompanyLotteryOverview(overview) {
   document.querySelector("#company-lottery-reconcile").innerHTML = `
     <article><span>对账结果</span><strong>${recon.balanced ? "收入与支出平衡" : "⚠️ 账目不符"}</strong><small>系统注入 ${recon.injected_total} + 售票 ${recon.sales_total} − 员工入账 ${recon.credited_total} = 应余 ${recon.expected_balance}</small></article>
     <article><span>实际余额</span><strong>${recon.actual_balance} 摸鱼币</strong><small>奖池 ${recon.pool_balance} ＋ 调节金 ${recon.adjustment_balance}</small></article>
-    <article><span>员工侧入账</span><strong>${recon.credited_total} 摸鱼币</strong><small>中奖 ${recon.prize_paid_total} ＋ 全员福利 ${recon.welfare_paid_total}</small></article>`;
+    <article><span>员工侧入账</span><strong>${recon.credited_total} 摸鱼币</strong><small>中奖 ${recon.prize_paid_total} ＋ 全员福利 ${recon.welfare_paid_total}；余额流水实际入账 ${recon.credited_ledger_total}</small></article>`;
 }
 
 function renderDarkMarketDetail(item) {

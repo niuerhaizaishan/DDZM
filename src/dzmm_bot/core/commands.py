@@ -44,7 +44,7 @@ from .service import CommandReply
 
 _BEIJING = ZoneInfo("Asia/Shanghai")
 _COMMANDS = {
-    "/入职", "/我的物品", "/购买", "/使用", "/邀请参与", "/取消使用", "/同意使用", "/拒绝使用", "/打卡", "/余额", "/修改名称", "/编辑档案", "/编辑档案形象", "/我的档案", "/公司的故事集", "/发奖金", "/发红包", "/抢红包", "/打赏", "/我", "/商店", "/帮助", "/当前游戏", "/加入", "/退出", "/开始", "/摸鱼躲猫猫", "/记忆考核", "/答案", "/继续", "/收手", "/投降", "/队伍1", "/队伍2", "/队伍1人员", "/队伍2人员", "/公会赛场次", "/开始对战", "/上场", "/部门", "/部门人数", "/我的部门人数", "/加入部门", "/切换部门", "/部门申请列表", "/同意部门", "/全部同意部门", "/拒绝部门", "/全部拒绝部门", "/职位", "/晋升", "/晋升申请列表", "/同意", "/全部同意", "/拒绝", "/全部拒绝", "/谁是卧底", "/开始投票", "/投票", "/退出谁是卧底", "/结束游戏", "/甩锅游戏", "/甩锅", "/退出甩锅", "/我有你没有", "/发言", "/扣", "/不扣", "/国王游戏", "/国王游戏数据", "/蹦蹦数字炸弹", "/报数", "/跳过", "/德州扑克", "/看牌", "/过牌", "/跟注", "/加注", "/全下", "/弃牌", "/上架暗网", "/取消上架", "/确认", "/报价", "/公开", "/不公开", "/查看暗网", "/确认收货", "/投诉", "/预约公演", "/我的公演预约", "/取消公演预约", "/公演日程", "/延期", "/end", "/购买彩票", "/彩票", "/我的彩票", "/确认彩票", "/取消彩票", "/彩票验证",
+    "/入职", "/我的物品", "/购买", "/使用", "/邀请参与", "/取消使用", "/同意使用", "/拒绝使用", "/打卡", "/余额", "/修改名称", "/编辑档案", "/编辑档案形象", "/我的档案", "/公司的故事集", "/发奖金", "/发红包", "/抢红包", "/打赏", "/我", "/商店", "/帮助", "/当前游戏", "/加入", "/退出", "/开始", "/摸鱼躲猫猫", "/记忆考核", "/答案", "/继续", "/收手", "/投降", "/队伍1", "/队伍2", "/队伍1人员", "/队伍2人员", "/公会赛场次", "/开始对战", "/上场", "/部门", "/部门人数", "/我的部门人数", "/加入部门", "/切换部门", "/部门申请列表", "/同意部门", "/全部同意部门", "/拒绝部门", "/全部拒绝部门", "/职位", "/晋升", "/晋升申请列表", "/同意", "/全部同意", "/拒绝", "/全部拒绝", "/谁是卧底", "/开始投票", "/投票", "/退出谁是卧底", "/结束游戏", "/甩锅游戏", "/甩锅", "/退出甩锅", "/我有你没有", "/发言", "/扣", "/不扣", "/国王游戏", "/国王游戏数据", "/蹦蹦数字炸弹", "/报数", "/跳过", "/德州扑克", "/看牌", "/过牌", "/跟注", "/加注", "/全下", "/弃牌", "/上架暗网", "/取消上架", "/确认", "/报价", "/公开", "/不公开", "/查看暗网", "/确认收货", "/投诉", "/预约公演", "/我的公演预约", "/取消公演预约", "/公演日程", "/延期", "/end", "/购买彩票", "/彩票", "/我的彩票", "/确认彩票", "/取消彩票", "/彩票验证", "/发放福利",
 }
 
 _LOTTERY_COMMANDS = {
@@ -54,6 +54,7 @@ _LOTTERY_COMMANDS = {
     "/确认彩票",
     "/取消彩票",
     "/彩票验证",
+    "/发放福利",
 }
 
 _DARK_MARKET_QUERY_ALIASES = {
@@ -4193,9 +4194,10 @@ class GroupCommandHandler:
                     ("/取消彩票", "/取消彩票：放弃草稿，不扣款"),
                     ("/我的彩票", "/我的彩票：查看本人近期投注、累计投入、累计中奖与净收益"),
                     ("/彩票验证", "/彩票验证 期号：查看已开奖期次的号码、盐与承诺哈希"),
+                    ("/发放福利", "/发放福利：开奖之后手动把调节金按人头发给全公司（不会自动发）"),
                     ("/彩票", "规则：每注 2 摸鱼币，每人每个自然日最多 5 注，同一期同一组号码只能买一次；开奖前 10 分钟停售，22:00 开奖"),
                     ("/彩票", "奖级：一等奖 100、二等奖 50、三等奖 15、四等奖 5、五等奖 1；任意中奖概率 26.59%，每注长期期望返回约 1.19 摸鱼币"),
-                    ("/彩票", "奖池上限 200 摸鱼币，超出部分转入调节金；调节金累计到当前员工总数时全员各发 1 摸鱼币"),
+                    ("/彩票", "奖池上限 200 摸鱼币，超出部分转入调节金；调节金累计到当前员工总数后由 /发放福利 手动发放，每人 1 摸鱼币"),
                 ),
             ),
         }
@@ -4294,7 +4296,15 @@ class GroupCommandHandler:
         "no_draft": "draft_missing",
         "limit": "draft_limit",
         "not_joined": "not_joined",
-        "closed": "closed",
+        "closed": "draft_closed",
+        "disabled": "disabled",
+    }
+
+    _LOTTERY_WELFARE_SCENARIOS = {
+        "paid": "paid",
+        "not_due": "not_due",
+        "not_drawn": "not_drawn",
+        "already_paid": "already_paid",
         "disabled": "disabled",
     }
 
@@ -4306,7 +4316,7 @@ class GroupCommandHandler:
         "daily_limit": "daily_limit",
         "round_full": "round_full",
         "duplicate": "duplicate",
-        "duplicate_request": "bought",
+        "duplicate_request": "duplicate_request",
         "insufficient_balance": "insufficient_balance",
     }
 
@@ -4331,6 +4341,8 @@ class GroupCommandHandler:
         )
         if status == "expired":
             return self._reply("/购买彩票", "draft_expired", received_at)
+        if status == "closed":
+            return self._reply("/购买彩票", "draft_closed", received_at)
         if status != "active":
             return None
 
@@ -4400,6 +4412,24 @@ class GroupCommandHandler:
                 self._company_lottery_history_values(history),
             )
 
+        if command == "/发放福利":
+            result = self._repository.settle_company_lottery_welfare_manually(
+                received_at
+            )
+            return self._reply(
+                "/发放福利",
+                self._LOTTERY_WELFARE_SCENARIOS.get(result.status, "not_due"),
+                received_at,
+                {
+                    "{调节金}": result.fund_before,
+                    "{门槛}": result.employee_count * result.per_person,
+                    "{人数}": result.employee_count,
+                    "{每人}": result.per_person,
+                    "{发放额}": result.paid_total,
+                    "{剩余}": result.fund_after,
+                },
+            )
+
         if command == "/彩票验证":
             parts = content.split()
             if len(parts) != 2 or not parts[1].lstrip("#").isdigit():
@@ -4435,7 +4465,7 @@ class GroupCommandHandler:
                 message.sender_platform_id,
                 received_at,
             )
-            if result.status in {"no_draft", "empty_draft"}:
+            if result.status in {"no_draft", "empty_draft", "expired", "closed"}:
                 return self._reply("/确认彩票", result.status, received_at)
             purchase = result.purchase
             return self._reply(

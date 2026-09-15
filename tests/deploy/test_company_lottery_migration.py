@@ -1,4 +1,5 @@
 from pathlib import Path
+from uuid import uuid4
 
 from alembic import command
 from alembic.config import Config
@@ -117,6 +118,26 @@ def test_company_lottery_migration_keeps_the_economy_global(tmp_path, monkeypatc
         assert "group_chat_id" not in columns, table
 
 
+def test_company_lottery_migration_adds_the_group_switch(tmp_path, monkeypatch):
+    """群级彩票入口开关默认开启，升级后行为与升级前一致。"""
+    engine = migrated_engine(tmp_path, monkeypatch)
+    group_chats = Table("group_chats", MetaData(), autoload_with=engine)
+
+    assert "lottery_enabled" in {column.name for column in group_chats.columns}
+
+    with engine.connect() as connection:
+        # 只给 id 也能插入，说明新列有默认值而不是 NOT NULL 无默认
+        connection.execute(
+            text("INSERT INTO group_chats (id) VALUES (:id)"),
+            {"id": uuid4().hex},
+        )
+        rows = connection.execute(
+            text("SELECT lottery_enabled FROM group_chats")
+        ).all()
+
+    assert [bool(row[0]) for row in rows] == [True]
+
+
 def test_company_lottery_migration_downgrades_cleanly(tmp_path, monkeypatch):
     engine = migrated_engine(tmp_path, monkeypatch)
     config = Config(str(ROOT / "alembic.ini"))
@@ -125,3 +146,7 @@ def test_company_lottery_migration_downgrades_cleanly(tmp_path, monkeypatch):
 
     remaining = set(inspect(engine).get_table_names())
     assert not (EXPECTED_TABLES & remaining)
+    columns = {
+        column["name"] for column in inspect(engine).get_columns("group_chats")
+    }
+    assert "lottery_enabled" not in columns

@@ -1481,6 +1481,97 @@ def test_daily_income_before_the_draw_only_has_the_ticket_cost(repository, seede
     assert repository.today_income(user_id, now) == 0
 
 
+def test_daily_ticket_limit_only_counts_the_same_beijing_day(repository, seeded, now):
+    """只写下界的话，明天买的票会算进今天的额度里。"""
+    from datetime import timedelta
+    from uuid import uuid4
+
+    repository.run_company_lottery_jobs(now)
+    view = repository.current_company_lottery_round()
+    tomorrow = now + timedelta(days=1)
+    with repository._session() as session:
+        session.add(
+            CompanyLotteryBetRecord(
+                round_id=view.id,
+                user_id=session.scalar(
+                    select(UserRecord.id).where(UserRecord.platform_id == "p1")
+                ),
+                red_1=1,
+                red_2=2,
+                red_3=3,
+                red_4=4,
+                blue=1,
+                ticket_key="01020304-01",
+                cost=2,
+                is_quick_pick=True,
+                inbound_message_id=uuid4(),
+                created_at=tomorrow,
+            )
+        )
+
+    with repository._session() as session:
+        user_id = session.scalar(
+            select(UserRecord.id).where(UserRecord.platform_id == "p1")
+        )
+        assert repository._company_lottery_today_count(session, user_id, now) == 0
+        assert (
+            repository._company_lottery_today_count(session, user_id, tomorrow) == 1
+        )
+
+
+def test_reconcile_cross_checks_the_employee_ledger(repository, seeded, now):
+    """三边对齐：期次/福利表记的应发 = 余额流水实际入账；且等于两本账的余额差。"""
+    repository.run_company_lottery_jobs(now)
+    view = repository.current_company_lottery_round()
+    seed_pool(repository, 100)
+    repository.buy_company_lottery_tickets(
+        UUID("00000000-0000-0000-0000-0000000006a5"),
+        "p1",
+        [answer_for(repository, view.id)],
+        now,
+    )
+    repository.run_company_lottery_jobs(DRAW_AT)
+    seed_account(repository, "adjustment", 4)
+    assert (
+        repository.settle_company_lottery_welfare_manually(DRAW_AT).status == "paid"
+    )
+
+    recon = repository.company_lottery_overview().reconcile
+
+    assert recon.prize_paid_total == 100
+    assert recon.welfare_paid_total == 2
+    assert recon.credited_total == 102
+    assert recon.credited_ledger_total == 102
+    assert recon.balanced is True
+
+
+def test_reconcile_flags_a_diverged_employee_ledger(repository, seeded, now):
+    """故意把员工侧流水改坏，对账必须报不平。"""
+    repository.run_company_lottery_jobs(now)
+    view = repository.current_company_lottery_round()
+    seed_pool(repository, 100)
+    repository.buy_company_lottery_tickets(
+        UUID("00000000-0000-0000-0000-0000000006a6"),
+        "p1",
+        [answer_for(repository, view.id)],
+        now,
+    )
+    repository.run_company_lottery_jobs(DRAW_AT)
+    with repository._session() as session:
+        row = session.scalar(
+            select(BalanceTransactionRecord).where(
+                BalanceTransactionRecord.source == LOTTERY_PRIZE_SOURCE
+            )
+        )
+        row.amount += 1
+
+    recon = repository.company_lottery_overview().reconcile
+
+    assert recon.credited_total == 100
+    assert recon.credited_ledger_total == 101
+    assert recon.balanced is False
+
+
 # --------------------------------------------------------------------------- 群级入口开关
 
 def set_group_switch(repository, group_id, **flags):
@@ -1620,11 +1711,21 @@ def test_run_jobs_skips_the_reminder_when_the_group_is_busy(repository, seeded, 
     assert outbound_texts(repository) == []
 
 
-def test_run_jobs_pays_welfare_after_drawing(repository, seeded, now):
+def test_welfare_waits_for_a_manual_command_after_the_draw(repository, seeded, now):
+    """定时任务不再自动发福利；开奖后要有人发 /发放福利 才发。"""
     repository.run_company_lottery_jobs(now)
     seed_account(repository, "adjustment", 2)
 
     repository.run_company_lottery_jobs(DRAW_AT)
+
+    # 开奖本身不发福利
+    assert not any("公司福利发放" in text for text in outbound_texts(repository))
+    assert balance_of(repository, "p1") == 100
+    assert repository.company_lottery_balances()[1] == 2
+
+    assert (
+        repository.settle_company_lottery_welfare_manually(DRAW_AT).status == "paid"
+    )
 
     texts = outbound_texts(repository)
     assert any("🎉 公司福利发放" in text for text in texts)
@@ -1632,6 +1733,45 @@ def test_run_jobs_pays_welfare_after_drawing(repository, seeded, now):
     assert "调节金累计达 2 摸鱼币" in welfare_text
     assert "全员各获得 1 摸鱼币" in welfare_text
     assert balance_of(repository, "p1") == 101
+
+
+def test_manual_draw_also_leaves_the_welfare_to_the_command(repository, seeded, now):
+    """后台手动开奖与定时任务同口径：都不发福利，避免绕开 /发放福利 的门槛。"""
+    repository.run_company_lottery_jobs(now)
+    seed_account(repository, "adjustment", 2)
+    view = repository.current_company_lottery_round()
+
+    drawn = repository.draw_company_lottery_round_manually(DRAW_AT)
+
+    assert drawn is not None and view is not None
+    assert not any("公司福利发放" in text for text in outbound_texts(repository))
+    assert balance_of(repository, "p1") == 100
+    assert repository.company_lottery_balances()[1] == 2
+
+    assert (
+        repository.settle_company_lottery_welfare_manually(DRAW_AT).status == "paid"
+    )
+    assert balance_of(repository, "p1") == 101
+
+
+def test_welfare_refuses_before_the_round_is_drawn(repository, seeded, now):
+    repository.run_company_lottery_jobs(now)
+    seed_account(repository, "adjustment", 2)
+
+    result = repository.settle_company_lottery_welfare_manually(now)
+
+    assert result.status == "not_drawn"
+    assert balance_of(repository, "p1") == 100
+    assert repository.company_lottery_balances()[1] == 2
+    assert outbound_texts(repository) == []
+
+
+def test_welfare_refuses_when_the_lottery_is_disabled(repository, seeded, now):
+    repository.update_company_lottery_settings(enabled=False)
+
+    assert (
+        repository.settle_company_lottery_welfare_manually(now).status == "disabled"
+    )
 
 
 def test_run_jobs_does_nothing_when_disabled(repository, seeded, now):

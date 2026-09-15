@@ -3945,6 +3945,7 @@ def _company_lottery_overview_response(
             prize_paid_total=overview.reconcile.prize_paid_total,
             welfare_paid_total=overview.reconcile.welfare_paid_total,
             credited_total=overview.reconcile.credited_total,
+            credited_ledger_total=overview.reconcile.credited_ledger_total,
             pool_balance=overview.reconcile.pool_balance,
             adjustment_balance=overview.reconcile.adjustment_balance,
             expected_balance=overview.reconcile.expected_balance,

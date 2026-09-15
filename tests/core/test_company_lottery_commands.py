@@ -130,6 +130,64 @@ def test_commands_are_group_only():
     assert reply == "请回到群里查看彩票信息。"
 
 
+def test_direct_messages_get_a_polite_refusal_not_silence():
+    """私聊发彩票指令必须回一句「回群里」，与 /商店 同口径，不能静默。"""
+    service, repository, factory, group, now = _setup()
+
+    for index, (command, expected) in enumerate(
+        (
+            ("/彩票", "请回到群里查看彩票信息。"),
+            ("/购买彩票 机选", "请回到群里购买彩票。"),
+            ("/我的彩票", "请回到群里查看彩票记录。"),
+            ("/确认彩票", "请回到群里确认购票。"),
+            ("/取消彩票", "请回到群里取消购票草稿。"),
+            ("/彩票验证 1", "请回到群里核验彩票。"),
+        ),
+        start=1,
+    ):
+        _purge(factory)
+        service.receive_inbound(
+            InboundMessage(f"d{index}", "p1", command, now, source_type="direct")
+        )
+        assert _reply(factory) == expected, command
+
+
+def test_draft_dies_with_its_round_instead_of_rolling_over():
+    """草稿是为一期挑的号：那一期开奖后不能再被买到下一期。"""
+    from dzmm_bot.core.schema import CompanyLotteryRoundRecord
+
+    service, repository, factory, group, now = _setup()
+    _send(service, group, "m1", "p1", "/购买彩票 2 注", now)
+    _send(service, group, "m2", "p1", "03 07 09 10 + 05", now)
+
+    # 让本期直接开奖
+    with repository._session() as session:
+        record = session.scalar(select(CompanyLotteryRoundRecord))
+        record.state = "drawn"
+    repository.ensure_company_lottery_round(now)
+    assert repository.current_company_lottery_round().round_number == 2
+
+    _send(service, group, "m3", "p1", "/确认彩票", now)
+    assert "已经停售或开奖" in _reply(factory)
+
+    # 草稿已被清掉，不会再默默买进第 2 期
+    assert repository.current_company_lottery_round().tickets_sold == 0
+
+
+def test_draft_step_reports_a_closed_round():
+    from dzmm_bot.core.schema import CompanyLotteryRoundRecord
+
+    service, repository, factory, group, now = _setup()
+    _send(service, group, "m1", "p1", "/购买彩票 2 注", now)
+    with repository._session() as session:
+        session.scalar(select(CompanyLotteryRoundRecord)).state = "drawn"
+    repository.ensure_company_lottery_round(now)
+
+    _send(service, group, "m2", "p1", "03 07 09 10 + 05", now)
+
+    assert "已经停售或开奖" in _reply(factory)
+
+
 def test_group_switch_blocks_the_whole_command_set():
     from dzmm_bot.core.schema import GroupChatRecord
 
@@ -246,7 +304,17 @@ def test_daily_limit_is_enforced_by_the_command_layer():
     _send(service, group, "m1", "p1", "/购买彩票 机选 5", now)
     _send(service, group, "m2", "p1", "/购买彩票 机选", now)
 
-    assert _reply(factory) == "今天已经买满 5 注了，明天再来。"
+    assert _reply(factory) == "今天最多还能买 0 注，明天再来。"
+
+
+def test_daily_limit_reports_the_real_remainder():
+    """一次要的注数超过今日剩余时，文案不能谎称「已经买满」。"""
+    service, repository, factory, group, now = _setup()
+
+    _send(service, group, "m1", "p1", "/购买彩票 机选 4", now)
+    _send(service, group, "m2", "p1", "/购买彩票 机选 3", now)
+
+    assert _reply(factory) == "今天最多还能买 1 注，明天再来。"
 
 
 def test_purchase_is_rejected_after_close():

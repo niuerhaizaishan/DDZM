@@ -1248,6 +1248,7 @@ class CompanyLotteryReconcileResponse(ApiModel):
     prize_paid_total: int
     welfare_paid_total: int
     credited_total: int
+    credited_ledger_total: int
     pool_balance: int
     adjustment_balance: int
     expected_balance: int
