@@ -44,7 +44,12 @@ from .service import CommandReply
 
 _BEIJING = ZoneInfo("Asia/Shanghai")
 _COMMANDS = {
-    "/入职", "/我的物品", "/购买", "/使用", "/邀请参与", "/取消使用", "/同意使用", "/拒绝使用", "/打卡", "/余额", "/修改名称", "/编辑档案", "/编辑档案形象", "/我的档案", "/公司的故事集", "/发奖金", "/发红包", "/抢红包", "/打赏", "/我", "/商店", "/帮助", "/当前游戏", "/加入", "/退出", "/开始", "/摸鱼躲猫猫", "/记忆考核", "/答案", "/继续", "/收手", "/投降", "/队伍1", "/队伍2", "/队伍1人员", "/队伍2人员", "/公会赛场次", "/开始对战", "/上场", "/部门", "/部门人数", "/我的部门人数", "/加入部门", "/切换部门", "/部门申请列表", "/同意部门", "/全部同意部门", "/拒绝部门", "/全部拒绝部门", "/职位", "/晋升", "/晋升申请列表", "/同意", "/全部同意", "/拒绝", "/全部拒绝", "/谁是卧底", "/开始投票", "/投票", "/退出谁是卧底", "/结束游戏", "/甩锅游戏", "/甩锅", "/退出甩锅", "/我有你没有", "/发言", "/扣", "/不扣", "/国王游戏", "/国王游戏数据", "/蹦蹦数字炸弹", "/报数", "/跳过", "/德州扑克", "/看牌", "/过牌", "/跟注", "/加注", "/全下", "/弃牌", "/上架暗网", "/取消上架", "/确认", "/报价", "/公开", "/不公开", "/查看暗网", "/确认收货", "/投诉", "/预约公演", "/我的公演预约", "/取消公演预约", "/公演日程", "/延期", "/end", "/购买彩票", "/彩票", "/我的彩票", "/确认彩票", "/取消彩票", "/彩票验证",
+    "/入职", "/我的物品", "/购买", "/使用", "/邀请参与", "/取消使用", "/同意使用", "/拒绝使用", "/打卡", "/余额", "/修改名称", "/编辑档案", "/编辑档案形象", "/我的档案", "/公司的故事集", "/发奖金", "/发红包", "/抢红包", "/打赏", "/我", "/商店", "/帮助", "/当前游戏", "/加入", "/退出", "/开始", "/摸鱼躲猫猫", "/记忆考核", "/答案", "/继续", "/收手", "/投降", "/队伍1", "/队伍2", "/队伍1人员", "/队伍2人员", "/公会赛场次", "/开始对战", "/上场", "/部门", "/部门人数", "/我的部门人数", "/加入部门", "/切换部门", "/部门申请列表", "/同意部门", "/全部同意部门", "/拒绝部门", "/全部拒绝部门", "/职位", "/晋升", "/晋升申请列表", "/同意", "/全部同意", "/拒绝", "/全部拒绝", "/谁是卧底", "/开始投票", "/投票", "/退出谁是卧底", "/结束游戏", "/甩锅游戏", "/甩锅", "/退出甩锅", "/我有你没有", "/发言", "/扣", "/不扣", "/国王游戏", "/国王游戏数据", "/蹦蹦数字炸弹", "/报数", "/跳过", "/德州扑克", "/看牌", "/过牌", "/跟注", "/加注", "/全下", "/弃牌", "/上架暗网", "/取消上架", "/确认", "/报价", "/公开", "/不公开", "/查看暗网", "/确认收货", "/投诉", "/预约公演", "/我的公演预约", "/取消公演预约", "/公演日程", "/延期", "/end", "/购买彩票", "/彩票", "/我的彩票", "/确认彩票", "/取消彩票", "/彩票验证", "/事件投票", "/事件投票情况",
+}
+
+_RANDOM_EVENT_VOTE_COMMANDS = {
+    "/事件投票",
+    "/事件投票情况",
 }
 
 _LOTTERY_COMMANDS = {
@@ -619,6 +624,10 @@ class GroupCommandHandler:
         if command in {"/同意", "/拒绝", "/全部同意", "/全部拒绝"}:
             return self._promotion_decision(
                 message.sender_platform_id, command, content, received_at
+            )
+        if command in {"/事件投票", "/事件投票情况"}:
+            return self._random_event_vote(
+                message, command, content, received_at
             )
         if command == "/加入":
             summary = self._repository.active_gameplay_summary(
@@ -3314,6 +3323,84 @@ class GroupCommandHandler:
             "role_full": "这个角色的席位已经满了。",
         }
         return self._reply("/加入", "failed", received_at, {"{原因}": reasons[status]})
+
+    def _random_event_vote(
+        self, message: InboundMessage, command: str, content: str, received_at
+    ) -> str:
+        """`/事件投票 序号` 与 `/事件投票情况`：全公司对下一场演什么表决。"""
+        if message.source_type != "group":
+            return self._reply(command, "group_only", received_at)
+        if command == "/事件投票情况":
+            view = self._repository.random_event_poll_view(
+                message.sender_platform_id
+            )
+            if view is None or view.status != "open":
+                return self._reply("/事件投票情况", "none", received_at)
+            return self._reply(
+                "/事件投票情况",
+                "shown",
+                received_at,
+                {"{票型}": self._random_event_vote_tally(view)},
+            )
+        parts = content.split(maxsplit=1)
+        if len(parts) != 2 or not parts[1].strip().isdigit():
+            return self._reply("/事件投票", "usage", received_at)
+        position = int(parts[1].strip())
+        result = self._repository.cast_random_event_vote(
+            message.sender_platform_id, position, received_at
+        )
+        if result.status in {
+            "no_poll",
+            "closed",
+            "no_candidate",
+            "vacant",
+            "not_joined",
+            "already_voted",
+        }:
+            return self._reply(
+                "/事件投票", result.status, received_at, {"{序号}": position}
+            )
+        view = result.view
+        candidate = (
+            None
+            if view is None
+            else next(
+                (item for item in view.candidates if item.position == position), None
+            )
+        )
+        return self._reply(
+            "/事件投票",
+            "changed" if result.status == "changed" else "recorded",
+            received_at,
+            {
+                "{序号}": position,
+                "{事件}": (
+                    "未命名"
+                    if candidate is None or not candidate.scene_name
+                    else candidate.scene_name
+                ),
+                "{票数}": 0 if candidate is None else candidate.votes,
+            },
+        )
+
+    def _random_event_vote_tally(self, view) -> str:
+        lines = [
+            f"【事件投票】{view.scheduled_at.strftime('%H:%M')} 那场，"
+            f"{view.closes_at.strftime('%H:%M')} 截止，已投 {view.total_votes} 票"
+        ]
+        for candidate in view.candidates:
+            if candidate.vacant:
+                lines.append(f"{candidate.position}. 📣 事件广告卡招商中")
+            else:
+                lines.append(
+                    f"{candidate.position}. 《{candidate.scene_name}》 "
+                    f"{candidate.votes} 票"
+                )
+        if view.my_position is not None:
+            lines.append(f"你投的是 {view.my_position} 号")
+        else:
+            lines.append("你还没投票，回复 /事件投票 序号")
+        return "\n".join(lines)
 
     def _event_leave(
         self, platform_id: str, received_at, group_chat_id=None

@@ -572,8 +572,8 @@ def company_story_novel_resource_id(value: str | None) -> str | None:
         return None
     match = _COMPANY_STORY_NOVEL_URL_PATTERN.fullmatch(value.strip())
     return None if match is None else match.group(1).lower()
-_DEFAULT_RANDOM_EVENT_SIGNUP_ALLOWED_COMMANDS = ("/加入", "/退出")
-_DEFAULT_RANDOM_EVENT_IN_PROGRESS_ALLOWED_COMMANDS = ("/退出",)
+_DEFAULT_RANDOM_EVENT_SIGNUP_ALLOWED_COMMANDS = ("/加入", "/退出", "/事件投票", "/事件投票情况")
+_DEFAULT_RANDOM_EVENT_IN_PROGRESS_ALLOWED_COMMANDS = ("/退出", "/事件投票", "/事件投票情况")
 _DEFAULT_RANDOM_EVENT_BLOCKED_MESSAGE = "当前有随机事件发生，监事不会处理。"
 _DEFAULT_RANDOM_EVENT_SUBMISSION_TIMEOUT_MINUTES = 30
 _DEFAULT_RANDOM_EVENT_SUBMISSION_MAX_PARTICIPANTS = 99
@@ -592,6 +592,7 @@ _RANDOM_EVENT_CONFIGURABLE_COMMANDS = frozenset(
         "/同意", "/全部同意", "/拒绝", "/全部拒绝",
         "/谁是卧底", "/开始投票", "/投票", "/退出谁是卧底", "/结束游戏",
         "/甩锅游戏", "/甩锅", "/退出甩锅", "/打赏",
+        "/事件投票", "/事件投票情况",
     }
 )
 _DEFAULT_HIDE_AND_SEEK_ENTRY_FEE = 1
@@ -2081,6 +2082,8 @@ _COMMAND_DEFINITIONS = (
     ("/发红包", "/发红包 人数 总金额", "使用自己的摸鱼币发出随机运气红包"),
     ("/抢红包", "/抢红包", "领取当前随机运气红包"),
     ("/打赏", "/打赏 员工名称 金额", "在随机事件打赏阶段向参与者转移摸鱼币"),
+    ("/事件投票", "/事件投票 序号", "给全公司的下一场随机事件投一票（每人一票，可改票）"),
+    ("/事件投票情况", "/事件投票情况", "查看本期随机事件投票的当前票型"),
     ("/我", "/我；/me", "查看余额、今日活跃度和今日收益"),
     ("/商店", "/商店", "查看当前上架物品"),
     ("/帮助", "/帮助", "查看当前可用指令"),
@@ -22199,7 +22202,7 @@ class CoreRepository:
                     vote.updated_at = now
                 session.flush()
                 return RandomEventVoteResult(
-                    "recorded",
+                    "recorded" if vote is None else "changed",
                     self._random_event_poll_view(session, poll, platform_id),
                     position,
                 )

@@ -169,6 +169,78 @@ TEMPLATE_DEFINITIONS = (
     TemplateDefinition("/加入", "not_joined", "未入职", "请先用 /入职 名字 加入摸鱼公司。", ("{日期}",)),
     TemplateDefinition("/加入", "invalid", "报名方式", "请用 /加入 角色 报名。", ("{日期}",)),
     TemplateDefinition("/加入", "failed", "报名失败", "{原因}", ("{原因}", "{日期}")),
+    TemplateDefinition(
+        "/事件投票",
+        "usage",
+        "投票方式",
+        "发送 /事件投票 序号 给下一场投一票；发送 /事件投票情况 看当前票型。",
+        ("{日期}",),
+    ),
+    TemplateDefinition(
+        "/事件投票",
+        "recorded",
+        "投票成功",
+        "✅ 已投 {序号} 号《{事件}》，当前 {票数} 票。",
+        ("{序号}", "{事件}", "{票数}", "{日期}"),
+    ),
+    TemplateDefinition(
+        "/事件投票",
+        "changed",
+        "改投成功",
+        "✅ 已改投 {序号} 号《{事件}》，当前 {票数} 票。",
+        ("{序号}", "{事件}", "{票数}", "{日期}"),
+    ),
+    TemplateDefinition(
+        "/事件投票", "no_poll", "没有投票", "现在没有正在进行的投票。", ("{日期}",)
+    ),
+    TemplateDefinition(
+        "/事件投票",
+        "closed",
+        "投票已截止",
+        "本期投票已经截止了，等下一次开投。",
+        ("{日期}",),
+    ),
+    TemplateDefinition(
+        "/事件投票",
+        "no_candidate",
+        "序号无效",
+        "没有 {序号} 号候选，看看候选列表再来。",
+        ("{序号}", "{日期}"),
+    ),
+    TemplateDefinition(
+        "/事件投票",
+        "vacant",
+        "广告位招商中",
+        "这个位置还在招商中（事件广告卡），换一个候选吧。",
+        ("{日期}",),
+    ),
+    TemplateDefinition(
+        "/事件投票",
+        "not_joined",
+        "未入职",
+        "请先用 /入职 名字 加入摸鱼公司。",
+        ("{日期}",),
+    ),
+    TemplateDefinition(
+        "/事件投票",
+        "already_voted",
+        "不能改票",
+        "已经投过了，本期不允许改票。",
+        ("{日期}",),
+    ),
+    TemplateDefinition(
+        "/事件投票", "group_only", "仅限群聊", "请回到群里投票。", ("{日期}",)
+    ),
+    TemplateDefinition(
+        "/事件投票情况", "shown", "当前票型", "{票型}", ("{票型}", "{日期}")
+    ),
+    TemplateDefinition(
+        "/事件投票情况",
+        "none",
+        "没有投票",
+        "现在没有正在进行的投票。",
+        ("{日期}",),
+    ),
     TemplateDefinition("/部门", "shown", "部门列表", "部门列表：\n{部门列表}", ("{部门列表}", "{日期}")),
     TemplateDefinition("/部门人数", "shown", "全部部门人数", "【部门人数统计】\n{部门统计}", ("{部门统计}", "{日期}")),
     TemplateDefinition("/部门人数", "not_joined", "未入职", "请先用 /入职 名字 加入摸鱼公司。", ("{日期}",)),

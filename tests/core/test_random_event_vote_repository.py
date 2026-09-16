@@ -345,7 +345,7 @@ def test_vote_is_recorded_and_can_be_changed(repository, seeded):
 
     changed = repository.cast_random_event_vote("p1", 2, NOW)
 
-    assert changed.status == "recorded"
+    assert changed.status == "changed"
     assert changed.view.my_position == 2
     assert changed.view.total_votes == 1
     with seeded() as session:

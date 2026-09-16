@@ -6,6 +6,7 @@ from alembic.config import Config
 from sqlalchemy import (
     Column,
     Integer,
+    JSON,
     MetaData,
     Table,
     Uuid,
@@ -58,7 +59,14 @@ def migrated_engine(tmp_path, monkeypatch):
         "random_event_scene_openings", metadata, Column("id", Uuid, primary_key=True)
     )
     Table("random_event_schedules", metadata, Column("id", Uuid, primary_key=True))
-    Table("random_event_settings", metadata, Column("id", Integer, primary_key=True))
+    Table(
+        "random_event_settings",
+        metadata,
+        Column("id", Integer, primary_key=True),
+        # 后续的放行清单迁移会读写这两列，桩表必须带上（这里只为读，允许为空）
+        Column("signup_allowed_commands", JSON),
+        Column("in_progress_allowed_commands", JSON),
+    )
     metadata.create_all(engine)
 
     config = Config(str(ROOT / "alembic.ini"))
