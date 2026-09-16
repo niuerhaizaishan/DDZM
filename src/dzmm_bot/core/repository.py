@@ -20877,8 +20877,13 @@ class CoreRepository:
         if daily is not None and daily.count > 0:
             daily.count -= 1
 
-    def schedule_random_events(self, now: datetime) -> list[RandomEventSchedule]:
+    def schedule_random_events(
+        self, now: datetime, *, day: date | None = None
+    ) -> list[RandomEventSchedule]:
         now = now.astimezone(BEIJING)
+        # `day` 只给"跨天开投"用：投票必须提前开，而每天第一场的那一行要等到
+        # 它自己到点才被创建——所以得能提前把第二天排出来（见 `_open_due_random_event_poll`）。
+        day = now.date() if day is None else day
         settings = self.get_random_event_settings()
         with self._session() as session:
             group_ids = tuple(
@@ -20901,7 +20906,7 @@ class CoreRepository:
                         select(RandomEventScheduleRecord)
                         .where(
                             RandomEventScheduleRecord.group_chat_id == group_chat_id,
-                            RandomEventScheduleRecord.event_date == now.date(),
+                            RandomEventScheduleRecord.event_date == day,
                         )
                         .order_by(RandomEventScheduleRecord.scheduled_at)
                     )
@@ -20921,6 +20926,9 @@ class CoreRepository:
                     if minute is None:
                         raise RuntimeError("random event schedule disappeared")
                     scheduled_at = now.replace(
+                        year=day.year,
+                        month=day.month,
+                        day=day.day,
                         hour=minute // 60,
                         minute=minute % 60,
                         second=0,
@@ -20928,7 +20936,7 @@ class CoreRepository:
                     )
                     record = RandomEventScheduleRecord(
                         group_chat_id=group_chat_id,
-                        event_date=now.date(),
+                        event_date=day,
                         scheduled_at=scheduled_at,
                         status=(
                             "skipped"
@@ -22994,6 +23002,10 @@ class CoreRepository:
         """该开投了吗：默认等上一场结束；离下一场不足兜底窗口就强行开投。"""
         schedule = self._next_votable_schedule(session, now)
         if schedule is None:
+            schedule = self._open_cross_day_random_event_poll(
+                session, settings, now
+            )
+        if schedule is None:
             return None
         closes_at = schedule.scheduled_at - timedelta(
             minutes=settings.vote_close_offset_minutes
@@ -23006,7 +23018,73 @@ class CoreRepository:
             minutes=settings.vote_fallback_minutes
         ):
             return None
+        if (
+            self._previous_pending_random_event_schedule(session, schedule)
+            is not None
+            and schedule.scheduled_at - now
+            > timedelta(minutes=settings.vote_fallback_minutes)
+        ):
+            # 上一场还挂着"待开始"就先不开下一场的投票：开投的时机是**上一场
+            # 打赏结束**，不是"上一场投票截止"（上一场投票在它开场前 10 分钟
+            # 就截止了）。离得太近（兜底窗口内）才不管上一场，先开起来。
+            return None
         return self._open_random_event_poll(session, settings, schedule, now)
+
+    def _previous_pending_random_event_schedule(
+        self, session: Session, schedule: RandomEventScheduleRecord
+    ) -> RandomEventScheduleRecord | None:
+        """比目标更早、还没演完（仍是 `pending`）的那一场。"""
+        return session.scalar(
+            select(RandomEventScheduleRecord)
+            .where(
+                RandomEventScheduleRecord.group_chat_id == schedule.group_chat_id,
+                RandomEventScheduleRecord.status == "pending",
+                RandomEventScheduleRecord.id != schedule.id,
+                RandomEventScheduleRecord.scheduled_at < schedule.scheduled_at,
+            )
+            .order_by(RandomEventScheduleRecord.scheduled_at.desc())
+            .limit(1)
+        )
+
+    def _open_cross_day_random_event_poll(
+        self,
+        session: Session,
+        settings: RandomEventSettings,
+        now: datetime,
+    ) -> RandomEventScheduleRecord | None:
+        """今天的场次都开过了，就把**次日第一场**先排出来，好让它也有投票。
+
+        每天第一场（默认 `00:00`）那一行要等到它自己到点才被创建，而投票必须
+        提前 `截止提前量` 分钟开投——不提前排出来，它永远轮不到投票，直接掉进
+        开演时的旧随机路径。这里只认"次日第一场"：后面的场次照旧等上一场结束
+        再开投，免得当天最后一份投票刚定稿就把次日的第二场也开出来。
+        """
+        minutes = [
+            minute
+            for minute in (
+                _event_time_minutes(value) for value in settings.schedule_times
+            )
+            if minute is not None
+        ]
+        if not minutes:
+            return None
+        first, last = min(minutes), max(minutes)
+        if now < now.replace(
+            hour=last // 60, minute=last % 60, second=0, microsecond=0
+        ):
+            # 今天还有场次没到点，走正常节奏
+            return None
+        tomorrow = now.date() + timedelta(days=1)
+        self.schedule_random_events(now, day=tomorrow)
+        candidate = self._next_votable_schedule(session, now)
+        if candidate is None or candidate.event_date != tomorrow:
+            return None
+        if (candidate.scheduled_at.hour, candidate.scheduled_at.minute) != (
+            first // 60,
+            first % 60,
+        ):
+            return None
+        return candidate
 
     def _random_event_poll_target_lost(
         self, session: Session, poll: RandomEventPollRecord

@@ -406,3 +406,80 @@ def test_candidate_intro_shows_the_author(repository, seeded):
     text = "\n".join(outbound_texts(repository))
     assert "by 名字特别特别长的…" in text
     assert "by 官方" in text
+
+
+# ------------------------------------------------- 开投时机（用户口径）
+
+def test_the_next_vote_waits_for_the_previous_show_to_finish(repository, seeded):
+    """上一场的投票在它开场前 10 分钟就截止了，但下一场的投票要等它演完。"""
+    with seeded.begin() as session:
+        seed_scenes(session)
+        first = add_schedule(session, TARGET_AT)
+        add_schedule(session, TARGET_AT + timedelta(hours=2))
+    repository.run_random_event_jobs(NOW)
+    repository.run_random_event_jobs(TARGET_AT - timedelta(minutes=10))
+    assert open_polls(repository)[0].status == "closed"
+
+    # 上一场刚定稿、还没开演：不能顺手就把两小时后那场的投票开出来
+    repository.run_random_event_jobs(TARGET_AT - timedelta(minutes=9))
+    assert len(open_polls(repository)) == 1
+
+    # 上一场演完了，下一场的投票这才开
+    with seeded.begin() as session:
+        session.get(RandomEventScheduleRecord, first.id).status = "ended"
+    repository.run_random_event_jobs(TARGET_AT + timedelta(minutes=30))
+
+    polls = open_polls(repository)
+    assert [poll.status for poll in polls] == ["closed", "open"]
+    assert polls[1].closes_at == TARGET_AT + timedelta(hours=2) - timedelta(minutes=10)
+
+
+def test_the_next_vote_opens_inside_the_fallback_window_anyway(repository, seeded):
+    """离下一场只剩 20 分钟时，上一场还没演完也得先把投票开起来。"""
+    with seeded.begin() as session:
+        seed_scenes(session)
+        add_schedule(session, TARGET_AT - timedelta(hours=2))
+        add_schedule(session, TARGET_AT)
+    repository.run_random_event_jobs(NOW)
+    repository.run_random_event_jobs(TARGET_AT - timedelta(hours=2, minutes=10))
+    assert open_polls(repository)[0].status == "closed"
+
+    repository.run_random_event_jobs(TARGET_AT - timedelta(minutes=20))
+
+    assert [poll.status for poll in open_polls(repository)] == ["closed", "open"]
+
+
+def test_the_first_show_of_the_next_day_still_gets_its_poll(repository, seeded):
+    """每天第一场那一行要等它自己到点才建，得提前排出来，否则它永远没有投票。"""
+    night = datetime(2026, 9, 15, 21, 0, tzinfo=BEIJING)
+    last_show = datetime(2026, 9, 15, 20, 0, tzinfo=BEIJING)
+    with seeded.begin() as session:
+        seed_scenes(session)
+        add_schedule(session, last_show, status="ended", scene_name="甲")
+
+    repository.run_random_event_jobs(night)
+
+    polls = open_polls(repository)
+    assert len(polls) == 1
+    assert polls[0].status == "open"
+    with repository._session() as session:
+        target = session.get(RandomEventScheduleRecord, polls[0].target_schedule_id)
+    assert target.scheduled_at == datetime(2026, 9, 16, 0, 0, tzinfo=BEIJING)
+    assert polls[0].closes_at == datetime(2026, 9, 15, 23, 50, tzinfo=BEIJING)
+
+
+def test_the_next_day_schedule_is_not_created_before_todays_shows_are_done(
+    repository, seeded
+):
+    """今天还有场次没到点，就不该提前把明天的行排出来。"""
+    with seeded.begin() as session:
+        seed_scenes(session)
+        add_schedule(session, datetime(2026, 9, 15, 18, 0, tzinfo=BEIJING))
+
+    repository.run_random_event_jobs(datetime(2026, 9, 15, 16, 0, tzinfo=BEIJING))
+
+    with repository._session() as session:
+        dates = set(
+            session.scalars(select(RandomEventScheduleRecord.event_date))
+        )
+    assert dates == {datetime(2026, 9, 15).date()}
