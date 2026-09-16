@@ -21295,6 +21295,8 @@ class CoreRepository:
             with self._session() as session:
                 self._lock_gameplay_gate(session)
                 self.schedule_random_events(now)
+                # 投票必须排在预告之前：截止（T−10）与预告（T−5）可能落在同一个 tick。
+                self._run_random_event_vote_jobs(session, now)
                 group_ids = tuple(
                     session.scalars(
                         select(RandomEventScheduleRecord.group_chat_id)
@@ -22115,7 +22117,10 @@ class CoreRepository:
                 schedule = self._next_votable_schedule(session, now)
                 if schedule is None:
                     return None
-                return self._open_random_event_poll(session, settings, schedule, now)
+                record = self._open_random_event_poll(session, settings, schedule, now)
+                if record is None:
+                    return None
+                return self._random_event_poll_view(session, record)
 
     def random_event_poll_view(
         self, platform_id: str | None = None
@@ -22322,6 +22327,150 @@ class CoreRepository:
             .order_by(RandomEventPollRecord.closes_at)
         )
 
+    def _run_random_event_vote_jobs(self, session: Session, now: datetime) -> None:
+        """投票的四段：开投、周期播报、到点定稿、目标丢了就顺延。
+
+        每段都靠落库字段做幂等（`announced_at` / `last_tally_at` / `status`），
+        所以 Worker 每秒跑一次也不会重复播报。
+        """
+        settings = self.get_random_event_settings()
+        if not settings.vote_enabled:
+            return
+        poll = self._open_random_event_poll_record(session)
+        if poll is not None and self._random_event_poll_target_lost(session, poll):
+            poll = self._carry_over_random_event_poll(session, poll, settings, now)
+        if poll is None:
+            poll = self._open_due_random_event_poll(session, settings, now)
+            if poll is None:
+                return
+            self._random_event_announce(
+                _render_random_event_vote_open(
+                    self._random_event_poll_view(session, poll)
+                )
+            )
+            poll.announced_at = now
+            poll.last_tally_at = now
+            session.flush()
+            return
+        if poll.closes_at <= now:
+            result = self.close_random_event_poll(now)
+            if result.status == "closed":
+                self._random_event_announce(
+                    _render_random_event_vote_result(
+                        result.view, result.position, result.fallback_reason
+                    )
+                )
+            return
+        if self._random_event_tally_due(poll, settings, now):
+            self._random_event_announce(
+                _render_random_event_vote_tally(
+                    self._random_event_poll_view(session, poll)
+                )
+            )
+            poll.last_tally_at = now
+            session.flush()
+
+    def _open_due_random_event_poll(
+        self,
+        session: Session,
+        settings: RandomEventSettings,
+        now: datetime,
+    ) -> RandomEventPollRecord | None:
+        """该开投了吗：默认等上一场结束；离下一场不足兜底窗口就强行开投。"""
+        schedule = self._next_votable_schedule(session, now)
+        if schedule is None:
+            return None
+        closes_at = schedule.scheduled_at - timedelta(
+            minutes=settings.vote_close_offset_minutes
+        )
+        if closes_at <= now:
+            # 来不及投票了，交给开演时的旧随机路径兜底
+            return None
+        active = self._active_random_event(session, schedule.group_chat_id)
+        if active is not None and schedule.scheduled_at - now > timedelta(
+            minutes=settings.vote_fallback_minutes
+        ):
+            return None
+        return self._open_random_event_poll(session, settings, schedule, now)
+
+    def _random_event_poll_target_lost(
+        self, session: Session, poll: RandomEventPollRecord
+    ) -> bool:
+        schedule = session.get(RandomEventScheduleRecord, poll.target_schedule_id)
+        return (
+            schedule is None
+            or schedule.status != "pending"
+            or schedule.scene_name is not None
+        )
+
+    def _carry_over_random_event_poll(
+        self,
+        session: Session,
+        poll: RandomEventPollRecord,
+        settings: RandomEventSettings,
+        now: datetime,
+    ) -> RandomEventPollRecord | None:
+        """目标场次被跳过/取消时，把这份投票顺延到再下一个场次，票与广告位都保留。"""
+        schedule = self._next_votable_schedule(session, now)
+        if schedule is None:
+            return self._cancel_random_event_poll(session, poll, now)
+        closes_at = schedule.scheduled_at - timedelta(
+            minutes=settings.vote_close_offset_minutes
+        )
+        if closes_at <= now:
+            return self._cancel_random_event_poll(session, poll, now)
+        poll.target_schedule_id = schedule.id
+        poll.closes_at = closes_at
+        poll.last_tally_at = now
+        session.flush()
+        self._random_event_announce(
+            _render_random_event_vote_carryover(
+                self._random_event_poll_view(session, poll)
+            )
+        )
+        return poll
+
+    def _cancel_random_event_poll(
+        self, session: Session, poll: RandomEventPollRecord, now: datetime
+    ) -> None:
+        poll.status = "cancelled"
+        poll.closed_at = now
+        session.flush()
+        self._random_event_announce(_render_random_event_vote_cancelled())
+        return None
+
+    def _random_event_tally_due(
+        self,
+        poll: RandomEventPollRecord,
+        settings: RandomEventSettings,
+        now: datetime,
+    ) -> bool:
+        """播报间隔自适应：不短于配置值，也不让一个窗口播超过 6 次。"""
+        window = poll.closes_at - poll.opened_at
+        interval = timedelta(minutes=settings.vote_broadcast_interval_minutes)
+        adaptive = window / 6
+        if adaptive > interval:
+            interval = adaptive
+        last = poll.last_tally_at or poll.opened_at
+        return now - last >= interval
+
+    def _random_event_announce(self, text: str) -> int:
+        """把投票公告广播到允许公告的已监听群；与彩票公告同一套过滤条件。"""
+        delivered = 0
+        for group in self.list_group_chats():
+            if not group.listening_enabled or not group.announcements_enabled:
+                continue
+            destination = self.group_chat_destination(group.id)
+            if destination is None:
+                continue
+            self.enqueue_system_outbound(
+                text,
+                group_chat_id=group.id,
+                destination_chatroom_id=destination,
+            )
+            delivered += 1
+        return delivered
+
     def _next_votable_schedule(
         self, session: Session, now: datetime
     ) -> RandomEventScheduleRecord | None:
@@ -22389,7 +22538,7 @@ class CoreRepository:
         settings: RandomEventSettings,
         schedule: RandomEventScheduleRecord,
         now: datetime,
-    ) -> RandomEventPollView | None:
+    ) -> RandomEventPollRecord | None:
         scenes, performed, planned = self._random_event_scene_pool(session, schedule)
         with_templates = set(
             session.scalars(select(RandomEventSceneOpeningRecord.scene_id))
@@ -22405,12 +22554,18 @@ class CoreRepository:
             return None
         by_name = {scene.name: scene for scene in scenes}
 
+        closes_at = schedule.scheduled_at - timedelta(
+            minutes=settings.vote_close_offset_minutes
+        )
+        if closes_at <= now:
+            # 已经来不及投票，别建一份刚出生就过期的投票
+            return None
+
         poll = RandomEventPollRecord(
             target_schedule_id=schedule.id,
             status="open",
             opened_at=now,
-            closes_at=schedule.scheduled_at
-            - timedelta(minutes=settings.vote_close_offset_minutes),
+            closes_at=closes_at,
             created_at=now,
         )
         session.add(poll)
@@ -22437,6 +22592,12 @@ class CoreRepository:
                 )
             )
             position += 1
+            seat_summary = _random_event_seat_summary(
+                [(seat.role, seat.capacity) for seat in seats]
+            )
+            if len(seats) > 2 or len(seat_summary) > 24:
+                # 公告是一行一个候选，身份太长就只报人数，避免被拆成多条消息
+                seat_summary = f"{sum(seat.capacity for seat in seats)} 人"
             session.add(
                 RandomEventPollCandidateRecord(
                     poll_id=poll.id,
@@ -22446,9 +22607,7 @@ class CoreRepository:
                     template_id=template.id,
                     scene_name=scene.name,
                     event_name=template.name,
-                    seat_summary=_random_event_seat_summary(
-                        [(seat.role, seat.capacity) for seat in seats]
-                    ),
+                    seat_summary=seat_summary,
                     reward=scene.reward,
                     target_rounds=scene.target_rounds,
                     vacant=False,
@@ -22467,7 +22626,7 @@ class CoreRepository:
                 )
             )
         session.flush()
-        return self._random_event_poll_view(session, poll)
+        return poll
 
     def _random_event_poll_view(
         self,
@@ -30204,6 +30363,81 @@ def _render_random_event_signup_notice(
         template.replace("{可选身份}", open_seats)
         .replace("{报名截止分钟}", str(signup_timeout_minutes))
     )
+
+
+def _render_random_event_vote_candidate(view, candidate) -> str:
+    if candidate.vacant:
+        return f"{candidate.position}. 📣 事件广告卡招商中"
+    parts = [f"{candidate.position}. 《{candidate.scene_name}》"]
+    if candidate.seat_summary:
+        parts.append(candidate.seat_summary)
+    if candidate.reward is not None:
+        parts.append(f"奖{candidate.reward}")
+    return " ".join(parts)
+
+
+def _render_random_event_vote_open(view: RandomEventPollView) -> str:
+    lines = [
+        f"【事件投票】{view.scheduled_at.strftime('%H:%M')} 那场演什么？"
+        f"（{view.closes_at.strftime('%H:%M')} 截止）"
+    ]
+    lines.extend(
+        _render_random_event_vote_candidate(view, candidate)
+        for candidate in view.candidates
+    )
+    lines.append("回复 /事件投票 序号")
+    return "\n".join(lines)
+
+
+def _render_random_event_vote_tally(view: RandomEventPollView) -> str:
+    lines = [
+        f"【事件投票·票型】{view.total_votes} 人已投，"
+        f"{view.closes_at.strftime('%H:%M')} 截止"
+    ]
+    for candidate in view.candidates:
+        if candidate.vacant:
+            lines.append(f"{candidate.position}. 📣 事件广告卡招商中")
+        else:
+            lines.append(
+                f"{candidate.position}. 《{candidate.scene_name}》 "
+                f"{candidate.votes} 票"
+            )
+    lines.append("回复 /事件投票 序号")
+    return "\n".join(lines)
+
+
+def _render_random_event_vote_result(
+    view: RandomEventPollView | None,
+    position: int | None,
+    fallback_reason: str | None,
+) -> str:
+    if view is None or position is None:
+        return "【事件投票·结果】本期没有产生结果。"
+    winner = next(
+        (row for row in view.candidates if row.position == position), None
+    )
+    label = {
+        "no_votes": "（无人投票，随机选定）",
+        "tie": "（平票，按演出次数与投稿时间裁定）",
+        "manual": "（管理员指定）",
+    }.get(fallback_reason or "", "")
+    scene_name = "未命名" if winner is None else winner.scene_name
+    return (
+        f"【事件投票·结果】{view.scheduled_at.strftime('%H:%M')} 那场演"
+        f"《{scene_name}》{label}"
+    )
+
+
+def _render_random_event_vote_carryover(view: RandomEventPollView) -> str:
+    return (
+        f"【事件投票】上一场没能开成，本期顺延到 "
+        f"{view.scheduled_at.strftime('%H:%M')} 那场。\n"
+        f"已经投过的票保留，{view.closes_at.strftime('%H:%M')} 截止。"
+    )
+
+
+def _render_random_event_vote_cancelled() -> str:
+    return "【事件投票】没有可以顺延的场次了，本期投票作废。"
 
 
 def _random_event_schedule(

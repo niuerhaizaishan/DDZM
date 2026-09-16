@@ -955,7 +955,17 @@ def test_company_lottery_end_to_end_from_sale_to_next_round(app_context, headers
     assert "【公司双色球开奖】" in announcement
     assert "端到端丙" in announcement
     assert "第 2 期已开卖" in announcement
-    assert repository.find_user("e2e-3").balance == 198 + 100
+    # 机选票也是真随机、也可能中奖，奖池不够时头奖会按比例折算，所以按实际派奖额断言
+    head_prize = next(
+        item
+        for item in repository.company_lottery_overview().prizes
+        if item.display_name == "端到端丙"
+    )
+    assert head_prize.tier == "head"
+    assert (
+        repository.find_user("e2e-3").balance
+        == 198 + head_prize.prize_amount
+    )
     assert repository.find_user("e2e-2").balance == 196
 
     settled = repository.company_lottery_round_by_number(1)
