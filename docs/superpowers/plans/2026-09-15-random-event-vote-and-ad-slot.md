@@ -43,7 +43,7 @@
 
 - [ ] 写失败测试：upgrade 建出 `random_event_polls` / `random_event_poll_candidates` / `random_event_poll_votes` 与各自的唯一约束与索引；downgrade 删净；`random_event_settings` 新增配置列。
 - [ ] 运行 `pytest -q tests/deploy/test_random_event_vote_migration.py`，确认失败。
-- [ ] 加表与列：`polls(target_schedule_id` 唯一`, status, opened_at, closes_at, closed_at, winner_candidate_id, announced_at, last_tally_at, fallback_reason)`；`candidates(poll_id, position, source, scene_id, template_id, scene_name, event_name, seat_summary, reward, target_rounds, ad_slot_id, vacant)` 带 `unique(poll_id, position)` 与 `unique(poll_id, scene_id, template_id)`；`votes(poll_id, user_id, candidate_id, created_at, updated_at)` 带 `unique(poll_id, user_id)`；settings 加 `vote_enabled / vote_close_offset_minutes / vote_broadcast_interval_minutes / vote_random_candidates / ad_slot_limit / vote_fallback_minutes / vote_allow_change`。
+- [ ] 加表与列：`polls(target_schedule_id` 唯一`, status, opened_at, closes_at, closed_at, winner_candidate_id, announced_at, last_tally_at, fallback_reason)`；`candidates(poll_id, position, source, scene_id, template_id, scene_name, event_name, seat_summary, reward, target_rounds, author_name, vacant)` 带 `unique(poll_id, position)` 与 `unique(poll_id, scene_id)`（推荐位来源改记在 `random_event_ad_slots` 上，候选表不再有 `ad_slot_id`；`author_name` 为后加的署名快照）；`votes(poll_id, user_id, candidate_id, created_at, updated_at)` 带 `unique(poll_id, user_id)`；settings 加 `vote_enabled / vote_close_offset_minutes / vote_broadcast_interval_minutes / vote_random_candidates / vote_ad_slot_limit / vote_fallback_minutes / vote_allow_change`。
 - [ ] `down_revision = "20260915_75"`；重新运行测试确认通过。
 
 > 迁移头当前是 `20260915_75`。三张表的 `poll` 不带 `group_chat_id`（全公司一份），群信息通过 `target_schedule_id` 关联。
@@ -57,7 +57,7 @@
 
 - [ ] 写失败测试：三档优先与**跨档补齐**（只给 2 个"没演过"时，第 3 个来自"没排过"档）；3 个候选互不相同；池子不足 3 个时按实际数量返回；平票三级判定（演出次数 → 投稿时间 → 随机，且随机可复现）；计票与"每人一票"。
 - [ ] 运行 `pytest -q tests/core/test_random_event_vote.py`，确认失败。
-- [ ] 实现纯函数：`pick_candidates(pool, performed_names, planned_names, count, random_source)`、`break_tie(candidates, performed_counts, submitted_at, random_source)`、`tally(votes)`。**不碰数据库**，与 `company_lottery.py` 同样式的无依赖模块。
+- [ ] 实现纯函数：`tiered_pool(scenes, performed, planned)` + `pick_tiered(tiers, count, randbelow)`（原设计的 `pick_candidates`）、`break_tie(candidates, performances, authored_at, randbelow) -> (winner, tier)`、`tally(votes)`。**不碰数据库**，与 `company_lottery.py` 同样式的无依赖模块。
 - [ ] 重新运行测试确认通过。
 
 > 三档优先的语义必须与 `repository.py:22064-22078` 逐字一致：`unperformed = 没演过且没排过`；`if unperformed: 用 unperformed` 否则 `unplanned = 没排过`；`if unplanned: 用 unplanned`。跨档补齐是本任务的唯一扩展点，要在测试里固定。
@@ -128,7 +128,7 @@
 
 **Files:**
 
-- Create: `migrations/versions/20260915_77_random_event_ad_slots.py`
+- Create: `migrations/versions/20260915_78_random_event_ad_slots.py`（编号顺延，见本文件上方说明）
 - Modify: `src/dzmm_bot/core/schema.py`、`src/dzmm_bot/core/shop_cards.py`
 - Test: `tests/deploy/test_random_event_ad_slot_migration.py`
 
