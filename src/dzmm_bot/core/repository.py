@@ -265,6 +265,8 @@ from .schema import (
     RandomEventSceneOpeningRecord,
     RandomEventSceneSeatRecord,
     RandomEventSettingsRecord,
+    RandomEventAdSlotRecord,
+    RandomEventAdSlotDraftRecord,
     RandomEventPollRecord,
     RandomEventPollCandidateRecord,
     RandomEventPollVoteRecord,
@@ -572,6 +574,7 @@ def company_story_novel_resource_id(value: str | None) -> str | None:
         return None
     match = _COMPANY_STORY_NOVEL_URL_PATTERN.fullmatch(value.strip())
     return None if match is None else match.group(1).lower()
+_RANDOM_EVENT_AD_SLOT_DRAFT_TIMEOUT_MINUTES = 15
 _DEFAULT_RANDOM_EVENT_SIGNUP_ALLOWED_COMMANDS = ("/加入", "/退出", "/事件投票", "/事件投票情况")
 _DEFAULT_RANDOM_EVENT_IN_PROGRESS_ALLOWED_COMMANDS = ("/退出", "/事件投票", "/事件投票情况")
 _DEFAULT_RANDOM_EVENT_BLOCKED_MESSAGE = "当前有随机事件发生，监事不会处理。"
@@ -875,6 +878,21 @@ class RandomEventVoteResult:
     status: str
     view: RandomEventPollView | None = None
     position: int | None = None
+
+
+@dataclass(frozen=True)
+class RandomEventAdSlotWork:
+    position: int
+    scene_id: UUID
+    scene_name: str
+
+
+@dataclass(frozen=True)
+class RandomEventAdSlotDraftResult:
+    status: str
+    direct_chatroom_id: str | None = None
+    works: tuple[RandomEventAdSlotWork, ...] = ()
+    selected: RandomEventAdSlotWork | None = None
 
 
 @dataclass(frozen=True)
@@ -22236,6 +22254,325 @@ class CoreRepository:
                     position,
                 )
 
+    # ------------------------------------------------- 随机事件·事件广告卡
+
+    def start_random_event_ad_slot(
+        self, platform_id: str, item_number: int, now: datetime
+    ) -> RandomEventAdSlotDraftResult:
+        """`/使用 事件广告卡`：校验前置条件并开出私聊向导草稿（此时不消耗卡）。"""
+        now = now.astimezone(BEIJING)
+        settings = self.get_random_event_settings()
+        with self.transaction():
+            with self._session() as session:
+                user = session.scalar(
+                    select(UserRecord).where(UserRecord.platform_id == platform_id)
+                )
+                if user is None:
+                    return RandomEventAdSlotDraftResult("not_joined")
+                direct_chatroom_id = session.scalar(
+                    select(DirectChatRecord.chatroom_id).where(
+                        DirectChatRecord.platform_user_id == platform_id
+                    )
+                )
+                if direct_chatroom_id is None:
+                    return RandomEventAdSlotDraftResult("direct_chat_required")
+                item = session.scalar(
+                    select(ItemRecord).where(
+                        ItemRecord.public_number == item_number,
+                        ItemRecord.system_key == "event_ad_slot",
+                    )
+                )
+                if item is None or item.effect_type != "event_ad_slot":
+                    return RandomEventAdSlotDraftResult("item_missing")
+                poll = self._open_random_event_poll_record(session)
+                if poll is None or poll.closes_at <= now:
+                    return RandomEventAdSlotDraftResult("no_poll")
+                if not settings.vote_enabled:
+                    return RandomEventAdSlotDraftResult("disabled")
+                works = self._random_event_ad_slot_works(session, user.id)
+                if not works:
+                    return RandomEventAdSlotDraftResult("no_works")
+
+                draft = session.scalar(
+                    select(RandomEventAdSlotDraftRecord).where(
+                        RandomEventAdSlotDraftRecord.user_id == user.id
+                    )
+                )
+                if draft is None:
+                    draft = RandomEventAdSlotDraftRecord(
+                        user_id=user.id,
+                        item_id=item.id,
+                        poll_id=poll.id,
+                        current_step="pick_event",
+                        created_at=now,
+                        updated_at=now,
+                        last_activity_at=now,
+                        expires_at=now
+                        + timedelta(
+                            minutes=_RANDOM_EVENT_AD_SLOT_DRAFT_TIMEOUT_MINUTES
+                        ),
+                    )
+                    session.add(draft)
+                else:
+                    draft.item_id = item.id
+                    draft.poll_id = poll.id
+                    draft.current_step = "pick_event"
+                    draft.scene_id = None
+                    draft.updated_at = now
+                    draft.last_activity_at = now
+                    draft.expires_at = now + timedelta(
+                        minutes=_RANDOM_EVENT_AD_SLOT_DRAFT_TIMEOUT_MINUTES
+                    )
+                session.flush()
+                return RandomEventAdSlotDraftResult(
+                    "started",
+                    direct_chatroom_id=direct_chatroom_id,
+                    works=works,
+                )
+
+    def random_event_ad_slot_draft_step(
+        self, platform_id: str, now: datetime
+    ) -> str | None:
+        """有草稿就返回当前步骤；草稿已过期返回 `expired`（要提示，不能静默吞掉）。"""
+        now = now.astimezone(BEIJING)
+        with self._session() as session:
+            user_id = session.scalar(
+                select(UserRecord.id).where(UserRecord.platform_id == platform_id)
+            )
+            if user_id is None:
+                return None
+            draft = session.scalar(
+                select(RandomEventAdSlotDraftRecord).where(
+                    RandomEventAdSlotDraftRecord.user_id == user_id
+                )
+            )
+            if draft is None:
+                return None
+            if draft.expires_at <= now:
+                session.delete(draft)
+                session.flush()
+                return "expired"
+            return draft.current_step
+
+    def consume_random_event_ad_slot_draft(
+        self, platform_id: str, content: str, now: datetime
+    ) -> RandomEventAdSlotDraftResult:
+        """私聊向导：`/选择 序号` 选作品，`/确认广告位` 真正占位并消耗卡。"""
+        now = now.astimezone(BEIJING)
+        with self.transaction():
+            with self._session() as session:
+                draft = self._active_random_event_ad_slot_draft(
+                    session, platform_id, now
+                )
+                if draft is None:
+                    return RandomEventAdSlotDraftResult("no_draft")
+                user = session.get(UserRecord, draft.user_id)
+                if user is None:
+                    return RandomEventAdSlotDraftResult("not_joined")
+                works = self._random_event_ad_slot_works(session, user.id)
+                command, _, argument = content.strip().partition(" ")
+                argument = argument.strip()
+
+                if command == "/选择":
+                    if not argument.isdigit():
+                        return RandomEventAdSlotDraftResult(
+                            "pick_usage", works=works
+                        )
+                    selected = next(
+                        (
+                            work
+                            for work in works
+                            if work.position == int(argument)
+                        ),
+                        None,
+                    )
+                    if selected is None:
+                        return RandomEventAdSlotDraftResult(
+                            "pick_missing", works=works
+                        )
+                    draft.scene_id = selected.scene_id
+                    draft.current_step = "confirm"
+                    draft.updated_at = now
+                    draft.last_activity_at = now
+                    draft.expires_at = now + timedelta(
+                        minutes=_RANDOM_EVENT_AD_SLOT_DRAFT_TIMEOUT_MINUTES
+                    )
+                    session.flush()
+                    return RandomEventAdSlotDraftResult(
+                        "picked", works=works, selected=selected
+                    )
+
+                if command == "/确认广告位":
+                    if draft.current_step != "confirm" or draft.scene_id is None:
+                        return RandomEventAdSlotDraftResult(
+                            "pick_required", works=works
+                        )
+                    return self._confirm_random_event_ad_slot(
+                        session, draft, user, works, now
+                    )
+
+                return RandomEventAdSlotDraftResult("unknown", works=works)
+
+    def _random_event_ad_slot_works(
+        self, session: Session, user_id: UUID
+    ) -> tuple[RandomEventAdSlotWork, ...]:
+        """作者已审核通过的作品，按投稿编号排序后给出 1..N 的序号。"""
+        rows = session.execute(
+            select(
+                RandomEventSubmissionRecord.scene_id,
+                RandomEventSceneRecord.name,
+            )
+            .join(
+                RandomEventSceneRecord,
+                RandomEventSceneRecord.id == RandomEventSubmissionRecord.scene_id,
+            )
+            .where(
+                RandomEventSubmissionRecord.user_id == user_id,
+                RandomEventSubmissionRecord.status == "approved",
+                RandomEventSubmissionRecord.scene_id.is_not(None),
+            )
+            .order_by(RandomEventSubmissionRecord.number)
+        ).all()
+        return tuple(
+            RandomEventAdSlotWork(
+                position=index, scene_id=scene_id, scene_name=name
+            )
+            for index, (scene_id, name) in enumerate(rows, start=1)
+        )
+
+    def _active_random_event_ad_slot_draft(
+        self, session: Session, platform_id: str, now: datetime
+    ) -> RandomEventAdSlotDraftRecord | None:
+        user_id = session.scalar(
+            select(UserRecord.id).where(UserRecord.platform_id == platform_id)
+        )
+        if user_id is None:
+            return None
+        draft = session.scalar(
+            select(RandomEventAdSlotDraftRecord).where(
+                RandomEventAdSlotDraftRecord.user_id == user_id
+            )
+        )
+        if draft is None:
+            return None
+        if draft.expires_at <= now:
+            session.delete(draft)
+            session.flush()
+            return None
+        return draft
+
+    def _confirm_random_event_ad_slot(
+        self,
+        session: Session,
+        draft: RandomEventAdSlotDraftRecord,
+        user: UserRecord,
+        works: tuple[RandomEventAdSlotWork, ...],
+        now: datetime,
+    ) -> RandomEventAdSlotDraftResult:
+        """占位：把选中的作品填进投票的广告位，并消耗掉这张卡。"""
+        settings = self.get_random_event_settings()
+        poll = session.get(RandomEventPollRecord, draft.poll_id)
+        if (
+            poll is None
+            or poll.status != "open"
+            or poll.closes_at <= now
+        ):
+            return RandomEventAdSlotDraftResult("poll_closed", works=works)
+        candidates = list(
+            session.scalars(
+                select(RandomEventPollCandidateRecord)
+                .where(RandomEventPollCandidateRecord.poll_id == poll.id)
+                .order_by(RandomEventPollCandidateRecord.position)
+            )
+        )
+        taken = [
+            candidate
+            for candidate in candidates
+            if candidate.source == "ad_slot" and not candidate.vacant
+        ]
+        if len(taken) >= max(1, settings.vote_ad_slot_limit):
+            return RandomEventAdSlotDraftResult("slot_taken", works=works)
+        if any(
+            candidate.scene_id == draft.scene_id for candidate in candidates
+        ):
+            return RandomEventAdSlotDraftResult("scene_taken", works=works)
+        vacancy = next(
+            (
+                candidate
+                for candidate in candidates
+                if candidate.vacant and candidate.source == "ad_slot"
+            ),
+            None,
+        )
+        if vacancy is None:
+            return RandomEventAdSlotDraftResult("slot_taken", works=works)
+
+        scene = session.get(RandomEventSceneRecord, draft.scene_id)
+        templates = list(
+            session.scalars(
+                select(RandomEventSceneOpeningRecord)
+                .where(RandomEventSceneOpeningRecord.scene_id == draft.scene_id)
+                .order_by(RandomEventSceneOpeningRecord.position)
+            )
+        )
+        if scene is None or not templates:
+            return RandomEventAdSlotDraftResult("scene_unavailable", works=works)
+        template = templates[randbelow(len(templates))]
+        seats = list(
+            session.scalars(
+                select(RandomEventSceneSeatRecord)
+                .where(RandomEventSceneSeatRecord.scene_id == scene.id)
+                .order_by(RandomEventSceneSeatRecord.role)
+            )
+        )
+        seat_summary = _random_event_seat_summary(
+            [(seat.role, seat.capacity) for seat in seats]
+        )
+        if len(seats) > 2 or len(seat_summary) > 24:
+            seat_summary = f"{sum(seat.capacity for seat in seats)} 人"
+        vacancy.vacant = False
+        vacancy.scene_id = scene.id
+        vacancy.template_id = template.id
+        vacancy.scene_name = scene.name
+        vacancy.event_name = template.name
+        vacancy.seat_summary = seat_summary
+        vacancy.reward = scene.reward
+        vacancy.target_rounds = scene.target_rounds
+
+        item = session.get(ItemRecord, draft.item_id)
+        inventory = session.scalar(
+            select(UserItemRecord)
+            .where(
+                UserItemRecord.user_id == user.id,
+                UserItemRecord.item_id == draft.item_id,
+            )
+            .with_for_update()
+        )
+        if inventory is None or inventory.quantity < 1:
+            return RandomEventAdSlotDraftResult("item_missing", works=works)
+        inventory.quantity -= 1
+        session.add(
+            RandomEventAdSlotRecord(
+                user_id=user.id,
+                scene_id=scene.id,
+                item_id=draft.item_id,
+                poll_id=poll.id,
+                candidate_id=vacancy.id,
+                status="consumed",
+                created_at=now,
+            )
+        )
+        session.delete(draft)
+        session.flush()
+        selected = next(
+            (work for work in works if work.scene_id == scene.id), None
+        )
+        return RandomEventAdSlotDraftResult(
+            "consumed",
+            works=works,
+            selected=selected,
+        )
+
     def random_event_poll_report(self) -> RandomEventPollReport | None:
         """后台用的投票详情：候选、票数、投票人名单与广告位来源。"""
         with self._session() as session:
@@ -26230,6 +26567,9 @@ class CoreRepository:
                     else:
                         bonus.multiplayer_total += 1
                     result = {"reward": 1}
+                if item.effect_type == "event_ad_slot":
+                    # 真正的消耗发生在 `/确认广告位`；这里只告诉命令层去开向导
+                    return ShopUseResult("event_ad_slot_required", view)
                 else:
                     return ShopUseResult("unsupported", view)
                 inventory.quantity -= 1

@@ -128,7 +128,21 @@ class CoreService:
                 ) or (
                     command == "/跳过" and draft_step == "cover"
                 )
-                if draft_step is not None and (
+                ad_slot_step = self._repository.random_event_ad_slot_draft_step(
+                    message.sender_platform_id, message.received_at
+                )
+                if ad_slot_step is not None and command in {
+                    "/选择",
+                    "/确认广告位",
+                }:
+                    direct_reply = self._random_event_ad_slot_reply(
+                        self._repository.consume_random_event_ad_slot_draft(
+                            message.sender_platform_id,
+                            message.content,
+                            message.received_at,
+                        )
+                    )
+                elif draft_step is not None and (
                     draft_control_command
                     or not message.content.lstrip().startswith("/")
                 ):
@@ -482,6 +496,33 @@ class CoreService:
             "starting_price": "请发送起拍价（1–99999 的整数）。",
         }
         return prompts.get(result.step)
+
+    @staticmethod
+    def _random_event_ad_slot_reply(result) -> str:
+        """广告卡私聊向导的回执；每条拒绝都要说清楚原因。"""
+        if result.status == "picked":
+            work = result.selected
+            name = "这件作品" if work is None else f"《{work.scene_name}》"
+            return (
+                f"已选中{name}。回复 /确认广告位 提交，提交后才会消耗这张卡。"
+            )
+        if result.status == "consumed":
+            work = result.selected
+            name = "这件作品" if work is None else f"《{work.scene_name}》"
+            return f"✅ {name}已放进本期投票的广告位，公告已发到各群。"
+        return {
+            "pick_usage": "请用 /选择 序号 选一件作品。",
+            "pick_missing": "没有这个序号，看看上面的作品列表。",
+            "pick_required": "请先用 /选择 序号 选一件作品。",
+            "no_draft": "广告卡向导已经结束了，请回群重新发送 /使用 商品编号。",
+            "not_joined": "请先用 /入职 名字 加入摸鱼公司。",
+            "poll_closed": "本期投票已经截止了，这张卡留着下次用。",
+            "slot_taken": "本期的广告位已经被占用了，这张卡留着下次用。",
+            "scene_taken": "这件作品已经在候选列表里了，换一件吧。",
+            "scene_unavailable": "这件作品暂时不能使用，换一件吧。",
+            "item_missing": "这张事件广告卡当前不可用。",
+            "disabled": "随机事件投票当前没有开启。",
+        }.get(result.status, "这条消息没看懂，回复 /选择 序号 或 /确认广告位。")
 
     @staticmethod
     def _performance_draft_reply(result):

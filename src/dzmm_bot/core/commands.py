@@ -2133,6 +2133,27 @@ class GroupCommandHandler:
                 else message.reference.sender_platform_id
             ),
         )
+        if result.status == "event_ad_slot_required":
+            draft = self._repository.start_random_event_ad_slot(
+                message.sender_platform_id, int(parts[1]), received_at
+            )
+            if draft.status != "started":
+                return self._reply(
+                    "/使用", f"ad_slot_{draft.status}", received_at
+                )
+            return [
+                self._reply("/使用", "ad_slot_started", received_at),
+                CommandReply(
+                    "请选择要推广的作品：\n"
+                    + "\n".join(
+                        f"{work.position}. 《{work.scene_name}》"
+                        for work in draft.works
+                    )
+                    + "\n回复 /选择 序号，然后 /确认广告位 提交。",
+                    destination_chatroom_id=draft.direct_chatroom_id,
+                    delivery_kind="direct",
+                ),
+            ]
         if result.status == "adult_required":
             result = self._repository.start_adult_shop_item(
                 message.platform_message_id,

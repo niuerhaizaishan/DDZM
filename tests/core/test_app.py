@@ -1,4 +1,4 @@
-﻿from dataclasses import dataclass
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID
@@ -1876,7 +1876,7 @@ def test_game_management_lists_commands_employees_and_shop_items(client, headers
         json={"name": "工位午睡券", "description": "眯十分钟。", "price": 5, "stock": 3},
     )
     updated_item = client.patch(
-        "/internal/game/items/23",
+        f"/internal/game/items/{created_item.json()['public_number']}",
         headers=headers,
         json={
             "description": "使用后可以安心休息十分钟。",
@@ -1917,10 +1917,10 @@ def test_game_management_lists_commands_employees_and_shop_items(client, headers
     assert updated_item.status_code == 200
     assert updated_item.json()["description"] == "使用后可以安心休息十分钟。"
     item_page = items.json()
-    assert item_page["total"] == 23
+    assert item_page["total"] == 24
     assert item_page["pages"] == 2
     assert item_page["items"][0] == {
-        "public_number": 23,
+        "public_number": created_item.json()["public_number"],
         "name": "工位午睡券",
         "description": "使用后可以安心休息十分钟。",
         "price": 5,
@@ -2014,9 +2014,9 @@ def test_game_management_returns_paginated_employees_and_items(
     assert len(employees.json()["items"]) == 1
     assert employees.json()["items"][0]["employee_number"] == 1
     assert items.status_code == 200
-    assert items.json()["total"] == 43
+    assert items.json()["total"] == 44
     assert items.json()["pages"] == 3
-    assert len(items.json()["items"]) == 3
+    assert len(items.json()["items"]) == 4
 
 
 def test_shop_admin_activity_and_control_endpoints(app_context, headers):
