@@ -208,7 +208,7 @@
 
 > **结论：Task 1–12 全部完成并通过验收，可以交付。** 分支 `feat/random-event-vote`，基于 `4a65a64`，18 个提交；迁移 `20260915_76` → `77` → `78`，单头，可升可降。
 
-> **测试证据**：投票 / 广告位 / 三个新迁移共 `105 passed`；`tests/core` + `tests/deploy` 为 `27 failed / 1283 passed`；全量 `61 failed / 1637 passed / 17 skipped`，失败集合与干净 `main`（`4a65a64`）**逐项一致**——全部是本机既有问题（Linux 桌面 Xvfb 16、deploy 迁移基线 24、runtime 13、service 3、browser 1、核心既有业务 4），本功能零回归。新增/改写用例 20 个。
+> **测试证据**：投票 / 广告位 / 三个新迁移共 `109 passed`；`tests/core` + `tests/deploy` 为 `27 failed / 1283 passed`；全量 `61 failed / 1637 passed / 17 skipped`，失败集合与干净 `main`（`4a65a64`）**逐项一致**——全部是本机既有问题（Linux 桌面 Xvfb 16、deploy 迁移基线 24、runtime 13、service 3、browser 1、核心既有业务 4），本功能零回归。相关测试文件从 76 个用例增到 95 个（新增 20、删掉 1 个恒真断言、改写 3 个平票用例）。
 
 > **与本计划的三处偏离（均为有意为之，已同步到 spec / rule.md）**：
 > 1. 开投不用 `_finish_random_event` 挂钩子，改成 Worker tick 驱动；并额外加了两条：**上一场没演完就先不开下一场**（上一场的投票在它开场前 10 分钟就截止了，不能拿"投票截止"当"上一场结束"），以及**跨天衔接**——当天最后一场演完后先把次日第一场排出来，否则每天第一场永远没有投票。
