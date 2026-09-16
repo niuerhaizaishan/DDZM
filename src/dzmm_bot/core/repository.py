@@ -855,6 +855,7 @@ class RandomEventPollCandidate:
     seat_summary: str | None
     reward: int | None
     target_rounds: int | None
+    author_name: str | None = None
     votes: int = 0
 
 
@@ -907,6 +908,7 @@ class RandomEventPollReportCandidate:
     target_rounds: int | None
     votes: int
     voters: tuple[str, ...] = ()
+    author_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -22538,6 +22540,7 @@ class CoreRepository:
         vacancy.seat_summary = seat_summary
         vacancy.reward = scene.reward
         vacancy.target_rounds = scene.target_rounds
+        vacancy.author_name = user.display_name
 
         item = session.get(ItemRecord, draft.item_id)
         inventory = session.scalar(
@@ -22652,6 +22655,7 @@ class CoreRepository:
                         target_rounds=row.target_rounds,
                         votes=len(by_candidate.get(row.id, ())),
                         voters=tuple(by_candidate.get(row.id, ())),
+                        author_name=row.author_name,
                     )
                     for row in rows
                 ),
@@ -23060,6 +23064,9 @@ class CoreRepository:
         if not chosen:
             return None
         by_name = {scene.name: scene for scene in scenes}
+        authors = self._random_event_scene_authors(
+            session, [scene.id for scene in scenes]
+        )
 
         closes_at = schedule.scheduled_at - timedelta(
             minutes=settings.vote_close_offset_minutes
@@ -23117,6 +23124,7 @@ class CoreRepository:
                     seat_summary=seat_summary,
                     reward=scene.reward,
                     target_rounds=scene.target_rounds,
+                    author_name=authors.get(scene.id, "官方"),
                     vacant=False,
                     created_at=now,
                 )
@@ -23134,6 +23142,27 @@ class CoreRepository:
             )
         session.flush()
         return poll
+
+    def _random_event_scene_authors(
+        self, session: Session, scene_ids: list[UUID]
+    ) -> dict[UUID, str]:
+        """场景 → 投稿人昵称；后台自建场景没有投稿记录，显示「官方」。"""
+        if not scene_ids:
+            return {}
+        rows = session.execute(
+            select(
+                RandomEventSubmissionRecord.scene_id,
+                UserRecord.display_name,
+            )
+            .join(
+                UserRecord,
+                UserRecord.id == RandomEventSubmissionRecord.user_id,
+            )
+            .where(RandomEventSubmissionRecord.scene_id.in_(scene_ids))
+            .order_by(RandomEventSubmissionRecord.number)
+        ).all()
+        found = {scene_id: name for scene_id, name in rows}
+        return {scene_id: found.get(scene_id, "官方") for scene_id in scene_ids}
 
     def _random_event_poll_view(
         self,
@@ -23192,6 +23221,7 @@ class CoreRepository:
                     seat_summary=row.seat_summary,
                     reward=row.reward,
                     target_rounds=row.target_rounds,
+                    author_name=row.author_name,
                     votes=counts.get(row.id, 0),
                 )
                 for row in rows
@@ -30875,10 +30905,18 @@ def _render_random_event_signup_notice(
     )
 
 
+def _short_author_name(name: str | None) -> str:
+    """候选行里的作者署名：太长会撑爆"一行一个候选"，截断到 8 字。"""
+    if not name:
+        return "官方"
+    return name if len(name) <= 8 else f"{name[:8]}…"
+
+
 def _render_random_event_vote_candidate(view, candidate) -> str:
     if candidate.vacant:
         return f"{candidate.position}. 📣 事件广告卡招商中"
     parts = [f"{candidate.position}. 《{candidate.scene_name}》"]
+    parts.append(f"by {_short_author_name(candidate.author_name)}")
     if candidate.seat_summary:
         parts.append(candidate.seat_summary)
     if candidate.reward is not None:

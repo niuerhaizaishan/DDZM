@@ -1,4 +1,4 @@
-﻿from datetime import date, datetime
+from datetime import date, datetime
 from secrets import compare_digest
 from typing import Annotated, Callable, Literal
 from uuid import UUID
@@ -3916,6 +3916,7 @@ def _random_event_poll_report_response(report) -> RandomEventPollReportResponse 
                 target_rounds=candidate.target_rounds,
                 votes=candidate.votes,
                 voters=list(candidate.voters),
+                author_name=candidate.author_name,
             )
             for candidate in report.candidates
         ],

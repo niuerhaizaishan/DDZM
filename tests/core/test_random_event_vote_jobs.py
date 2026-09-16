@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+﻿from datetime import datetime, timedelta
 from uuid import UUID
 
 import pytest
@@ -365,3 +365,44 @@ def test_vote_jobs_do_nothing_when_voting_is_disabled(repository, seeded):
     repository.run_random_event_jobs(NOW)
 
     assert open_polls(repository) == []
+
+
+def test_candidate_intro_shows_the_author(repository, seeded):
+    """候选一行要带作者：投稿作品显示投稿人，后台自建的显示「官方」，名字长了截断。"""
+    from dzmm_bot.core.schema import (
+        RandomEventSubmissionRecord,
+        UserRecord,
+    )
+
+    with seeded.begin() as session:
+        submitted = add_scene(session, "投稿作品")
+        add_scene(session, "后台自建")
+        add_scene(session, "第三个")
+        user_id = session.scalar(
+            select(UserRecord.id).where(UserRecord.platform_id == "p1")
+        )
+        long_name = "名字特别特别长的投稿人"
+        session.scalar(
+            select(UserRecord).where(UserRecord.id == user_id)
+        ).display_name = long_name
+        session.add(
+            RandomEventSubmissionRecord(
+                number=1,
+                user_id=user_id,
+                status="approved",
+                current_step="preview",
+                content={},
+                last_activity_at=JOINED_AT,
+                created_at=JOINED_AT,
+                updated_at=JOINED_AT,
+                submitted_at=JOINED_AT,
+                scene_id=submitted.id,
+            )
+        )
+        add_schedule(session, TARGET_AT)
+
+    repository.run_random_event_jobs(NOW)
+
+    text = "\n".join(outbound_texts(repository))
+    assert "by 名字特别特别长的…" in text
+    assert "by 官方" in text

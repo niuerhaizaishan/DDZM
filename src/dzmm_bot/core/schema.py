@@ -2008,6 +2008,7 @@ class RandomEventPollCandidateRecord(Base):
     scene_name: Mapped[str | None] = mapped_column(String(64))
     event_name: Mapped[str | None] = mapped_column(String(64))
     seat_summary: Mapped[str | None] = mapped_column(String(255))
+    author_name: Mapped[str | None] = mapped_column(String(64))
     reward: Mapped[int | None] = mapped_column(Integer)
     target_rounds: Mapped[int | None] = mapped_column(Integer)
     vacant: Mapped[bool] = mapped_column(

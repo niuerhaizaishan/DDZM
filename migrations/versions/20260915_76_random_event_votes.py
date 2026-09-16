@@ -104,6 +104,7 @@ def _create_candidates() -> None:
         sa.Column("scene_name", sa.String(length=64), nullable=True),
         sa.Column("event_name", sa.String(length=64), nullable=True),
         sa.Column("seat_summary", sa.String(length=255), nullable=True),
+        sa.Column("author_name", sa.String(length=64), nullable=True),
         sa.Column("reward", sa.Integer(), nullable=True),
         sa.Column("target_rounds", sa.Integer(), nullable=True),
         sa.Column(

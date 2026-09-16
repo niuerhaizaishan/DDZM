@@ -1675,6 +1675,7 @@ class RandomEventPollCandidateResponse(ApiModel):
     target_rounds: int | None
     votes: int
     voters: list[str] = Field(default_factory=list)
+    author_name: str | None = None
 
 
 class RandomEventPollReportResponse(ApiModel):

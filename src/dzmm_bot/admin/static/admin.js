@@ -1,4 +1,4 @@
-let token = sessionStorage.getItem("dzmm-admin-token") || "";
+﻿let token = sessionStorage.getItem("dzmm-admin-token") || "";
 let adminSession = sessionStorage.getItem("dzmm-admin-session") || "";
 let identity = JSON.parse(sessionStorage.getItem("dzmm-admin-identity") || "null");
 let loginLease = null;
@@ -1266,7 +1266,7 @@ function renderRandomEventVote(poll) {
   const rows = poll.candidates.map((candidate) => {
     const label = candidate.vacant
       ? "📣 事件广告卡招商中"
-      : `《${escapeHtml(candidate.scene_name || "")}》${candidate.seat_summary ? " " + escapeHtml(candidate.seat_summary) : ""}${candidate.reward === null || candidate.reward === undefined ? "" : " 奖" + candidate.reward}`;
+      : `《${escapeHtml(candidate.scene_name || "")}》 by ${escapeHtml(candidate.author_name || "官方")}${candidate.seat_summary ? " " + escapeHtml(candidate.seat_summary) : ""}${candidate.reward === null || candidate.reward === undefined ? "" : " 奖" + candidate.reward}`;
     const voters = candidate.voters.length ? candidate.voters.map(escapeHtml).join("、") : "—";
     const source = candidate.source === "ad_slot" ? "广告卡" : "随机";
     return `<tr><td>${candidate.position}</td><td>${label}</td><td>${candidate.votes}</td><td>${voters}</td><td>${source}</td></tr>`;

@@ -1,4 +1,4 @@
-from collections import Counter
+﻿from collections import Counter
 import re
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
@@ -29,6 +29,7 @@ from .reply_templates import render_template, template_definition
 from .schema import PRIMARY_GROUP_CHAT_ID
 from .repository import (
     BlameGameResult,
+    _short_author_name,
     CoreRepository,
     EmployeeNameTakenError,
     blame_settlement_template_values,
@@ -3415,6 +3416,7 @@ class GroupCommandHandler:
             else:
                 lines.append(
                     f"{candidate.position}. 《{candidate.scene_name}》 "
+                    f"by {_short_author_name(candidate.author_name)} "
                     f"{candidate.votes} 票"
                 )
         if view.my_position is not None:
