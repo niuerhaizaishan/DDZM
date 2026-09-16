@@ -5,7 +5,9 @@ from uuid import UUID, uuid4
 from dzmm_bot.core.company_lottery import BEIJING
 from dzmm_bot.core.random_event_vote import (
     break_tie,
+    flatten_tiers,
     pick_distinct,
+    pick_tiered,
     tally,
     tiered_pool,
     top_candidates,
@@ -22,19 +24,18 @@ def test_tiered_pool_prefers_never_performed_then_unplanned():
     )
 
     # 第一档：没演过也没排过
-    assert tiers[:2] == ["新的甲", "新的乙"]
+    assert tiers[0] == ["新的甲", "新的乙"]
     # 第二档：演过但今天没排过
-    assert tiers[2] == "老戏"
+    assert tiers[1] == ["老戏"]
     # 第三档：今天已排过
-    assert set(tiers[3:]) == {"排过了", "排过了二"}
+    assert set(tiers[2]) == {"排过了", "排过了二"}
 
 
 def test_tiered_pool_returns_every_scene_exactly_once():
-    pool = ["甲", "乙", "丙"]
+    tiers = tiered_pool(["甲", "乙", "丙"], performed={"乙"}, planned=set())
 
-    tiers = tiered_pool(pool, performed={"乙"}, planned=set())
-
-    assert sorted(tiers) == ["丙", "乙", "甲"] and len(tiers) == 3
+    assert flatten_tiers(tiers) == ["甲", "丙", "乙"]
+    assert sum(len(tier) for tier in tiers) == 3
 
 
 def test_tiered_pool_skips_excluded_scenes():
@@ -46,12 +47,30 @@ def test_tiered_pool_skips_excluded_scenes():
         exclude={"甲"},
     )
 
-    assert "甲" not in tiers
-    assert set(tiers) == {"乙", "丙"}
+    assert flatten_tiers(tiers) == ["乙", "丙"]
 
 
 def test_tiered_pool_is_empty_without_scenes():
-    assert tiered_pool([], performed=set(), planned=set()) == []
+    assert tiered_pool([], performed=set(), planned=set()) == [[], [], []]
+
+
+def test_pick_tiered_fills_the_top_tier_before_widening():
+    """第一档管够时绝不碰第二档——这正是分档不能被拍平的原因。"""
+    tiers = [["甲", "乙", "丙"], ["演过的"], ["排过的"]]
+
+    picked = pick_tiered(tiers, 3, Random(7).randrange)
+
+    assert sorted(picked) == ["丙", "乙", "甲"]
+
+
+def test_pick_tiered_widens_when_the_top_tier_is_short():
+    tiers = [["只此一个"], ["演过的", "也演过的"], ["排过的"]]
+
+    picked = pick_tiered(tiers, 3, Random(3).randrange)
+
+    assert "只此一个" in picked
+    assert set(picked) - {"只此一个"} <= {"演过的", "也演过的"}
+    assert "排过的" not in picked
 
 
 def test_pick_distinct_returns_requested_count_and_keeps_order_of_pool():

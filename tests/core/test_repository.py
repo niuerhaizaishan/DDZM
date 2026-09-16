@@ -8361,7 +8361,13 @@ def test_random_event_daily_schedule_does_not_repeat_an_unstarted_scene(
             scene_name, "报名", ["开场"], 1, 1, [("员工", 1)]
         )
     repository.set_random_event_settings(
-        ["10:00", "12:00", "14:00"], "可选身份：{可选身份}", 15, 5
+        ["10:00", "12:00", "14:00"],
+        "可选身份：{可选身份}",
+        15,
+        5,
+        # 这条用例验的是"排期时就随机冻结场景"的老行为，投票开启后由投票定稿，
+        # 所以显式关掉投票来覆盖旧的随机路径。
+        vote_enabled=False,
     )
     monkeypatch.setattr("dzmm_bot.core.repository.randbelow", lambda _: 0)
 
@@ -8599,7 +8605,14 @@ def test_random_event_schedule_prefers_never_performed_scene(
     repository.create_random_event_scene(
         "未演绎场景", "报名", ["开始。"], 1, 1, [("员工", 1)]
     )
-    repository.set_random_event_settings(["10:05"], "报名：{可选身份}", 15, 5)
+    repository.set_random_event_settings(
+        ["10:05"],
+        "报名：{可选身份}",
+        15,
+        5,
+        # 验的是旧随机路径的选池偏好，投票开启后由投票定稿，这里显式关掉投票。
+        vote_enabled=False,
+    )
 
     with session_factory() as session:
         historical_schedule = RandomEventScheduleRecord(

@@ -117,6 +117,13 @@ from .memory_guild_match import (
     render_guild_round_result,
     render_guild_series_ready,
 )
+from .random_event_vote import (
+    break_tie,
+    pick_tiered,
+    tally,
+    tiered_pool,
+    top_candidates,
+)
 from .shop_cards import SYSTEM_SHOP_ITEMS, adult_item, item_by_key, purchase_category
 from .red_packet import RandomSource, generate_red_packet_allocation
 from .texas_holdem import (
@@ -258,6 +265,9 @@ from .schema import (
     RandomEventSceneOpeningRecord,
     RandomEventSceneSeatRecord,
     RandomEventSettingsRecord,
+    RandomEventPollRecord,
+    RandomEventPollCandidateRecord,
+    RandomEventPollVoteRecord,
     RandomEventSubmissionCounterRecord,
     RandomEventSubmissionRecord,
     DepartmentRecord,
@@ -794,6 +804,13 @@ class RandomEventSettings:
     global_completion_reward: int
     submission_approval_reward: int
     tipping_duration_seconds: int
+    vote_enabled: bool
+    vote_close_offset_minutes: int
+    vote_broadcast_interval_minutes: int
+    vote_random_candidates: int
+    vote_ad_slot_limit: int
+    vote_fallback_minutes: int
+    vote_allow_change: bool
 
 
 @dataclass(frozen=True)
@@ -821,6 +838,50 @@ class RandomEventTipResult:
     amount: int = 0
     sender_balance: int | None = None
     recipient_balance: int | None = None
+
+
+@dataclass(frozen=True)
+class RandomEventPollCandidate:
+    id: UUID
+    position: int
+    source: str
+    vacant: bool
+    scene_name: str | None
+    event_name: str | None
+    seat_summary: str | None
+    reward: int | None
+    target_rounds: int | None
+    votes: int = 0
+
+
+@dataclass(frozen=True)
+class RandomEventPollView:
+    id: UUID
+    status: str
+    group_chat_id: UUID
+    schedule_id: UUID
+    scheduled_at: datetime
+    opened_at: datetime
+    closes_at: datetime
+    candidates: tuple[RandomEventPollCandidate, ...]
+    total_votes: int = 0
+    my_position: int | None = None
+    fallback_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class RandomEventVoteResult:
+    status: str
+    view: RandomEventPollView | None = None
+    position: int | None = None
+
+
+@dataclass(frozen=True)
+class RandomEventPollCloseResult:
+    status: str
+    view: RandomEventPollView | None = None
+    position: int | None = None
+    fallback_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -3203,6 +3264,13 @@ class CoreRepository:
         global_completion_reward: int | None = None,
         submission_approval_reward: int | None = None,
         tipping_duration_seconds: int | None = None,
+        vote_enabled: bool | None = None,
+        vote_close_offset_minutes: int | None = None,
+        vote_broadcast_interval_minutes: int | None = None,
+        vote_random_candidates: int | None = None,
+        vote_ad_slot_limit: int | None = None,
+        vote_fallback_minutes: int | None = None,
+        vote_allow_change: bool | None = None,
     ) -> RandomEventSettings:
         if not isinstance(schedule_times, list) or not schedule_times:
             raise ValueError("每日固定场次至少需要一个时间")
@@ -3296,6 +3364,39 @@ class CoreRepository:
                 record.submission_approval_reward = submission_approval_reward
             if tipping_duration_seconds is not None:
                 record.tipping_duration_seconds = tipping_duration_seconds
+            vote_numbers = (
+                ("截止提前量", vote_close_offset_minutes, 1, 720),
+                ("播报间隔", vote_broadcast_interval_minutes, 1, 720),
+                ("随机候选数", vote_random_candidates, 1, 10),
+                ("广告位上限", vote_ad_slot_limit, 0, 10),
+                ("兜底开投窗口", vote_fallback_minutes, 1, 720),
+            )
+            for label, value, minimum, maximum in vote_numbers:
+                if value is not None and (
+                    isinstance(value, bool)
+                    or not isinstance(value, int)
+                    or not minimum <= value <= maximum
+                ):
+                    raise ValueError(f"投票{label}需在 {minimum} 至 {maximum} 之间")
+            for flag, name in (
+                (vote_enabled, "vote_enabled"),
+                (vote_allow_change, "vote_allow_change"),
+            ):
+                if flag is not None and not isinstance(flag, bool):
+                    raise ValueError(f"{name} 必须是布尔值")
+            if vote_enabled is not None:
+                record.vote_enabled = vote_enabled
+            if vote_allow_change is not None:
+                record.vote_allow_change = vote_allow_change
+            for value, name in (
+                (vote_close_offset_minutes, "vote_close_offset_minutes"),
+                (vote_broadcast_interval_minutes, "vote_broadcast_interval_minutes"),
+                (vote_random_candidates, "vote_random_candidates"),
+                (vote_ad_slot_limit, "vote_ad_slot_limit"),
+                (vote_fallback_minutes, "vote_fallback_minutes"),
+            ):
+                if value is not None:
+                    setattr(record, name, value)
             session.flush()
             return _random_event_settings(record)
 
@@ -20710,7 +20811,11 @@ class CoreRepository:
                 )
                 if existing:
                     for record in existing:
-                        if record.status == "pending" and record.scene_name is None:
+                        if (
+                            record.status == "pending"
+                            and record.scene_name is None
+                            and not settings.vote_enabled
+                        ):
                             self._fill_random_event_schedule_snapshot(session, record)
                     records.extend(existing)
                     continue
@@ -20735,7 +20840,8 @@ class CoreRepository:
                         ),
                     )
                     session.add(record)
-                    self._fill_random_event_schedule_snapshot(session, record)
+                    if not settings.vote_enabled:
+                        self._fill_random_event_schedule_snapshot(session, record)
                     records.append(record)
             session.flush()
             return [_random_event_schedule(record) for record in records]
@@ -21981,6 +22087,514 @@ class CoreRepository:
                     )
                 )
             )
+
+    # ------------------------------------------------- 随机事件·下一场投票
+
+    def create_random_event_poll(
+        self, now: datetime
+    ) -> RandomEventPollView | None:
+        """为"下一个待开始场次"建投票；已有开放中的投票就直接返回那一份。
+
+        候选严格沿用既有随机逻辑（`tiered_pool` 用的就是
+        `_fill_random_event_schedule_snapshot` 那套三档优先），只是抽 3 个不同的
+        场景，并额外留一个"事件广告卡"位（没人买时 `vacant`）。
+        """
+        now = now.astimezone(BEIJING)
+        settings = self.get_random_event_settings()
+        if not settings.vote_enabled:
+            return None
+        with self.transaction():
+            with self._session() as session:
+                open_poll = session.scalar(
+                    select(RandomEventPollRecord)
+                    .where(RandomEventPollRecord.status == "open")
+                    .order_by(RandomEventPollRecord.closes_at)
+                )
+                if open_poll is not None:
+                    return self._random_event_poll_view(session, open_poll)
+                schedule = self._next_votable_schedule(session, now)
+                if schedule is None:
+                    return None
+                return self._open_random_event_poll(session, settings, schedule, now)
+
+    def random_event_poll_view(
+        self, platform_id: str | None = None
+    ) -> RandomEventPollView | None:
+        """当前投票：优先开放中的，否则最近一份。"""
+        with self._session() as session:
+            poll = session.scalar(
+                select(RandomEventPollRecord)
+                .where(RandomEventPollRecord.status == "open")
+                .order_by(RandomEventPollRecord.closes_at)
+            )
+            if poll is None:
+                poll = session.scalar(
+                    select(RandomEventPollRecord)
+                    .order_by(RandomEventPollRecord.created_at.desc())
+                    .limit(1)
+                )
+            if poll is None:
+                return None
+            return self._random_event_poll_view(session, poll, platform_id)
+
+    def cast_random_event_vote(
+        self, platform_id: str, position: int, now: datetime
+    ) -> RandomEventVoteResult:
+        """每人一票、可改票；空着的广告位不能被投。"""
+        now = now.astimezone(BEIJING)
+        settings = self.get_random_event_settings()
+        with self.transaction():
+            with self._session() as session:
+                poll = self._open_random_event_poll_record(session)
+                if poll is None:
+                    return RandomEventVoteResult("no_poll")
+                if poll.closes_at <= now:
+                    return RandomEventVoteResult("closed")
+                candidate = session.scalar(
+                    select(RandomEventPollCandidateRecord).where(
+                        RandomEventPollCandidateRecord.poll_id == poll.id,
+                        RandomEventPollCandidateRecord.position == position,
+                    )
+                )
+                if candidate is None:
+                    return RandomEventVoteResult("no_candidate")
+                if candidate.vacant:
+                    return RandomEventVoteResult("vacant")
+                user_id = session.scalar(
+                    select(UserRecord.id).where(
+                        UserRecord.platform_id == platform_id
+                    )
+                )
+                if user_id is None:
+                    return RandomEventVoteResult("not_joined")
+                vote = session.scalar(
+                    select(RandomEventPollVoteRecord).where(
+                        RandomEventPollVoteRecord.poll_id == poll.id,
+                        RandomEventPollVoteRecord.user_id == user_id,
+                    )
+                )
+                if vote is None:
+                    session.add(
+                        RandomEventPollVoteRecord(
+                            poll_id=poll.id,
+                            user_id=user_id,
+                            candidate_id=candidate.id,
+                            created_at=now,
+                            updated_at=now,
+                        )
+                    )
+                elif not settings.vote_allow_change:
+                    return RandomEventVoteResult(
+                        "already_voted",
+                        self._random_event_poll_view(session, poll, platform_id),
+                        position,
+                    )
+                else:
+                    vote.candidate_id = candidate.id
+                    vote.updated_at = now
+                session.flush()
+                return RandomEventVoteResult(
+                    "recorded",
+                    self._random_event_poll_view(session, poll, platform_id),
+                    position,
+                )
+
+    def close_random_event_poll(
+        self, now: datetime, *, winner_position: int | None = None
+    ) -> RandomEventPollCloseResult:
+        """截止定稿：票高者按现有方式冻结进目标场次，场次保持 `pending`。
+
+        传 `winner_position` 是后台兜底（管理员手动指定），此时不受截止时刻限制。
+        """
+        now = now.astimezone(BEIJING)
+        with self.transaction():
+            with self._session() as session:
+                poll = self._open_random_event_poll_record(session)
+                if poll is None:
+                    return RandomEventPollCloseResult("no_poll")
+                if winner_position is None and poll.closes_at > now:
+                    return RandomEventPollCloseResult("not_due")
+                schedule = session.get(
+                    RandomEventScheduleRecord, poll.target_schedule_id
+                )
+                if schedule is None:
+                    return RandomEventPollCloseResult("no_schedule")
+                candidates = list(
+                    session.scalars(
+                        select(RandomEventPollCandidateRecord)
+                        .where(RandomEventPollCandidateRecord.poll_id == poll.id)
+                        .order_by(RandomEventPollCandidateRecord.position)
+                    )
+                )
+                votable = [
+                    candidate
+                    for candidate in candidates
+                    if not candidate.vacant and candidate.scene_id is not None
+                ]
+                if not votable:
+                    poll.status = "cancelled"
+                    poll.closed_at = now
+                    return RandomEventPollCloseResult("no_candidates")
+
+                if winner_position is not None:
+                    winner = next(
+                        (
+                            candidate
+                            for candidate in votable
+                            if candidate.position == winner_position
+                        ),
+                        None,
+                    )
+                    if winner is None:
+                        return RandomEventPollCloseResult("no_candidate")
+                    fallback: str | None = "manual"
+                else:
+                    counts = tally(
+                        [candidate.id for candidate in votable],
+                        [
+                            vote.candidate_id
+                            for vote in session.scalars(
+                                select(RandomEventPollVoteRecord).where(
+                                    RandomEventPollVoteRecord.poll_id == poll.id
+                                )
+                            )
+                        ],
+                    )
+                    leaders = top_candidates(counts)
+                    by_id = {candidate.id: candidate for candidate in votable}
+                    if not leaders:
+                        winner = votable[randbelow(len(votable))]
+                        fallback = "no_votes"
+                    elif len(leaders) == 1:
+                        winner = by_id[leaders[0]]
+                        fallback = None
+                    else:
+                        winner = by_id[
+                            break_tie(
+                                leaders,
+                                performances=self._random_event_performances(
+                                    session, votable
+                                ),
+                                authored_at=self._random_event_authored_at(
+                                    session, votable
+                                ),
+                                randbelow=randbelow,
+                            )
+                        ]
+                        fallback = "tie"
+
+                scene = session.get(RandomEventSceneRecord, winner.scene_id)
+                if scene is not None and winner.template_id is not None:
+                    template = session.get(
+                        RandomEventSceneOpeningRecord, winner.template_id
+                    )
+                    seats = list(
+                        session.scalars(
+                            select(RandomEventSceneSeatRecord)
+                            .where(
+                                RandomEventSceneSeatRecord.scene_id == winner.scene_id
+                            )
+                            .order_by(RandomEventSceneSeatRecord.role)
+                        )
+                    )
+                    if template is not None:
+                        self._set_random_event_schedule_snapshot(
+                            session, schedule, scene, template, seats
+                        )
+                poll.status = "closed"
+                poll.closed_at = now
+                poll.winner_candidate_id = winner.id
+                poll.fallback_reason = fallback
+                session.flush()
+                return RandomEventPollCloseResult(
+                    "closed",
+                    self._random_event_poll_view(session, poll),
+                    winner.position,
+                    fallback,
+                )
+
+    def _open_random_event_poll_record(
+        self, session: Session
+    ) -> RandomEventPollRecord | None:
+        return session.scalar(
+            select(RandomEventPollRecord)
+            .where(RandomEventPollRecord.status == "open")
+            .order_by(RandomEventPollRecord.closes_at)
+        )
+
+    def _next_votable_schedule(
+        self, session: Session, now: datetime
+    ) -> RandomEventScheduleRecord | None:
+        """最早的那个"还没定稿、也还没建过投票"的待开始场次。"""
+        rows = list(
+            session.scalars(
+                select(RandomEventScheduleRecord)
+                .join(
+                    GroupChatRecord,
+                    GroupChatRecord.id == RandomEventScheduleRecord.group_chat_id,
+                )
+                .where(
+                    RandomEventScheduleRecord.status == "pending",
+                    RandomEventScheduleRecord.scene_name.is_(None),
+                    RandomEventScheduleRecord.scheduled_at > now,
+                    GroupChatRecord.deleted_at.is_(None),
+                    GroupChatRecord.listening_enabled.is_(True),
+                    GroupChatRecord.random_events_enabled.is_(True),
+                )
+                .order_by(RandomEventScheduleRecord.scheduled_at)
+            )
+        )
+        polled = set(
+            session.scalars(select(RandomEventPollRecord.target_schedule_id))
+        )
+        for row in rows:
+            if row.id not in polled:
+                return row
+        return None
+
+    def _random_event_scene_pool(
+        self, session: Session, schedule: RandomEventScheduleRecord
+    ) -> tuple[list[RandomEventSceneRecord], set[str], set[str]]:
+        """与 `_fill_random_event_schedule_snapshot` 逐字一致的选池口径。"""
+        scenes = list(
+            session.scalars(
+                select(RandomEventSceneRecord).where(
+                    RandomEventSceneRecord.enabled.is_(True)
+                )
+            )
+        )
+        performed = {
+            name
+            for name in session.scalars(
+                select(RandomEventRecord.scene_name).distinct()
+            )
+            if name is not None
+        }
+        planned = {
+            name
+            for name in session.scalars(
+                select(RandomEventScheduleRecord.scene_name).where(
+                    RandomEventScheduleRecord.event_date == schedule.event_date,
+                    RandomEventScheduleRecord.id != schedule.id,
+                    RandomEventScheduleRecord.scene_name.is_not(None),
+                )
+            )
+            if name is not None
+        }
+        return scenes, performed, planned
+
+    def _open_random_event_poll(
+        self,
+        session: Session,
+        settings: RandomEventSettings,
+        schedule: RandomEventScheduleRecord,
+        now: datetime,
+    ) -> RandomEventPollView | None:
+        scenes, performed, planned = self._random_event_scene_pool(session, schedule)
+        with_templates = set(
+            session.scalars(select(RandomEventSceneOpeningRecord.scene_id))
+        )
+        scenes = [scene for scene in scenes if scene.id in with_templates]
+        names = tiered_pool(
+            [scene.name for scene in scenes],
+            performed=performed,
+            planned=planned,
+        )
+        chosen = pick_tiered(names, settings.vote_random_candidates, randbelow)
+        if not chosen:
+            return None
+        by_name = {scene.name: scene for scene in scenes}
+
+        poll = RandomEventPollRecord(
+            target_schedule_id=schedule.id,
+            status="open",
+            opened_at=now,
+            closes_at=schedule.scheduled_at
+            - timedelta(minutes=settings.vote_close_offset_minutes),
+            created_at=now,
+        )
+        session.add(poll)
+        session.flush()
+
+        position = 0
+        for name in chosen:
+            scene = by_name[name]
+            templates = list(
+                session.scalars(
+                    select(RandomEventSceneOpeningRecord)
+                    .where(RandomEventSceneOpeningRecord.scene_id == scene.id)
+                    .order_by(RandomEventSceneOpeningRecord.position)
+                )
+            )
+            if not templates:
+                continue
+            template = templates[randbelow(len(templates))]
+            seats = list(
+                session.scalars(
+                    select(RandomEventSceneSeatRecord)
+                    .where(RandomEventSceneSeatRecord.scene_id == scene.id)
+                    .order_by(RandomEventSceneSeatRecord.role)
+                )
+            )
+            position += 1
+            session.add(
+                RandomEventPollCandidateRecord(
+                    poll_id=poll.id,
+                    position=position,
+                    source="random",
+                    scene_id=scene.id,
+                    template_id=template.id,
+                    scene_name=scene.name,
+                    event_name=template.name,
+                    seat_summary=_random_event_seat_summary(
+                        [(seat.role, seat.capacity) for seat in seats]
+                    ),
+                    reward=scene.reward,
+                    target_rounds=scene.target_rounds,
+                    vacant=False,
+                    created_at=now,
+                )
+            )
+        if settings.vote_ad_slot_limit > 0:
+            position += 1
+            session.add(
+                RandomEventPollCandidateRecord(
+                    poll_id=poll.id,
+                    position=position,
+                    source="ad_slot",
+                    vacant=True,
+                    created_at=now,
+                )
+            )
+        session.flush()
+        return self._random_event_poll_view(session, poll)
+
+    def _random_event_poll_view(
+        self,
+        session: Session,
+        poll: RandomEventPollRecord,
+        platform_id: str | None = None,
+    ) -> RandomEventPollView:
+        schedule = session.get(RandomEventScheduleRecord, poll.target_schedule_id)
+        rows = list(
+            session.scalars(
+                select(RandomEventPollCandidateRecord)
+                .where(RandomEventPollCandidateRecord.poll_id == poll.id)
+                .order_by(RandomEventPollCandidateRecord.position)
+            )
+        )
+        votes = list(
+            session.scalars(
+                select(RandomEventPollVoteRecord).where(
+                    RandomEventPollVoteRecord.poll_id == poll.id
+                )
+            )
+        )
+        counts = tally([row.id for row in rows], [vote.candidate_id for vote in votes])
+        my_position = None
+        if platform_id is not None:
+            user_id = session.scalar(
+                select(UserRecord.id).where(UserRecord.platform_id == platform_id)
+            )
+            if user_id is not None:
+                mine = next(
+                    (vote for vote in votes if vote.user_id == user_id), None
+                )
+                if mine is not None:
+                    matched = next(
+                        (row for row in rows if row.id == mine.candidate_id), None
+                    )
+                    my_position = None if matched is None else matched.position
+        return RandomEventPollView(
+            id=poll.id,
+            status=poll.status,
+            group_chat_id=(
+                PRIMARY_GROUP_CHAT_ID if schedule is None else schedule.group_chat_id
+            ),
+            schedule_id=poll.target_schedule_id,
+            scheduled_at=poll.closes_at if schedule is None else schedule.scheduled_at,
+            opened_at=poll.opened_at,
+            closes_at=poll.closes_at,
+            candidates=tuple(
+                RandomEventPollCandidate(
+                    id=row.id,
+                    position=row.position,
+                    source=row.source,
+                    vacant=row.vacant,
+                    scene_name=row.scene_name,
+                    event_name=row.event_name,
+                    seat_summary=row.seat_summary,
+                    reward=row.reward,
+                    target_rounds=row.target_rounds,
+                    votes=counts.get(row.id, 0),
+                )
+                for row in rows
+            ),
+            total_votes=len(votes),
+            my_position=my_position,
+            fallback_reason=poll.fallback_reason,
+        )
+
+    def _random_event_performances(
+        self,
+        session: Session,
+        candidates: list[RandomEventPollCandidateRecord],
+    ) -> dict[UUID, int]:
+        """每个候选的"演出次数"：只数已经结束的场次。"""
+        counts = dict(
+            session.execute(
+                select(
+                    RandomEventRecord.scene_name,
+                    func.count(RandomEventRecord.id),
+                )
+                .where(RandomEventRecord.ended_at.is_not(None))
+                .group_by(RandomEventRecord.scene_name)
+            ).all()
+        )
+        return {
+            candidate.id: int(counts.get(candidate.scene_name, 0))
+            for candidate in candidates
+        }
+
+    def _random_event_authored_at(
+        self,
+        session: Session,
+        candidates: list[RandomEventPollCandidateRecord],
+    ) -> dict[UUID, datetime]:
+        """平票第二级的"投稿时间"：有投稿用 submitted_at，自建场景退化为创建时间。"""
+        scene_ids = [
+            candidate.scene_id
+            for candidate in candidates
+            if candidate.scene_id is not None
+        ]
+        scenes = {
+            scene.id: scene
+            for scene in session.scalars(
+                select(RandomEventSceneRecord).where(
+                    RandomEventSceneRecord.id.in_(scene_ids)
+                )
+            )
+        }
+        submitted = dict(
+            session.execute(
+                select(
+                    RandomEventSubmissionRecord.scene_id,
+                    func.max(RandomEventSubmissionRecord.submitted_at),
+                )
+                .where(RandomEventSubmissionRecord.scene_id.in_(scene_ids))
+                .group_by(RandomEventSubmissionRecord.scene_id)
+            ).all()
+        )
+        authored: dict[UUID, datetime] = {}
+        for candidate in candidates:
+            scene = scenes.get(candidate.scene_id)
+            fallback = (
+                scene.created_at
+                if scene is not None
+                else datetime(1970, 1, 1, tzinfo=BEIJING)
+            )
+            authored[candidate.id] = submitted.get(candidate.scene_id) or fallback
+        return authored
 
     def _fill_random_event_schedule_snapshot(
         self, session: Session, schedule: RandomEventScheduleRecord
@@ -29093,6 +29707,13 @@ def _random_event_settings(record: RandomEventSettingsRecord) -> RandomEventSett
         global_completion_reward=record.global_completion_reward,
         submission_approval_reward=record.submission_approval_reward,
         tipping_duration_seconds=record.tipping_duration_seconds,
+        vote_enabled=record.vote_enabled,
+        vote_close_offset_minutes=record.vote_close_offset_minutes,
+        vote_broadcast_interval_minutes=record.vote_broadcast_interval_minutes,
+        vote_random_candidates=record.vote_random_candidates,
+        vote_ad_slot_limit=record.vote_ad_slot_limit,
+        vote_fallback_minutes=record.vote_fallback_minutes,
+        vote_allow_change=record.vote_allow_change,
     )
 
 
