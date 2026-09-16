@@ -1,4 +1,4 @@
-﻿let token = sessionStorage.getItem("dzmm-admin-token") || "";
+let token = sessionStorage.getItem("dzmm-admin-token") || "";
 let adminSession = sessionStorage.getItem("dzmm-admin-session") || "";
 let identity = JSON.parse(sessionStorage.getItem("dzmm-admin-identity") || "null");
 let loginLease = null;
@@ -1427,6 +1427,13 @@ async function openRandomEventSettingsModal() {
   document.querySelector("#random-event-signup-timeout").value = settings.signup_timeout_minutes;
   document.querySelector("#random-event-reminder-interval").value = settings.reminder_interval_minutes;
   document.querySelector("#random-event-tipping-duration").value = settings.tipping_duration_seconds;
+  document.querySelector("#random-event-vote-enabled").checked = settings.vote_enabled;
+  document.querySelector("#random-event-vote-allow-change").checked = settings.vote_allow_change;
+  document.querySelector("#random-event-vote-close-offset").value = settings.vote_close_offset_minutes;
+  document.querySelector("#random-event-vote-broadcast-interval").value = settings.vote_broadcast_interval_minutes;
+  document.querySelector("#random-event-vote-random-candidates").value = settings.vote_random_candidates;
+  document.querySelector("#random-event-vote-ad-slot-limit").value = settings.vote_ad_slot_limit;
+  document.querySelector("#random-event-vote-fallback-minutes").value = settings.vote_fallback_minutes;
   document.querySelector("#random-event-blocked-message").value = settings.blocked_message;
   document.querySelector("#random-event-submission-enabled").checked = settings.submission_enabled;
   document.querySelector("#random-event-submission-timeout").value = settings.submission_draft_timeout_minutes;
@@ -3547,6 +3554,13 @@ randomEventSettingsModal.addEventListener("click", async (event) => {
     signup_timeout_minutes: Number(document.querySelector("#random-event-signup-timeout").value),
     reminder_interval_minutes: Number(document.querySelector("#random-event-reminder-interval").value),
     tipping_duration_seconds: Number(document.querySelector("#random-event-tipping-duration").value),
+    vote_enabled: document.querySelector("#random-event-vote-enabled").checked,
+    vote_allow_change: document.querySelector("#random-event-vote-allow-change").checked,
+    vote_close_offset_minutes: Number(document.querySelector("#random-event-vote-close-offset").value),
+    vote_broadcast_interval_minutes: Number(document.querySelector("#random-event-vote-broadcast-interval").value),
+    vote_random_candidates: Number(document.querySelector("#random-event-vote-random-candidates").value),
+    vote_ad_slot_limit: Number(document.querySelector("#random-event-vote-ad-slot-limit").value),
+    vote_fallback_minutes: Number(document.querySelector("#random-event-vote-fallback-minutes").value),
     signup_allowed_commands: [...randomEventSettingsModal.querySelectorAll("[data-random-event-signup-command]:checked")].map((input) => input.value),
     in_progress_allowed_commands: [...randomEventSettingsModal.querySelectorAll("[data-random-event-progress-command]:checked")].map((input) => input.value),
     blocked_message: document.querySelector("#random-event-blocked-message").value.trim(),

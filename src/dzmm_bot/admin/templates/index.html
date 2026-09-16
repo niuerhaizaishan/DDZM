@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8">
@@ -573,6 +573,11 @@
         <label>每日固定触发时刻</label><div id="random-event-time-inputs" class="income-report-time-inputs"></div><button id="add-random-event-time" class="secondary" type="button">添加触发时刻</button>
         <label for="random-event-signup-notice">报名补充说明</label><textarea id="random-event-signup-notice" rows="3" maxlength="2000"></textarea><div class="variable-pills"><button class="variable-chip" data-random-event-signup-variable="{可选身份}" type="button">{可选身份}</button><button class="variable-chip" data-random-event-signup-variable="{报名截止分钟}" type="button">{报名截止分钟}</button></div>
         <div class="event-input-grid"><label>报名超时（分钟）<input id="random-event-signup-timeout" type="number" min="1" required></label><label>提醒间隔（分钟）<input id="random-event-reminder-interval" type="number" min="1" required></label><label>打赏时长（秒）<input id="random-event-tipping-duration" type="number" min="10" max="3600" required></label></div>
+        <p class="muted">下一场投票：公告与开奖同款过滤条件广播；候选按「没演过 &gt; 没排过 &gt; 全部」三档优先随机抽。</p>
+        <div class="event-input-grid"><label>截止提前（分钟）<input id="random-event-vote-close-offset" type="number" min="1" max="720" required></label><label>播报间隔（分钟）<input id="random-event-vote-broadcast-interval" type="number" min="1" max="720" required></label><label>随机候选数<input id="random-event-vote-random-candidates" type="number" min="1" max="10" required></label></div>
+        <div class="event-input-grid"><label>广告位每期上限<input id="random-event-vote-ad-slot-limit" type="number" min="0" max="10" required></label><label>兜底开投窗口（分钟）<input id="random-event-vote-fallback-minutes" type="number" min="1" max="720" required></label></div>
+        <label><input id="random-event-vote-enabled" type="checkbox"> 开启下一场投票（关闭后回到随机选题）</label>
+        <label><input id="random-event-vote-allow-change" type="checkbox"> 允许改票</label>
         <label for="random-event-blocked-message">拦截提示</label><textarea id="random-event-blocked-message" rows="2" maxlength="2000"></textarea><p class="muted">未放行的指令或发言会收到这条提示，但不会执行任何业务操作。</p>
         <hr><label><input id="random-event-submission-enabled" type="checkbox">开放玩家投稿</label><div class="event-input-grid"><label>草稿超时（分钟）<input id="random-event-submission-timeout" type="number" min="1" max="1440" required></label><label>最大参加人数<input id="random-event-submission-max-participants" type="number" min="1" max="999" required></label><label>默认目标轮数<input id="random-event-submission-target-rounds" type="number" min="1" max="999" required></label><label>全局完成奖励<input id="random-event-global-completion-reward" type="number" min="0" max="999" required></label><label>默认事件奖励<input id="random-event-submission-event-reward" type="number" min="0" max="999" required></label><label>投稿通过奖励<input id="random-event-submission-approval-reward" type="number" min="0" max="999" required></label></div>
         <div class="event-input-grid"><section><b>报名中可执行指令</b><p class="muted">勾选后会正常执行。</p><div id="random-event-signup-command-permissions" class="command-permission-grid"></div></section><section><b>进行中可执行指令</b><p class="muted">参与者的普通剧情发言始终记录轮次。</p><div id="random-event-progress-command-permissions" class="command-permission-grid"></div></section></div>

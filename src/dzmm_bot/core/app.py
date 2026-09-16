@@ -1,4 +1,4 @@
-from datetime import date, datetime
+﻿from datetime import date, datetime
 from secrets import compare_digest
 from typing import Annotated, Callable, Literal
 from uuid import UUID
@@ -2539,6 +2539,13 @@ def create_app(
                 request.global_completion_reward,
                 request.submission_approval_reward,
                 request.tipping_duration_seconds,
+                vote_enabled=request.vote_enabled,
+                vote_close_offset_minutes=request.vote_close_offset_minutes,
+                vote_broadcast_interval_minutes=request.vote_broadcast_interval_minutes,
+                vote_random_candidates=request.vote_random_candidates,
+                vote_ad_slot_limit=request.vote_ad_slot_limit,
+                vote_fallback_minutes=request.vote_fallback_minutes,
+                vote_allow_change=request.vote_allow_change,
             )
         except ValueError as error:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error))
@@ -3700,6 +3707,13 @@ def _random_event_settings_response(settings) -> RandomEventSettingsResponse:
         global_completion_reward=settings.global_completion_reward,
         submission_approval_reward=settings.submission_approval_reward,
         tipping_duration_seconds=settings.tipping_duration_seconds,
+        vote_enabled=settings.vote_enabled,
+        vote_close_offset_minutes=settings.vote_close_offset_minutes,
+        vote_broadcast_interval_minutes=settings.vote_broadcast_interval_minutes,
+        vote_random_candidates=settings.vote_random_candidates,
+        vote_ad_slot_limit=settings.vote_ad_slot_limit,
+        vote_fallback_minutes=settings.vote_fallback_minutes,
+        vote_allow_change=settings.vote_allow_change,
     )
 
 

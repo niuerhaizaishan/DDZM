@@ -1421,6 +1421,13 @@ class RandomEventSettingsResponse(ApiModel):
     global_completion_reward: int = Field(default=6, ge=0, le=999)
     submission_approval_reward: int = Field(default=10, ge=0, le=999)
     tipping_duration_seconds: int = Field(default=120, ge=10, le=3600)
+    vote_enabled: bool = True
+    vote_close_offset_minutes: int = Field(default=10, ge=1, le=720)
+    vote_broadcast_interval_minutes: int = Field(default=30, ge=1, le=720)
+    vote_random_candidates: int = Field(default=3, ge=1, le=10)
+    vote_ad_slot_limit: int = Field(default=1, ge=0, le=10)
+    vote_fallback_minutes: int = Field(default=30, ge=1, le=720)
+    vote_allow_change: bool = True
 
 
 class SetRandomEventSettingsRequest(RandomEventSettingsResponse):
@@ -1432,6 +1439,13 @@ class SetRandomEventSettingsRequest(RandomEventSettingsResponse):
     global_completion_reward: int | None = Field(default=None, ge=0, le=999)
     submission_approval_reward: int | None = Field(default=None, ge=0, le=999)
     tipping_duration_seconds: int | None = Field(default=None, ge=10, le=3600)
+    vote_enabled: bool | None = None
+    vote_close_offset_minutes: int | None = Field(default=None, ge=1, le=720)
+    vote_broadcast_interval_minutes: int | None = Field(default=None, ge=1, le=720)
+    vote_random_candidates: int | None = Field(default=None, ge=1, le=10)
+    vote_ad_slot_limit: int | None = Field(default=None, ge=0, le=10)
+    vote_fallback_minutes: int | None = Field(default=None, ge=1, le=720)
+    vote_allow_change: bool | None = None
 
 
 class HideAndSeekSettingsResponse(ApiModel):

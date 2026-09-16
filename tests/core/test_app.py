@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+﻿from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID
@@ -3454,3 +3454,88 @@ def test_random_event_vote_can_be_cancelled_from_the_admin(app_context, headers)
     ).json()["poll"]
 
     assert cancelled["status"] == "cancelled"
+
+def test_random_event_vote_settings_round_trip(client, headers):
+    """七个投票配置项要能从后台读、改、并把越界值挡回去。"""
+    path = "/internal/game/random-events/settings"
+    initial = client.get(path, headers=headers).json()
+    assert initial["vote_enabled"] is True
+    assert initial["vote_close_offset_minutes"] == 10
+    assert initial["vote_broadcast_interval_minutes"] == 30
+    assert initial["vote_random_candidates"] == 3
+    assert initial["vote_ad_slot_limit"] == 1
+    assert initial["vote_fallback_minutes"] == 30
+    assert initial["vote_allow_change"] is True
+
+    updated = client.patch(
+        path,
+        headers=headers,
+        json={
+            "schedule_times": initial["schedule_times"],
+            "signup_notice_template": initial["signup_notice_template"],
+            "signup_timeout_minutes": initial["signup_timeout_minutes"],
+            "reminder_interval_minutes": initial["reminder_interval_minutes"],
+            "signup_allowed_commands": initial["signup_allowed_commands"],
+            "in_progress_allowed_commands": initial["in_progress_allowed_commands"],
+            "blocked_message": initial["blocked_message"],
+            "vote_close_offset_minutes": 15,
+            "vote_broadcast_interval_minutes": 45,
+            "vote_random_candidates": 4,
+            "vote_ad_slot_limit": 0,
+            "vote_fallback_minutes": 20,
+            "vote_allow_change": False,
+            "vote_enabled": False,
+        },
+    )
+
+    assert updated.status_code == 200
+    body = updated.json()
+    assert body["vote_close_offset_minutes"] == 15
+    assert body["vote_broadcast_interval_minutes"] == 45
+    assert body["vote_random_candidates"] == 4
+    assert body["vote_ad_slot_limit"] == 0
+    assert body["vote_fallback_minutes"] == 20
+    assert body["vote_allow_change"] is False
+    assert body["vote_enabled"] is False
+
+    rejected = client.patch(
+        path,
+        headers=headers,
+        json={
+            "schedule_times": initial["schedule_times"],
+            "signup_notice_template": initial["signup_notice_template"],
+            "signup_timeout_minutes": initial["signup_timeout_minutes"],
+            "reminder_interval_minutes": initial["reminder_interval_minutes"],
+            "signup_allowed_commands": initial["signup_allowed_commands"],
+            "in_progress_allowed_commands": initial["in_progress_allowed_commands"],
+            "blocked_message": initial["blocked_message"],
+            "vote_random_candidates": 99,
+        },
+    )
+    assert rejected.status_code == 422
+
+
+def test_closing_a_vote_is_not_allowed_before_its_deadline(app_context, headers):
+    """自动定稿只在截止后发生；后台要提前结束必须显式 force。"""
+    repository = app_context.repository
+    group = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=vote-settings", NOW
+    )
+    for name in ("甲", "乙", "丙"):
+        repository.create_random_event_scene(
+            name, "报名", ["开场"], 6, 3, [("主持", 1)]
+        )
+    target = NOW + timedelta(hours=3)
+    with app_context.session_factory.begin() as session:
+        session.add(
+            RandomEventScheduleRecord(
+                group_chat_id=group.id,
+                event_date=target.date(),
+                scheduled_at=target,
+                status="pending",
+            )
+        )
+    repository.create_random_event_poll(NOW)
+
+    assert repository.close_random_event_poll(NOW).status == "not_due"
+    assert repository.close_random_event_poll(NOW, force=True).status == "closed"
