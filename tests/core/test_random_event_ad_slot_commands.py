@@ -413,3 +413,89 @@ def test_draft_expires_without_consuming_the_card(harness):
 
     assert "向导已经结束" in _reply(factory)
     assert _card_count(repository) == 1
+
+
+# ------------------------------------------------------------------ 生效
+
+def test_filling_the_slot_announces_it(harness):
+    service, repository, factory, group = harness
+    _open_poll(repository, factory)
+    number = _buy_cards(repository, 1)
+    _send(service, group, "author", f"/使用 {number}")
+    repository.consume_random_event_ad_slot_draft("author", "/选择 1", NOW)
+    _purge(factory)
+
+    repository.consume_random_event_ad_slot_draft("author", "/确认广告位", NOW)
+
+    text = _reply(factory)
+    assert "【事件广告卡】" in text
+    assert "作者作品" in text
+    assert "/事件投票" in text
+
+
+def test_the_filled_slot_can_be_voted_and_can_win(harness):
+    from dzmm_bot.core.schema import RandomEventScheduleRecord
+
+    service, repository, factory, group = harness
+    _open_poll(repository, factory)
+    number = _buy_cards(repository, 1)
+    _send(service, group, "author", f"/使用 {number}")
+    repository.consume_random_event_ad_slot_draft("author", "/选择 1", NOW)
+    assert (
+        repository.consume_random_event_ad_slot_draft(
+            "author", "/确认广告位", NOW
+        ).status
+        == "consumed"
+    )
+    slot = _slot_candidate(repository)
+    assert slot.vacant is False
+
+    recorded = repository.cast_random_event_vote("other", slot.position, NOW)
+
+    assert recorded.status == "recorded"
+    assert recorded.view.my_position == slot.position
+    result = repository.close_random_event_poll(
+        TARGET_AT - timedelta(minutes=10)
+    )
+    assert result.position == slot.position
+    with repository._session() as session:
+        schedule = session.scalar(
+            select(RandomEventScheduleRecord).where(
+                RandomEventScheduleRecord.scheduled_at == TARGET_AT
+            )
+        )
+    assert schedule.scene_name == "作者作品"
+
+
+def test_carry_over_keeps_the_filled_slot(harness):
+    from dzmm_bot.core.schema import RandomEventScheduleRecord
+
+    service, repository, factory, group = harness
+    _open_poll(repository, factory)
+    number = _buy_cards(repository, 1)
+    _send(service, group, "author", f"/使用 {number}")
+    repository.consume_random_event_ad_slot_draft("author", "/选择 1", NOW)
+    repository.consume_random_event_ad_slot_draft("author", "/确认广告位", NOW)
+    repository.cast_random_event_vote("other", _slot_candidate(repository).position, NOW)
+    later = TARGET_AT + timedelta(hours=2)
+    with factory.begin() as session:
+        _schedule(session, repository, when=later)
+        target = session.scalar(
+            select(RandomEventScheduleRecord).where(
+                RandomEventScheduleRecord.scheduled_at == TARGET_AT
+            )
+        )
+        target.status = "skipped"
+
+    repository.run_random_event_jobs(NOW + timedelta(minutes=5))
+
+    report = repository.random_event_poll_report()
+    assert report.status == "open"
+    assert report.total_votes == 1
+    filled = next(
+        candidate
+        for candidate in report.candidates
+        if candidate.source == "ad_slot"
+    )
+    assert filled.vacant is False
+    assert filled.scene_name == "作者作品"

@@ -22567,6 +22567,13 @@ class CoreRepository:
         selected = next(
             (work for work in works if work.scene_id == scene.id), None
         )
+        self._random_event_announce(
+            _render_random_event_ad_slot_filled(
+                self._random_event_poll_view(session, poll),
+                user.display_name,
+                vacancy.position,
+            )
+        )
         return RandomEventAdSlotDraftResult(
             "consumed",
             works=works,
@@ -30941,6 +30948,22 @@ def _render_random_event_vote_carryover(view: RandomEventPollView) -> str:
 
 def _render_random_event_vote_cancelled() -> str:
     return "【事件投票】没有可以顺延的场次了，本期投票作废。"
+
+
+def _render_random_event_ad_slot_filled(
+    view: RandomEventPollView, author: str, position: int
+) -> str:
+    """广告卡生效公告：与投票公告同过滤条件，广播到所有符合条件的群。"""
+    candidate = next(
+        (row for row in view.candidates if row.position == position), None
+    )
+    scene_name = "未命名" if candidate is None else candidate.scene_name
+    return (
+        "【事件广告卡】\n"
+        f"{author} 把《{scene_name}》放进了 "
+        f"{view.scheduled_at.strftime('%H:%M')} 那场的广告位。\n"
+        f"回复 /事件投票 {position} 支持它"
+    )
 
 
 def _random_event_schedule(
