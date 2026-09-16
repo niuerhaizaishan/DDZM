@@ -3539,3 +3539,97 @@ def test_closing_a_vote_is_not_allowed_before_its_deadline(app_context, headers)
 
     assert repository.close_random_event_poll(NOW).status == "not_due"
     assert repository.close_random_event_poll(NOW, force=True).status == "closed"
+
+def test_random_event_vote_end_to_end(app_context, headers):
+    """开投 → 投票 → 播报 → 定稿 → 预告 → 开演，全走两个真实入口。"""
+    from dzmm_bot.core.company_lottery import BEIJING
+
+    repository = app_context.repository
+    client = app_context.client
+    group = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=vote-e2e", NOW
+    )
+    repository.create_user("vote-e2e-1", "投票甲", NOW, 100)
+    repository.create_user("vote-e2e-2", "投票乙", NOW, 100)
+    for name in ("候选甲", "候选乙", "候选丙"):
+        repository.create_random_event_scene(
+            name, "报名", ["开场"], 6, 3, [("主持", 1)]
+        )
+    # 只留一个当日晚间场次，让目标场次确定
+    repository.set_random_event_settings(["23:59"], "{可选身份}", 15, 5)
+
+    def tick(when):
+        response = client.post(
+            "/internal/daily-jobs/run", headers=headers, json={"now": when.isoformat()}
+        )
+        assert response.status_code == 200
+
+    def outbound():
+        from dzmm_bot.core.schema import OutboundRecord
+
+        with app_context.session_factory() as session:
+            return list(
+                session.scalars(
+                    select(OutboundRecord.text).order_by(
+                        OutboundRecord.reply_index, OutboundRecord.created_at
+                    )
+                )
+            )
+
+    def send(message_id, sender, content, when):
+        response = client.post(
+            "/internal/inbound",
+            headers=headers,
+            json={
+                "platform_message_id": message_id,
+                "sender_platform_id": sender,
+                "content": content,
+                "received_at": when.isoformat(),
+                "chatroom_id": group.chatroom_id,
+            },
+        )
+        assert response.status_code == 200
+
+    beijing = NOW.astimezone(BEIJING)
+    open_tick = beijing.replace(hour=20, minute=0)
+    close_tick = beijing.replace(hour=23, minute=49)
+    preview_tick = beijing.replace(hour=23, minute=54)
+    start_tick = beijing.replace(hour=23, minute=59)
+
+    # 开投：上一场结束（这里没有上一场，直接开投）
+    tick(open_tick)
+    opened = "\n".join(outbound())
+    assert "【事件投票】" in opened
+    assert "招商中" in opened
+    assert "候选甲" in opened or "候选乙" in opened or "候选丙" in opened
+
+    # 投票（两个人投同一个候选）
+    report = repository.random_event_poll_report()
+    target = next(c for c in report.candidates if not c.vacant)
+    send("vote-e2e-a", "vote-e2e-1", f"/事件投票 {target.position}", open_tick)
+    send("vote-e2e-b", "vote-e2e-2", f"/事件投票 {target.position}", open_tick)
+    assert repository.random_event_poll_report().total_votes == 2
+
+    # 播报（半小时间隔后）
+    tick(open_tick + timedelta(minutes=45))
+    assert any("票型" in text for text in outbound())
+
+    # 截止定稿
+    tick(close_tick)
+    closed = repository.random_event_poll_report()
+    assert closed.status == "closed"
+    assert closed.winner_position == target.position
+    assert any("【事件投票·结果】" in text for text in outbound())
+
+    # 预告：此时事件名已经定稿
+    tick(preview_tick)
+    texts = outbound()
+    result_index = next(i for i, text in enumerate(texts) if "【事件投票·结果】" in text)
+    notice_index = next(i for i, text in enumerate(texts) if "【随机事件预告】" in text)
+    assert result_index < notice_index
+    assert target.scene_name in texts[notice_index]
+
+    # 开演：报名中
+    tick(start_tick)
+    assert repository.current_company_lottery_round() is not None
+    assert any("报名" in text for text in outbound())
