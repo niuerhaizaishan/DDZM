@@ -252,6 +252,27 @@ class RandomEventSettingsRecord(Base):
     tipping_duration_seconds: Mapped[int] = mapped_column(
         Integer, nullable=False, default=120, server_default="120"
     )
+    vote_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=true()
+    )
+    vote_close_offset_minutes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=10, server_default="10"
+    )
+    vote_broadcast_interval_minutes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=30, server_default="30"
+    )
+    vote_random_candidates: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=3, server_default="3"
+    )
+    vote_ad_slot_limit: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    vote_fallback_minutes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=30, server_default="30"
+    )
+    vote_allow_change: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=true()
+    )
 
 
 class HideAndSeekSettingsRecord(Base):
@@ -1934,6 +1955,85 @@ class RandomEventTipRecord(Base):
         ForeignKey("inbound_messages.id"), nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+
+
+class RandomEventPollRecord(Base):
+    """全公司唯一一份投票：为某个"待开始"场次决定演哪个场景。"""
+
+    __tablename__ = "random_event_polls"
+    __table_args__ = (
+        UniqueConstraint("target_schedule_id"),
+        Index("ix_random_event_polls_status_close", "status", "closes_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    target_schedule_id: Mapped[UUID] = mapped_column(
+        ForeignKey("random_event_schedules.id"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(16), default="open", nullable=False)
+    opened_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    closes_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    closed_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    # 赢家候选：不设外键，避免 polls ↔ candidates 循环依赖
+    winner_candidate_id: Mapped[UUID | None] = mapped_column(Uuid)
+    announced_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    last_tally_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    fallback_reason: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(
+        BeijingDateTime, default=beijing_now, nullable=False
+    )
+
+
+class RandomEventPollCandidateRecord(Base):
+    """每期 4 位：1–3 是随机候选，第 4 位是事件广告卡位（未被买下时 vacant）。"""
+
+    __tablename__ = "random_event_poll_candidates"
+    __table_args__ = (
+        UniqueConstraint("poll_id", "position"),
+        UniqueConstraint("poll_id", "scene_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    poll_id: Mapped[UUID] = mapped_column(
+        ForeignKey("random_event_polls.id"), nullable=False
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+    scene_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("random_event_scenes.id")
+    )
+    template_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("random_event_scene_openings.id")
+    )
+    scene_name: Mapped[str | None] = mapped_column(String(64))
+    event_name: Mapped[str | None] = mapped_column(String(64))
+    seat_summary: Mapped[str | None] = mapped_column(String(255))
+    reward: Mapped[int | None] = mapped_column(Integer)
+    target_rounds: Mapped[int | None] = mapped_column(Integer)
+    vacant: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default=false()
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        BeijingDateTime, default=beijing_now, nullable=False
+    )
+
+
+class RandomEventPollVoteRecord(Base):
+    """每人一票，可改票：unique(poll_id, user_id)。"""
+
+    __tablename__ = "random_event_poll_votes"
+    __table_args__ = (UniqueConstraint("poll_id", "user_id"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    poll_id: Mapped[UUID] = mapped_column(
+        ForeignKey("random_event_polls.id"), nullable=False
+    )
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    candidate_id: Mapped[UUID] = mapped_column(
+        ForeignKey("random_event_poll_candidates.id"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
 
 
 class PerformanceSettingsRecord(Base):
