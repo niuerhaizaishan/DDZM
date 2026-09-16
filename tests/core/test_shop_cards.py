@@ -30,6 +30,7 @@ def test_system_shop_catalog_is_stable_and_complete() -> None:
         "adult_common_1h",
         "adult_common_6h",
         "adult_common_24h",
+        "event_ad_slot",
     ]
     assert len({item.name for item in SYSTEM_SHOP_ITEMS}) == len(SYSTEM_SHOP_ITEMS)
 

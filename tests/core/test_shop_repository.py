@@ -98,11 +98,11 @@ def test_catalog_hides_adult_items_until_group_switch_is_enabled(
 ) -> None:
     repository, factory = setup_repository
 
-    assert len(repository.list_shop_items()) == 9
+    assert len(repository.list_shop_items()) == 10
     with factory.begin() as session:
         session.get(GroupChatRecord, PRIMARY_GROUP_CHAT_ID).adult_shop_enabled = True
 
-    assert len(repository.list_shop_items()) == 22
+    assert len(repository.list_shop_items()) == 23
 
 
 def test_purchase_is_atomic_numbered_and_idempotent(setup_repository, now) -> None:

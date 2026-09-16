@@ -164,6 +164,13 @@ SYSTEM_SHOP_ITEMS = (
         recipient_count=1,
         duration_minutes=1440,
     ),
+    SystemShopItem(
+        "event_ad_slot",
+        "事件广告卡",
+        8,
+        "event_ad_slot",
+        "把一件自己的随机事件作品送上下一场投票的广告位；保证进候选，能不能当选仍看投票",
+    ),
 )
 
 

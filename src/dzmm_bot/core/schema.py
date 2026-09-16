@@ -2036,6 +2036,57 @@ class RandomEventPollVoteRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
 
 
+class RandomEventAdSlotRecord(Base):
+    """事件广告卡的使用记录：某位作者把某个作品送进了某期投票的广告位。"""
+
+    __tablename__ = "random_event_ad_slots"
+    __table_args__ = (
+        UniqueConstraint("poll_id", "user_id"),
+        Index("ix_random_event_ad_slots_poll", "poll_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    scene_id: Mapped[UUID] = mapped_column(
+        ForeignKey("random_event_scenes.id"), nullable=False
+    )
+    item_id: Mapped[UUID] = mapped_column(ForeignKey("items.id"), nullable=False)
+    poll_id: Mapped[UUID] = mapped_column(
+        ForeignKey("random_event_polls.id"), nullable=False
+    )
+    candidate_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("random_event_poll_candidates.id")
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), default="consumed", server_default="consumed", nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+
+
+class RandomEventAdSlotDraftRecord(Base):
+    """广告卡向导草稿：一人一份，15 分钟没动作就作废（卡还在库存里）。"""
+
+    __tablename__ = "random_event_ad_slot_drafts"
+    __table_args__ = (UniqueConstraint("user_id"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    item_id: Mapped[UUID] = mapped_column(ForeignKey("items.id"), nullable=False)
+    poll_id: Mapped[UUID] = mapped_column(
+        ForeignKey("random_event_polls.id"), nullable=False
+    )
+    current_step: Mapped[str] = mapped_column(
+        String(32), default="pick_event", nullable=False
+    )
+    scene_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("random_event_scenes.id")
+    )
+    created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    last_activity_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+
+
 class PerformanceSettingsRecord(Base):
     __tablename__ = "performance_settings"
 
