@@ -520,6 +520,7 @@ class CoreService:
             "slot_taken": "本期的广告位已经被占用了，这张卡留着下次用。",
             "scene_taken": "这件作品已经在候选列表里了，换一件吧。",
             "scene_unavailable": "这件作品暂时不能使用，换一件吧。",
+            "slot_disabled": "本期没有开放广告位，这张卡留着下次用。",
             "item_missing": "这张事件广告卡当前不可用。",
             "disabled": "随机事件投票当前没有开启。",
         }.get(result.status, "这条消息没看懂，回复 /选择 序号 或 /确认广告位。")

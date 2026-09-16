@@ -1,6 +1,6 @@
 from datetime import datetime
 from random import Random
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from dzmm_bot.core.company_lottery import BEIJING
 from dzmm_bot.core.random_event_vote import (
@@ -92,51 +92,52 @@ def test_pick_distinct_caps_at_the_pool_size():
 def test_break_tie_prefers_the_least_performed_scene():
     first, second = uuid4(), uuid4()
 
-    winner = break_tie(
+    winner, reason = break_tie(
         [first, second],
         performances={first: 3, second: 1},
         authored_at={first: _moment(1), second: _moment(2)},
         randbelow=Random(1).randrange,
     )
 
-    assert winner == second
+    assert (winner, reason) == (second, "tie_perf")
 
 
 def test_break_tie_prefers_the_later_submission_when_performances_match():
     """演出次数一样时，投稿晚的优先。"""
     first, second = uuid4(), uuid4()
 
-    winner = break_tie(
+    winner, reason = break_tie(
         [first, second],
         performances={first: 1, second: 1},
         authored_at={first: _moment(1), second: _moment(5)},
         randbelow=Random(1).randrange,
     )
 
-    assert winner == second
+    assert (winner, reason) == (second, "tie_time")
 
 
-def test_break_tie_falls_back_to_random_and_is_repeatable():
+def test_break_tie_falls_back_to_the_random_source_when_all_else_is_equal():
+    """三级都分不出来时必须真的去问随机源，而且只问一次。"""
     first, second, third = uuid4(), uuid4(), uuid4()
-    args = {
-        "performances": {first: 2, second: 2, third: 2},
-        "authored_at": {
+    calls: list[int] = []
+
+    def randbelow(upper: int) -> int:
+        calls.append(upper)
+        return upper - 1
+
+    winner, reason = break_tie(
+        [first, second, third],
+        performances={first: 2, second: 2, third: 2},
+        authored_at={
             first: _moment(3),
             second: _moment(3),
             third: _moment(3),
         },
-    }
+        randbelow=randbelow,
+    )
 
-    picks = {
-        break_tie([first, second, third], randbelow=Random(11).randrange, **args)
-        for _ in range(20)
-    }
-
-    assert picks <= {first, second, third}
-    assert picks == {
-        break_tie([first, second, third], randbelow=Random(11).randrange, **args)
-    }
-    assert len(picks) >= 1
+    assert calls == [3]
+    assert (winner, reason) == (third, "tie_random")
 
 
 def test_tally_counts_every_candidate_including_zeroes():
@@ -158,7 +159,3 @@ def test_top_candidates_returns_every_tied_leader():
 
 def _moment(minute: int) -> datetime:
     return datetime(2026, 9, 15, 12, minute, tzinfo=BEIJING)
-
-
-def test_uuid_values_are_not_reused_between_tests():
-    assert isinstance(uuid4(), UUID)

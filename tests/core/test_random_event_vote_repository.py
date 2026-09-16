@@ -479,7 +479,7 @@ def test_close_poll_breaks_a_tie_by_fewest_performances(repository, seeded):
 
     result = repository.close_random_event_poll(CLOSE_AT)
 
-    assert result.fallback_reason == "tie"
+    assert result.fallback_reason == "tie_perf"
     assert result.position == rare.position
 
 
@@ -509,7 +509,7 @@ def test_close_poll_breaks_a_tie_by_the_later_submission(repository, seeded):
 
     result = repository.close_random_event_poll(CLOSE_AT)
 
-    assert result.fallback_reason == "tie"
+    assert result.fallback_reason == "tie_time"
     assert result.position == late_position
 
 
@@ -644,3 +644,180 @@ def test_admin_can_cancel_the_poll(repository, seeded):
 
 def test_admin_cancel_without_a_poll(repository, seeded):
     assert repository.cancel_random_event_poll(NOW) == "no_poll"
+
+
+# ------------------------------------------------- 审计修复：裁定依据与开关收尾
+
+def test_close_poll_reports_the_random_tier_when_everything_is_equal(
+    repository, seeded
+):
+    """票、演出次数、投稿时间全都一样时，公告要写"随机选出"，不能谎称按演出次数。"""
+    from dzmm_bot.core.repository import _render_random_event_vote_result
+
+    with seeded.begin() as session:
+        for name in ("甲", "乙", "丙"):
+            add_scene(session, name)
+        poll = _open_poll(repository, session)
+    repository.cast_random_event_vote("p1", poll.candidates[0].position, NOW)
+    repository.cast_random_event_vote("p2", poll.candidates[1].position, NOW)
+
+    result = repository.close_random_event_poll(CLOSE_AT)
+
+    assert result.fallback_reason == "tie_random"
+    text = _render_random_event_vote_result(
+        result.view, result.position, result.fallback_reason
+    )
+    assert "随机选出" in text
+
+
+def test_a_cancelled_poll_cannot_be_revived_by_an_override(repository, seeded):
+    """作废的期次不能被后台"改判"复活，否则公告过的作废会被静默翻案。"""
+    with seeded.begin() as session:
+        for name in ("甲", "乙", "丙"):
+            add_scene(session, name)
+        _open_poll(repository, session)
+    assert repository.cancel_random_event_poll(NOW) == "cancelled"
+
+    result = repository.close_random_event_poll(CLOSE_AT, winner_position=1)
+
+    assert result.status == "no_poll"
+    assert repository.random_event_poll_report().status == "cancelled"
+
+
+def test_a_poll_without_any_usable_candidate_is_cancelled_with_a_notice(
+    repository, seeded
+):
+    """候选全空时不能静默作废：群里要有一句说明。"""
+    with seeded.begin() as session:
+        for name in ("甲", "乙", "丙"):
+            add_scene(session, name)
+        _open_poll(repository, session)
+    with seeded.begin() as session:
+        for candidate in session.scalars(select(RandomEventPollCandidateRecord)):
+            candidate.vacant = True
+
+    result = repository.close_random_event_poll(CLOSE_AT)
+
+    assert result.status == "no_candidates"
+    assert repository.random_event_poll_report().status == "cancelled"
+    assert any("没有可用的候选节目" in text for text in outbound_texts(repository))
+
+
+def test_turning_voting_off_cancels_the_open_poll_and_refuses_votes(
+    repository, seeded
+):
+    """关掉开关不能只掐掉定稿：还开着的投票要立刻作废，且不再收票。"""
+    with seeded.begin() as session:
+        for name in ("甲", "乙", "丙"):
+            add_scene(session, name)
+        _open_poll(repository, session)
+
+    repository.set_random_event_settings(
+        ["20:00"], "{可选身份}", 15, 5, vote_enabled=False
+    )
+    repository.run_random_event_jobs(NOW)
+
+    assert repository.random_event_poll_report().status == "cancelled"
+    assert any("作废" in text for text in outbound_texts(repository))
+    assert repository.cast_random_event_vote("p1", 1, NOW).status == "disabled"
+
+
+def test_two_ad_slots_when_the_limit_is_two(repository, seeded):
+    """广告位上限是几就建几个空位，否则上限设 2 也永远只有一个人能进。"""
+    with seeded.begin() as session:
+        for name in ("甲", "乙", "丙"):
+            add_scene(session, name)
+        add_schedule(session)
+    repository.set_random_event_settings(
+        ["20:00"], "{可选身份}", 15, 5, vote_ad_slot_limit=2
+    )
+
+    view = repository.create_random_event_poll(NOW)
+
+    assert [candidate.position for candidate in view.candidates] == [1, 2, 3, 4, 5]
+    assert [candidate.vacant for candidate in view.candidates] == [
+        False,
+        False,
+        False,
+        True,
+        True,
+    ]
+
+
+def test_no_ad_slot_when_the_limit_is_zero(repository, seeded):
+    with seeded.begin() as session:
+        for name in ("甲", "乙", "丙"):
+            add_scene(session, name)
+        add_schedule(session)
+    repository.set_random_event_settings(
+        ["20:00"], "{可选身份}", 15, 5, vote_ad_slot_limit=0
+    )
+
+    view = repository.create_random_event_poll(NOW)
+
+    assert view is not None
+    assert len(view.candidates) == 3
+    assert all(candidate.source == "random" for candidate in view.candidates)
+
+
+def test_settings_reject_an_impossible_vote_window(repository, seeded):
+    """兜底窗口必须大于截止提前量，否则既开不了投也来不及兜底。"""
+    with pytest.raises(ValueError):
+        repository.set_random_event_settings(
+            ["20:00"],
+            "{可选身份}",
+            15,
+            5,
+            vote_close_offset_minutes=20,
+            vote_fallback_minutes=10,
+        )
+
+
+def test_settings_reject_a_candidate_count_beyond_the_message_budget(
+    repository, seeded
+):
+    """候选一行一个，太多会被系统拆成多条消息，所以上限收在 5。"""
+    with pytest.raises(ValueError):
+        repository.set_random_event_settings(
+            ["20:00"], "{可选身份}", 15, 5, vote_random_candidates=6
+        )
+
+
+def test_votes_cannot_be_changed_when_change_is_off(repository, seeded):
+    """关掉"允许改票"后，第二次投票只回显当前票，不动候选人。"""
+    with seeded.begin() as session:
+        for name in ("甲", "乙", "丙"):
+            add_scene(session, name)
+        poll = _open_poll(repository, session)
+    repository.set_random_event_settings(
+        ["20:00"], "{可选身份}", 15, 5, vote_allow_change=False
+    )
+    first = poll.candidates[0]
+    second = poll.candidates[1]
+
+    assert repository.cast_random_event_vote("p1", first.position, NOW).status == "recorded"
+    again = repository.cast_random_event_vote("p1", second.position, NOW)
+
+    assert again.status == "already_voted"
+    assert again.view is not None and again.view.my_position == first.position
+    with seeded() as session:
+        votes = list(session.scalars(select(RandomEventPollVoteRecord)))
+        assert len(votes) == 1
+        assert votes[0].candidate_id == first.id
+
+
+def test_broadcast_interval_stretches_with_a_long_window(repository, seeded):
+    """窗口 6 小时时按 窗口/6 拉长到 60 分钟，配置的 30 分钟不再是实际间隔。"""
+    settings = repository.get_random_event_settings()
+    poll = RandomEventPollRecord(
+        opened_at=NOW,
+        closes_at=NOW + timedelta(hours=6),
+        last_tally_at=NOW,
+    )
+
+    assert not repository._random_event_tally_due(
+        poll, settings, NOW + timedelta(minutes=59)
+    )
+    assert repository._random_event_tally_due(
+        poll, settings, NOW + timedelta(minutes=60)
+    )

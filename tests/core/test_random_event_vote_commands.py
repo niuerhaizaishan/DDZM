@@ -260,3 +260,18 @@ def test_vote_command_is_registered_in_every_whitelist():
         assert command in definitions, command
         assert command in templates, command
         assert command in repository_module._RANDOM_EVENT_CONFIGURABLE_COMMANDS, command
+
+
+def test_admin_command_checkboxes_cover_the_vote_commands():
+    """后台"可执行指令"复选框是硬编码数组：漏了这两条，管理员存一次随机事件
+    规则就会把投票指令从放行清单里静默删掉（迁移 77 只保护升级那一刻）。"""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    source = (root / "src/dzmm_bot/admin/static/admin.js").read_text(
+        encoding="utf-8"
+    )
+    block = source.split("randomEventCommandOptions = [", 1)[1].split("];", 1)[0]
+
+    assert '"/事件投票"' in block
+    assert '"/事件投票情况"' in block

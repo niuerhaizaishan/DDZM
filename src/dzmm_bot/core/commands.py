@@ -1,4 +1,4 @@
-﻿from collections import Counter
+from collections import Counter
 import re
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
@@ -46,11 +46,6 @@ from .service import CommandReply
 _BEIJING = ZoneInfo("Asia/Shanghai")
 _COMMANDS = {
     "/入职", "/我的物品", "/购买", "/使用", "/邀请参与", "/取消使用", "/同意使用", "/拒绝使用", "/打卡", "/余额", "/修改名称", "/编辑档案", "/编辑档案形象", "/我的档案", "/公司的故事集", "/发奖金", "/发红包", "/抢红包", "/打赏", "/我", "/商店", "/帮助", "/当前游戏", "/加入", "/退出", "/开始", "/摸鱼躲猫猫", "/记忆考核", "/答案", "/继续", "/收手", "/投降", "/队伍1", "/队伍2", "/队伍1人员", "/队伍2人员", "/公会赛场次", "/开始对战", "/上场", "/部门", "/部门人数", "/我的部门人数", "/加入部门", "/切换部门", "/部门申请列表", "/同意部门", "/全部同意部门", "/拒绝部门", "/全部拒绝部门", "/职位", "/晋升", "/晋升申请列表", "/同意", "/全部同意", "/拒绝", "/全部拒绝", "/谁是卧底", "/开始投票", "/投票", "/退出谁是卧底", "/结束游戏", "/甩锅游戏", "/甩锅", "/退出甩锅", "/我有你没有", "/发言", "/扣", "/不扣", "/国王游戏", "/国王游戏数据", "/蹦蹦数字炸弹", "/报数", "/跳过", "/德州扑克", "/看牌", "/过牌", "/跟注", "/加注", "/全下", "/弃牌", "/上架暗网", "/取消上架", "/确认", "/报价", "/公开", "/不公开", "/查看暗网", "/确认收货", "/投诉", "/预约公演", "/我的公演预约", "/取消公演预约", "/公演日程", "/延期", "/end", "/购买彩票", "/彩票", "/我的彩票", "/确认彩票", "/取消彩票", "/彩票验证", "/事件投票", "/事件投票情况",
-}
-
-_RANDOM_EVENT_VOTE_COMMANDS = {
-    "/事件投票",
-    "/事件投票情况",
 }
 
 _LOTTERY_COMMANDS = {
@@ -2139,8 +2134,14 @@ class GroupCommandHandler:
                 message.sender_platform_id, int(parts[1]), received_at
             )
             if draft.status != "started":
-                return self._reply(
-                    "/使用", f"ad_slot_{draft.status}", received_at
+                text = self._reply("/使用", f"ad_slot_{draft.status}", received_at)
+                if draft.direct_chatroom_id is None:
+                    return text
+                # 设计 §3.3：拒绝提示写在私聊，别在群里刷屏
+                return CommandReply(
+                    text,
+                    destination_chatroom_id=draft.direct_chatroom_id,
+                    delivery_kind="direct",
                 )
             return [
                 self._reply("/使用", "ad_slot_started", received_at),

@@ -1,4 +1,4 @@
-﻿let token = sessionStorage.getItem("dzmm-admin-token") || "";
+let token = sessionStorage.getItem("dzmm-admin-token") || "";
 let adminSession = sessionStorage.getItem("dzmm-admin-session") || "";
 let identity = JSON.parse(sessionStorage.getItem("dzmm-admin-identity") || "null");
 let loginLease = null;
@@ -95,6 +95,7 @@ const randomEventCommandOptions = [
   ["/拒绝部门", "/拒绝部门"], ["/全部拒绝部门", "/全部拒绝部门"], ["/职位", "/职位"],
   ["/晋升", "/晋升"], ["/晋升申请列表", "/晋升申请列表"],
   ["/同意", "/同意"], ["/全部同意", "/全部同意"], ["/拒绝", "/拒绝"], ["/全部拒绝", "/全部拒绝"],
+  ["/事件投票", "/事件投票"], ["/事件投票情况", "/事件投票情况"],
 ];
 const pageContext = {
   overview: {crumb: "运营概览", title: "机器人运行状态", description: "查看服务、浏览器和人工登录状态。"},
@@ -1275,7 +1276,9 @@ function renderRandomEventVote(poll) {
   const reason = poll.fallback_reason ? `（${escapeHtml(poll.fallback_reason)}）` : "";
   const actions = poll.status === "open"
     ? `<div class="command-actions"><input id="random-event-vote-winner" class="list-search" type="number" min="1" max="10" placeholder="序号" style="max-width:90px"><button class="secondary" data-vote-close="pick" type="button">指定当选</button><button class="secondary" data-vote-close="now" type="button">立刻截止</button><button class="secondary" data-vote-cancel type="button">作废本期</button></div>`
-    : `<div class="command-actions"><input id="random-event-vote-winner" class="list-search" type="number" min="1" max="10" placeholder="序号" style="max-width:90px"><button class="secondary" data-vote-close="pick" type="button">改判当选</button></div>`;
+    : poll.status === "closed"
+    ? `<div class="command-actions"><input id="random-event-vote-winner" class="list-search" type="number" min="1" max="10" placeholder="序号" style="max-width:90px"><button class="secondary" data-vote-close="pick" type="button">改判当选</button></div>`
+    : `<p class="muted">本期已作废，不能再改判。</p>`;
   target.innerHTML = `
     <p class="muted">目标场次 ${formatHeartbeat(poll.scheduled_at)} ｜ 状态 ${statusLabel} ｜ 截止 ${formatHeartbeat(poll.closes_at)} ｜ 已投 ${poll.total_votes} 票 ｜ 当选 ${winner}${reason}</p>
     <table class="data-table"><thead><tr><th>#</th><th>候选</th><th>票数</th><th>投票人</th><th>来源</th></tr></thead><tbody>${rows}</tbody></table>

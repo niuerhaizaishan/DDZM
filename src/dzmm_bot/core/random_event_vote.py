@@ -90,11 +90,14 @@ def break_tie(
     performances: Mapping[UUID, int],
     authored_at: Mapping[UUID, datetime],
     randbelow: Randbelow,
-) -> UUID:
+) -> tuple[UUID, str]:
     """平票三级判定：演出次数少 → 投稿晚 → 随机。
 
     `authored_at` 传"这个作品的时间"：有投稿的用 `submitted_at`，后台自建场景
     没有投稿记录，退化为场景的 `created_at`（两者统一比较）。
+
+    返回值带上**是靠哪一级定的**，因为公告必须如实写明裁定依据（设计 §3.2）：
+    `tie_perf` 演出次数、`tie_time` 投稿时间、`tie_random` 掷骰子。
     """
     if not candidate_ids:
         raise ValueError("平票判定至少需要一个候选")
@@ -105,7 +108,7 @@ def break_tie(
         if performances.get(candidate, 0) == fewest
     ]
     if len(least_performed) == 1:
-        return least_performed[0]
+        return least_performed[0], "tie_perf"
 
     latest = max(authored_at[candidate] for candidate in least_performed)
     newest = [
@@ -114,8 +117,8 @@ def break_tie(
         if authored_at[candidate] == latest
     ]
     if len(newest) == 1:
-        return newest[0]
-    return newest[randbelow(len(newest))]
+        return newest[0], "tie_time"
+    return newest[randbelow(len(newest))], "tie_random"
 
 
 def tally(candidate_ids: Sequence[UUID], votes: Iterable[UUID]) -> dict[UUID, int]:

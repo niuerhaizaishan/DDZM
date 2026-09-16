@@ -1,4 +1,4 @@
-﻿from datetime import datetime, timedelta
+from datetime import datetime, timedelta
 
 import pytest
 from sqlalchemy import create_engine, select
@@ -499,3 +499,144 @@ def test_carry_over_keeps_the_filled_slot(harness):
     )
     assert filled.vacant is False
     assert filled.scene_name == "作者作品"
+
+# ------------------------------------------------------------ 审计发现的漏洞
+
+def _zero_the_card(repository, platform_id="author"):
+    """把库存行清零，模拟"确认瞬间卡没了"。"""
+    from dzmm_bot.core.schema import ItemRecord, UserItemRecord, UserRecord
+
+    with repository.transaction():
+        with repository._session() as session:
+            item_id = session.scalar(
+                select(ItemRecord.id).where(
+                    ItemRecord.system_key == "event_ad_slot"
+                )
+            )
+            user_id = session.scalar(
+                select(UserRecord.id).where(UserRecord.platform_id == platform_id)
+            )
+            row = session.scalar(
+                select(UserItemRecord).where(
+                    UserItemRecord.user_id == user_id,
+                    UserItemRecord.item_id == item_id,
+                )
+            )
+            row.quantity = 0
+
+
+def test_confirm_without_stock_leaves_the_slot_empty(harness):
+    """库存不足在改动任何行之前就要拒绝：不能出现"位子被占、卡没扣"。"""
+    from dzmm_bot.core.schema import RandomEventAdSlotRecord
+
+    service, repository, factory, group = harness
+    _open_poll(repository, factory)
+    number = _buy_cards(repository, 1)
+    _send(service, group, "author", f"/使用 {number}")
+    repository.consume_random_event_ad_slot_draft("author", "/选择 1", NOW)
+    _zero_the_card(repository)
+    _purge(factory)
+
+    result = repository.consume_random_event_ad_slot_draft(
+        "author", "/确认广告位", NOW
+    )
+
+    assert result.status == "item_missing"
+    assert _slot_candidate(repository).vacant is True
+    assert _slot_candidate(repository).scene_name is None
+    with repository._session() as session:
+        assert session.scalars(select(RandomEventAdSlotRecord)).all() == []
+    assert _reply(factory) is None or "广告位" not in (_reply(factory) or "")
+
+
+def test_confirm_is_refused_when_the_ad_slot_limit_is_zero(harness):
+    """后台把广告位上限设成 0，就不该再有人能占位。"""
+    service, repository, factory, group = harness
+    _open_poll(repository, factory)
+    number = _buy_cards(repository, 1)
+    _send(service, group, "author", f"/使用 {number}")
+    repository.consume_random_event_ad_slot_draft("author", "/选择 1", NOW)
+    repository.set_random_event_settings(
+        ["20:00"], "{可选身份}", 15, 5, vote_ad_slot_limit=0
+    )
+
+    result = repository.consume_random_event_ad_slot_draft(
+        "author", "/确认广告位", NOW
+    )
+
+    assert result.status == "slot_disabled"
+    assert _card_count(repository) == 1
+    assert _slot_candidate(repository).vacant is True
+
+
+def test_confirm_is_refused_when_voting_is_turned_off(harness):
+    service, repository, factory, group = harness
+    _open_poll(repository, factory)
+    number = _buy_cards(repository, 1)
+    _send(service, group, "author", f"/使用 {number}")
+    repository.consume_random_event_ad_slot_draft("author", "/选择 1", NOW)
+    repository.set_random_event_settings(
+        ["20:00"], "{可选身份}", 15, 5, vote_enabled=False
+    )
+
+    result = repository.consume_random_event_ad_slot_draft(
+        "author", "/确认广告位", NOW
+    )
+
+    assert result.status == "disabled"
+    assert _card_count(repository) == 1
+    assert _slot_candidate(repository).vacant is True
+
+
+def test_a_refusal_is_answered_in_the_direct_chat(harness):
+    """设计 §3.3：广告卡的拒绝提示写在私聊，不在群里刷屏。"""
+    service, repository, factory, group = harness
+    with factory.begin() as session:
+        scene = _add_scenes(session, ("作者作品",))[0]
+        _approve(session, scene)
+    number = _buy_cards(repository, 1)
+
+    _send(service, group, "author", f"/使用 {number}")
+
+    assert "没有正在征集" in (_reply(factory, "direct-author") or "")
+    assert "没有正在征集" not in (_reply(factory, group.chatroom_id) or "")
+
+
+def test_two_ad_slots_let_two_authors_in(harness):
+    """上限 2 时第二位作者也能占位，两张卡各扣一张。"""
+    service, repository, factory, group = harness
+    repository.set_random_event_settings(
+        ["20:00"], "{可选身份}", 15, 5, vote_ad_slot_limit=2
+    )
+    _open_poll(
+        repository, factory, others=("甲", "乙", "丙", "丁"), approve_other=True
+    )
+
+    number = _buy_cards(repository, 1, "author")
+    _send(service, group, "author", f"/使用 {number}")
+    repository.consume_random_event_ad_slot_draft("author", "/选择 1", NOW)
+    first = repository.consume_random_event_ad_slot_draft(
+        "author", "/确认广告位", NOW
+    )
+    assert first.status == "consumed"
+
+    number = _buy_cards(repository, 1, "other")
+    _send(service, group, "other", f"/使用 {number}")
+    repository.consume_random_event_ad_slot_draft("other", "/选择 1", NOW)
+    second = repository.consume_random_event_ad_slot_draft(
+        "other", "/确认广告位", NOW
+    )
+
+    assert second.status == "consumed", [
+        (c.position, c.scene_name, c.source, c.vacant)
+        for c in repository.random_event_poll_report().candidates
+    ]
+    slots = [
+        candidate
+        for candidate in repository.random_event_poll_report().candidates
+        if candidate.source == "ad_slot"
+    ]
+    assert [candidate.position for candidate in slots] == [4, 5]
+    assert all(not candidate.vacant for candidate in slots)
+    assert _card_count(repository, "author") == 0
+    assert _card_count(repository, "other") == 0
