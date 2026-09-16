@@ -143,6 +143,10 @@ from .api_models import (
     CreateRandomEventSceneRequest,
     CreateTodayRandomEventRequest,
     UpdateRandomEventSceneRequest,
+    RandomEventPollCandidateResponse,
+    RandomEventPollReportResponse,
+    RandomEventVoteCloseRequest,
+    RandomEventVoteResponse,
     RandomEventScheduleResponse,
     RandomEventDetailsResponse,
     RescheduleRandomEventRequest,
@@ -3060,6 +3064,50 @@ def create_app(
         )
 
     @app.get(
+        "/internal/game/random-events/vote",
+        response_model=RandomEventVoteResponse,
+    )
+    def random_event_vote(
+        _: Annotated[None, Depends(authorize)],
+    ) -> RandomEventVoteResponse:
+        return RandomEventVoteResponse(
+            poll=_random_event_poll_report_response(
+                repository.random_event_poll_report()
+            )
+        )
+
+    @app.post(
+        "/internal/game/random-events/vote/close",
+        response_model=RandomEventVoteResponse,
+    )
+    def close_random_event_vote(
+        request: RandomEventVoteCloseRequest,
+        _: Annotated[None, Depends(authorize)],
+    ) -> RandomEventVoteResponse:
+        repository.close_random_event_poll(
+            clock(), winner_position=request.winner_position, force=True
+        )
+        return RandomEventVoteResponse(
+            poll=_random_event_poll_report_response(
+                repository.random_event_poll_report()
+            )
+        )
+
+    @app.post(
+        "/internal/game/random-events/vote/cancel",
+        response_model=RandomEventVoteResponse,
+    )
+    def cancel_random_event_vote(
+        _: Annotated[None, Depends(authorize)],
+    ) -> RandomEventVoteResponse:
+        repository.cancel_random_event_poll(clock())
+        return RandomEventVoteResponse(
+            poll=_random_event_poll_report_response(
+                repository.random_event_poll_report()
+            )
+        )
+
+    @app.get(
         "/internal/game/random-events/today",
         response_model=list[RandomEventScheduleResponse],
     )
@@ -3826,6 +3874,38 @@ def _random_event_submission_response(submission, user) -> dict:
         "display_name": user.display_name,
         "employee_number": format_employee_number(user.employee_number),
     }
+
+
+def _random_event_poll_report_response(report) -> RandomEventPollReportResponse | None:
+    if report is None:
+        return None
+    return RandomEventPollReportResponse(
+        id=report.id,
+        status=report.status,
+        group_name=report.group_name,
+        scheduled_at=report.scheduled_at,
+        opened_at=report.opened_at,
+        closes_at=report.closes_at,
+        closed_at=report.closed_at,
+        winner_position=report.winner_position,
+        fallback_reason=report.fallback_reason,
+        total_votes=report.total_votes,
+        candidates=[
+            RandomEventPollCandidateResponse(
+                position=candidate.position,
+                source=candidate.source,
+                vacant=candidate.vacant,
+                scene_name=candidate.scene_name,
+                event_name=candidate.event_name,
+                seat_summary=candidate.seat_summary,
+                reward=candidate.reward,
+                target_rounds=candidate.target_rounds,
+                votes=candidate.votes,
+                voters=list(candidate.voters),
+            )
+            for candidate in report.candidates
+        ],
+    )
 
 
 def _random_event_schedule_response(schedule) -> RandomEventScheduleResponse:

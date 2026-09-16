@@ -878,6 +878,35 @@ class RandomEventVoteResult:
 
 
 @dataclass(frozen=True)
+class RandomEventPollReportCandidate:
+    position: int
+    source: str
+    vacant: bool
+    scene_name: str | None
+    event_name: str | None
+    seat_summary: str | None
+    reward: int | None
+    target_rounds: int | None
+    votes: int
+    voters: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class RandomEventPollReport:
+    id: UUID
+    status: str
+    group_name: str
+    scheduled_at: datetime
+    opened_at: datetime
+    closes_at: datetime
+    closed_at: datetime | None
+    winner_position: int | None
+    fallback_reason: str | None
+    total_votes: int
+    candidates: tuple[RandomEventPollReportCandidate, ...]
+
+
+@dataclass(frozen=True)
 class RandomEventPollCloseResult:
     status: str
     view: RandomEventPollView | None = None
@@ -22207,21 +22236,138 @@ class CoreRepository:
                     position,
                 )
 
+    def random_event_poll_report(self) -> RandomEventPollReport | None:
+        """后台用的投票详情：候选、票数、投票人名单与广告位来源。"""
+        with self._session() as session:
+            poll = self._open_random_event_poll_record(session)
+            if poll is None:
+                poll = session.scalar(
+                    select(RandomEventPollRecord)
+                    .order_by(RandomEventPollRecord.created_at.desc())
+                    .limit(1)
+                )
+            if poll is None:
+                return None
+            schedule = session.get(
+                RandomEventScheduleRecord, poll.target_schedule_id
+            )
+            group_name = ""
+            if schedule is not None:
+                group = session.get(GroupChatRecord, schedule.group_chat_id)
+                group_name = "" if group is None else group.name
+            rows = list(
+                session.scalars(
+                    select(RandomEventPollCandidateRecord)
+                    .where(RandomEventPollCandidateRecord.poll_id == poll.id)
+                    .order_by(RandomEventPollCandidateRecord.position)
+                )
+            )
+            pairs = session.execute(
+                select(RandomEventPollVoteRecord, UserRecord)
+                .join(
+                    UserRecord,
+                    UserRecord.id == RandomEventPollVoteRecord.user_id,
+                )
+                .where(RandomEventPollVoteRecord.poll_id == poll.id)
+                .order_by(UserRecord.employee_number)
+            ).all()
+            by_candidate: dict[UUID, list[str]] = {}
+            for vote, user in pairs:
+                by_candidate.setdefault(vote.candidate_id, []).append(
+                    user.display_name
+                )
+            winner_position = None
+            if poll.winner_candidate_id is not None:
+                winner = next(
+                    (row for row in rows if row.id == poll.winner_candidate_id),
+                    None,
+                )
+                winner_position = None if winner is None else winner.position
+            return RandomEventPollReport(
+                id=poll.id,
+                status=poll.status,
+                group_name=group_name,
+                scheduled_at=(
+                    poll.closes_at if schedule is None else schedule.scheduled_at
+                ),
+                opened_at=poll.opened_at,
+                closes_at=poll.closes_at,
+                closed_at=poll.closed_at,
+                winner_position=winner_position,
+                fallback_reason=poll.fallback_reason,
+                total_votes=len(pairs),
+                candidates=tuple(
+                    RandomEventPollReportCandidate(
+                        position=row.position,
+                        source=row.source,
+                        vacant=row.vacant,
+                        scene_name=row.scene_name,
+                        event_name=row.event_name,
+                        seat_summary=row.seat_summary,
+                        reward=row.reward,
+                        target_rounds=row.target_rounds,
+                        votes=len(by_candidate.get(row.id, ())),
+                        voters=tuple(by_candidate.get(row.id, ())),
+                    )
+                    for row in rows
+                ),
+            )
+
+    def cancel_random_event_poll(self, now: datetime) -> str:
+        """后台作废当前投票。"""
+        now = now.astimezone(BEIJING)
+        with self.transaction():
+            with self._session() as session:
+                poll = self._open_random_event_poll_record(session)
+                if poll is None:
+                    return "no_poll"
+                self._cancel_random_event_poll(
+                    session,
+                    poll,
+                    now,
+                    text="【事件投票】管理员取消了本期投票。",
+                )
+                return "cancelled"
+
     def close_random_event_poll(
-        self, now: datetime, *, winner_position: int | None = None
+        self,
+        now: datetime,
+        *,
+        winner_position: int | None = None,
+        force: bool = False,
     ) -> RandomEventPollCloseResult:
         """截止定稿：票高者按现有方式冻结进目标场次，场次保持 `pending`。
 
-        传 `winner_position` 是后台兜底（管理员手动指定），此时不受截止时刻限制。
+        后台兜底有两种用法：`force=True` 立刻截止；`winner_position` 手动指定当选者
+        （同时也不受截止时刻限制，甚至可以改判一份已经定稿、但场次还没开始的投票）。
         """
         now = now.astimezone(BEIJING)
         with self.transaction():
             with self._session() as session:
                 poll = self._open_random_event_poll_record(session)
                 if poll is None:
-                    return RandomEventPollCloseResult("no_poll")
-                if winner_position is None and poll.closes_at > now:
+                    if winner_position is None:
+                        return RandomEventPollCloseResult("no_poll")
+                    poll = self._latest_random_event_poll_record(session)
+                    if poll is None:
+                        return RandomEventPollCloseResult("no_poll")
+                    target = session.get(
+                        RandomEventScheduleRecord, poll.target_schedule_id
+                    )
+                    if target is None or target.status != "pending":
+                        return RandomEventPollCloseResult("no_poll")
+                elif (
+                    winner_position is None
+                    and not force
+                    and poll.closes_at > now
+                ):
                     return RandomEventPollCloseResult("not_due")
+                target = session.get(
+                    RandomEventScheduleRecord, poll.target_schedule_id
+                )
+                if target is None or target.status != "pending":
+                    # 场次已经开演（或已作废），再定稿也没有意义
+                    return RandomEventPollCloseResult("no_poll")
                 schedule = session.get(
                     RandomEventScheduleRecord, poll.target_schedule_id
                 )
@@ -22330,6 +22476,15 @@ class CoreRepository:
             .order_by(RandomEventPollRecord.closes_at)
         )
 
+    def _latest_random_event_poll_record(
+        self, session: Session
+    ) -> RandomEventPollRecord | None:
+        return session.scalar(
+            select(RandomEventPollRecord)
+            .order_by(RandomEventPollRecord.created_at.desc())
+            .limit(1)
+        )
+
     def _run_random_event_vote_jobs(self, session: Session, now: datetime) -> None:
         """投票的四段：开投、周期播报、到点定稿、目标丢了就顺延。
 
@@ -22434,12 +22589,17 @@ class CoreRepository:
         return poll
 
     def _cancel_random_event_poll(
-        self, session: Session, poll: RandomEventPollRecord, now: datetime
+        self,
+        session: Session,
+        poll: RandomEventPollRecord,
+        now: datetime,
+        *,
+        text: str | None = None,
     ) -> None:
         poll.status = "cancelled"
         poll.closed_at = now
         session.flush()
-        self._random_event_announce(_render_random_event_vote_cancelled())
+        self._random_event_announce(text or _render_random_event_vote_cancelled())
         return None
 
     def _random_event_tally_due(

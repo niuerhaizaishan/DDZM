@@ -2753,6 +2753,43 @@ def create_app(
     ) -> dict:
         return _relay_core(lambda: core.random_event_details(schedule_id))
 
+    @app.get("/api/game/random-events/vote")
+    def random_event_vote(_: Annotated[None, Depends(authorize)]) -> dict:
+        return _relay_core(lambda: core.random_event_vote())
+
+    @app.post("/api/game/random-events/vote/close")
+    def close_random_event_vote(
+        identity: Annotated[AdminIdentity, Depends(authorize)],
+        payload: dict | None = None,
+        idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+        if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+    ) -> JSONResponse:
+        winner_position = None if payload is None else payload.get("winner_position")
+        scope = f"random-event-vote:close:{winner_position or 'auto'}"
+        return versioned_configuration_response(
+            identity,
+            idempotency_key,
+            if_match,
+            lambda: _relay_core(
+                lambda: core.close_random_event_vote(winner_position)
+            ),
+            scope=scope,
+        )
+
+    @app.post("/api/game/random-events/vote/cancel")
+    def cancel_random_event_vote(
+        identity: Annotated[AdminIdentity, Depends(authorize)],
+        idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+        if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+    ) -> JSONResponse:
+        return versioned_configuration_response(
+            identity,
+            idempotency_key,
+            if_match,
+            lambda: _relay_core(lambda: core.cancel_random_event_vote()),
+            scope="random-event-vote:cancel",
+        )
+
     @app.post("/api/session", status_code=status.HTTP_204_NO_CONTENT)
     def create_console_session(
         response: Response, identity: Annotated[AdminIdentity, Depends(authorize)]

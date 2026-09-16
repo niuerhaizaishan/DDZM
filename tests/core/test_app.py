@@ -3367,3 +3367,90 @@ def test_trigger_random_event_rejects_active_game_through_internal_api(
     assert response.status_code == 422
     assert response.json() == {"detail": "当前有游戏进行中"}
     assert repository.list_today_random_event_schedules(NOW)[0].status == "pending"
+
+
+def test_random_event_vote_report_and_admin_actions(app_context, headers):
+    """后台看票型、强制截止、手动指定与作废。"""
+    repository = app_context.repository
+    client = app_context.client
+    group = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=event-vote-admin", NOW
+    )
+    repository.create_user("vote-1", "投票甲", NOW, 100)
+    repository.create_user("vote-2", "投票乙", NOW, 100)
+    for name in ("甲", "乙", "丙"):
+        repository.create_random_event_scene(
+            name, "报名", ["开场"], 6, 3, [("主持", 1)]
+        )
+    target = NOW + timedelta(hours=3)
+    with app_context.session_factory.begin() as session:
+        session.add(
+            RandomEventScheduleRecord(
+                group_chat_id=group.id,
+                event_date=target.date(),
+                scheduled_at=target,
+                status="pending",
+            )
+        )
+    view = repository.create_random_event_poll(NOW)
+    repository.cast_random_event_vote("vote-1", 1, NOW)
+    repository.cast_random_event_vote("vote-2", 1, NOW)
+    repository.cast_random_event_vote("vote-1", 2, NOW)
+
+    assert (
+        client.get("/internal/game/random-events/vote").status_code == 401
+    )
+    report = client.get(
+        "/internal/game/random-events/vote", headers=headers
+    ).json()["poll"]
+
+    assert report["status"] == "open"
+    assert report["group_name"] == group.name
+    assert report["total_votes"] == 2
+    assert [item["position"] for item in report["candidates"]] == [1, 2, 3, 4]
+    assert [item["votes"] for item in report["candidates"]] == [1, 1, 0, 0]
+    assert report["candidates"][0]["voters"] == ["投票乙"]
+    assert report["candidates"][1]["voters"] == ["投票甲"]
+    assert report["candidates"][3]["vacant"] is True
+    assert report["candidates"][3]["source"] == "ad_slot"
+    assert report["winner_position"] is None
+
+    overridden = client.post(
+        "/internal/game/random-events/vote/close",
+        headers=headers,
+        json={"winner_position": 3},
+    ).json()["poll"]
+
+    assert overridden["status"] == "closed"
+    assert overridden["winner_position"] == 3
+    assert overridden["fallback_reason"] == "manual"
+    assert view is not None
+
+
+def test_random_event_vote_can_be_cancelled_from_the_admin(app_context, headers):
+    repository = app_context.repository
+    client = app_context.client
+    group = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=event-vote-cancel", NOW
+    )
+    for name in ("甲", "乙", "丙"):
+        repository.create_random_event_scene(
+            name, "报名", ["开场"], 6, 3, [("主持", 1)]
+        )
+    target = NOW + timedelta(hours=3)
+    with app_context.session_factory.begin() as session:
+        session.add(
+            RandomEventScheduleRecord(
+                group_chat_id=group.id,
+                event_date=target.date(),
+                scheduled_at=target,
+                status="pending",
+            )
+        )
+    repository.create_random_event_poll(NOW)
+
+    cancelled = client.post(
+        "/internal/game/random-events/vote/cancel", headers=headers
+    ).json()["poll"]
+
+    assert cancelled["status"] == "cancelled"

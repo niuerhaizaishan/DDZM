@@ -1650,6 +1650,43 @@ class RandomEventScheduleResponse(ApiModel):
     has_details: bool = False
 
 
+class RandomEventPollCandidateResponse(ApiModel):
+    position: int
+    source: str
+    vacant: bool
+    scene_name: str | None
+    event_name: str | None
+    seat_summary: str | None
+    reward: int | None
+    target_rounds: int | None
+    votes: int
+    voters: list[str] = Field(default_factory=list)
+
+
+class RandomEventPollReportResponse(ApiModel):
+    id: UUID
+    status: str
+    group_name: str
+    scheduled_at: datetime
+    opened_at: datetime
+    closes_at: datetime
+    closed_at: datetime | None
+    winner_position: int | None
+    fallback_reason: str | None
+    total_votes: int
+    candidates: list[RandomEventPollCandidateResponse]
+
+
+class RandomEventVoteResponse(ApiModel):
+    poll: RandomEventPollReportResponse | None = None
+
+
+class RandomEventVoteCloseRequest(ApiModel):
+    """不给 `winner_position` 就是立刻截止；给了就是管理员指定（可改判）。"""
+
+    winner_position: int | None = Field(default=None, ge=1, le=10)
+
+
 class PaginatedRandomEventSchedulesResponse(ApiModel):
     items: list[RandomEventScheduleResponse]
     page: int

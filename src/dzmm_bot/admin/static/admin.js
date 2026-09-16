@@ -1,4 +1,4 @@
-let token = sessionStorage.getItem("dzmm-admin-token") || "";
+﻿let token = sessionStorage.getItem("dzmm-admin-token") || "";
 let adminSession = sessionStorage.getItem("dzmm-admin-session") || "";
 let identity = JSON.parse(sessionStorage.getItem("dzmm-admin-identity") || "null");
 let loginLease = null;
@@ -55,6 +55,7 @@ let commandPage = 1;
 let administratorAccounts = [];
 let administratorPage = 1;
 let todayRandomEvents = [];
+let randomEventVote = null;
 let todayRandomEventPage = 1;
 let randomEventHistoryPage = 1;
 let randomEventHistoryRequestId = 0;
@@ -1254,15 +1255,49 @@ async function loadRandomEventHistory(page = randomEventHistoryPage) {
   }
 }
 
+function renderRandomEventVote(poll) {
+  const target = document.querySelector("#random-event-vote");
+  if (!target) return;
+  if (!poll) {
+    target.innerHTML = `<p class="muted">当前没有投票：上一场随机事件结束后会自动开投，也可以等兜底窗口到点。</p>`;
+    return;
+  }
+  const statusLabel = {open: "投票中", closed: "已定稿", cancelled: "已作废"}[poll.status] || poll.status;
+  const rows = poll.candidates.map((candidate) => {
+    const label = candidate.vacant
+      ? "📣 事件广告卡招商中"
+      : `《${escapeHtml(candidate.scene_name || "")}》${candidate.seat_summary ? " " + escapeHtml(candidate.seat_summary) : ""}${candidate.reward === null || candidate.reward === undefined ? "" : " 奖" + candidate.reward}`;
+    const voters = candidate.voters.length ? candidate.voters.map(escapeHtml).join("、") : "—";
+    const source = candidate.source === "ad_slot" ? "广告卡" : "随机";
+    return `<tr><td>${candidate.position}</td><td>${label}</td><td>${candidate.votes}</td><td>${voters}</td><td>${source}</td></tr>`;
+  }).join("");
+  const winner = poll.winner_position ? `第 ${poll.winner_position} 号` : "尚未定稿";
+  const reason = poll.fallback_reason ? `（${escapeHtml(poll.fallback_reason)}）` : "";
+  const actions = poll.status === "open"
+    ? `<div class="command-actions"><input id="random-event-vote-winner" class="list-search" type="number" min="1" max="10" placeholder="序号" style="max-width:90px"><button class="secondary" data-vote-close="pick" type="button">指定当选</button><button class="secondary" data-vote-close="now" type="button">立刻截止</button><button class="secondary" data-vote-cancel type="button">作废本期</button></div>`
+    : `<div class="command-actions"><input id="random-event-vote-winner" class="list-search" type="number" min="1" max="10" placeholder="序号" style="max-width:90px"><button class="secondary" data-vote-close="pick" type="button">改判当选</button></div>`;
+  target.innerHTML = `
+    <p class="muted">目标场次 ${formatHeartbeat(poll.scheduled_at)} ｜ 状态 ${statusLabel} ｜ 截止 ${formatHeartbeat(poll.closes_at)} ｜ 已投 ${poll.total_votes} 票 ｜ 当选 ${winner}${reason}</p>
+    <table class="data-table"><thead><tr><th>#</th><th>候选</th><th>票数</th><th>投票人</th><th>来源</th></tr></thead><tbody>${rows}</tbody></table>
+    ${actions}`;
+}
+
+async function loadRandomEventVote() {
+  const payload = await requestGame("/api/game/random-events/vote");
+  randomEventVote = payload.poll;
+  renderRandomEventVote(randomEventVote);
+}
 async function loadRandomEvents(page = randomEventScenePage) {
-  const [settings, scenes, today, submissions, groups] = await Promise.all([
+  const [settings, scenes, today, submissions, groups, vote] = await Promise.all([
     requestGame("/api/game/random-events/settings"),
     requestGame(`/api/game/random-events/scenes?page=${page}&page_size=${pageSizeFor("random-event-scenes")}`),
     requestGame("/api/game/random-events/today"),
     requestGame(buildRandomEventSubmissionsPath(randomEventSubmissionPage, pageSizeFor("random-event-submissions"), randomEventSubmissionStatus)),
     requestGame("/api/group-chats?include_deleted=true", {cache: "no-store"}),
+    requestGame("/api/game/random-events/vote"),
   ]);
   randomEventSettings = settings;
+  randomEventVote = vote.poll;
   randomEventScenePage = scenes.page;
   todayRandomEvents = today.items;
   groupChats = groups.items;
@@ -1271,6 +1306,7 @@ async function loadRandomEvents(page = randomEventScenePage) {
   renderRandomEventScenes(scenes.items);
   renderPagination(document.querySelector("#random-event-scene-pagination"), scenes, "个场景", loadRandomEvents);
   renderTodayRandomEvents(today.items);
+  renderRandomEventVote(vote.poll);
   renderRandomEventHistoryGroups();
   randomEventSubmissionPage = submissions.page;
   renderRandomEventSubmissions(submissions);
@@ -2555,6 +2591,50 @@ document.querySelector("#add-today-random-event").addEventListener("click", asyn
     await runMutation(event.currentTarget, "加载中…", openRandomEventAddModal);
   } catch (error) {
     setResult(`加载场景失败（${error.message}）`, "error");
+  }
+});
+document.querySelector("#refresh-random-event-vote").addEventListener("click", async (event) => {
+  try {
+    await runMutation(event.currentTarget, "刷新中…", loadRandomEventVote);
+  } catch (error) {
+    setResult(`刷新投票失败（${error.message}）`, "error");
+  }
+});
+
+document.addEventListener("click", async (event) => {
+  const closeButton = event.target.closest("button[data-vote-close]");
+  const cancelButton = event.target.closest("button[data-vote-cancel]");
+  if (!closeButton && !cancelButton) return;
+  try {
+    if (cancelButton) {
+      if (!window.confirm("确认作废本期投票？")) return;
+      const payload = await requestGame("/api/game/random-events/vote/cancel", {method: "POST"});
+      randomEventVote = payload.poll;
+      renderRandomEventVote(randomEventVote);
+      setResult("已作废本期投票", "ok");
+      return;
+    }
+    const picking = closeButton.dataset.voteClose === "pick";
+    let winnerPosition = null;
+    if (picking) {
+      winnerPosition = Number(document.querySelector("#random-event-vote-winner")?.value || 0);
+      if (!winnerPosition) {
+        setResult("请先填写要指定的候选序号", "error");
+        return;
+      }
+      if (!window.confirm(`确认指定第 ${winnerPosition} 号当选？`)) return;
+    } else if (!window.confirm("确认立刻截止本期投票？")) {
+      return;
+    }
+    const payload = await requestGame("/api/game/random-events/vote/close", {
+      method: "POST",
+      body: JSON.stringify({winner_position: winnerPosition}),
+    });
+    randomEventVote = payload.poll;
+    renderRandomEventVote(randomEventVote);
+    setResult(picking ? `已指定第 ${winnerPosition} 号当选` : "已立刻截止", "ok");
+  } catch (error) {
+    setResult(`操作失败（${error.message}）`, "error");
   }
 });
 document.querySelector("#refresh-random-events").addEventListener("click", async (event) => {

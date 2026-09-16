@@ -1122,6 +1122,22 @@ class CoreClient:
     def random_event_details(self, schedule_id: str) -> dict:
         return self._get(f"/internal/game/random-events/today/{schedule_id}/details")
 
+    def random_event_vote(self) -> dict:
+        return self._get("/internal/game/random-events/vote")
+
+    def close_random_event_vote(self, winner_position: int | None = None) -> dict:
+        response = self._client.post(
+            "/internal/game/random-events/vote/close",
+            json={"winner_position": winner_position},
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def cancel_random_event_vote(self) -> dict:
+        response = self._client.post("/internal/game/random-events/vote/cancel")
+        response.raise_for_status()
+        return response.json()
+
     def _get(self, path: str, params: dict | None = None):
         response = self._client.get(path, params=params)
         response.raise_for_status()

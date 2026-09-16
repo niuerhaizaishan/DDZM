@@ -57,6 +57,9 @@ class FakeCore:
     )
     employees: list[dict] = field(default_factory=list)
     platform_nickname_refresh_requests: int = 0
+    random_event_vote_report: dict | None = None
+    random_event_vote_closes: list = field(default_factory=list)
+    random_event_vote_cancels: int = 0
     balance_ledgers: dict[str, dict] = field(default_factory=dict)
     balance_ledger_requests: list[tuple[str, int, int]] = field(default_factory=list)
     employee_group_messages: dict[str, dict] = field(default_factory=dict)
@@ -1086,6 +1089,25 @@ class FakeCore:
             event for event in self.today_random_events if event["id"] != schedule_id
         ]
         return {"accepted": len(self.today_random_events) != before}
+
+    def random_event_vote(self):
+        return {"poll": self.random_event_vote_report}
+
+    def close_random_event_vote(self, winner_position=None):
+        if self.random_event_vote_report is not None:
+            self.random_event_vote_report["status"] = "closed"
+            self.random_event_vote_report["winner_position"] = winner_position
+            self.random_event_vote_report["fallback_reason"] = (
+                None if winner_position is None else "manual"
+            )
+        self.random_event_vote_closes.append(winner_position)
+        return {"poll": self.random_event_vote_report}
+
+    def cancel_random_event_vote(self):
+        if self.random_event_vote_report is not None:
+            self.random_event_vote_report["status"] = "cancelled"
+        self.random_event_vote_cancels += 1
+        return {"poll": self.random_event_vote_report}
 
     def get_hide_and_seek_settings(self):
         return self.hide_and_seek_settings
@@ -3939,3 +3961,68 @@ def test_admin_relays_memory_guild_current_history_and_detail(
     assert history.json()["page"] == 2
     assert history.json()["page_size"] == 10
     assert detail.json()["teams"][0]["name"] == "红队"
+
+
+def test_admin_can_read_and_steer_the_random_event_vote(core, client, headers):
+    core.random_event_vote_report = {
+        "id": "poll-1",
+        "status": "open",
+        "group_name": "主群聊",
+        "scheduled_at": "2026-08-04T21:00:00+08:00",
+        "opened_at": "2026-08-04T18:00:00+08:00",
+        "closes_at": "2026-08-04T20:50:00+08:00",
+        "closed_at": None,
+        "winner_position": None,
+        "fallback_reason": None,
+        "total_votes": 2,
+        "candidates": [
+            {
+                "position": 1,
+                "source": "random",
+                "vacant": False,
+                "scene_name": "茶水间",
+                "event_name": "咖啡事故",
+                "seat_summary": "主持 × 1",
+                "reward": 6,
+                "target_rounds": 3,
+                "votes": 2,
+                "voters": ["投票甲", "投票乙"],
+            },
+            {
+                "position": 4,
+                "source": "ad_slot",
+                "vacant": True,
+                "scene_name": None,
+                "event_name": None,
+                "seat_summary": None,
+                "reward": None,
+                "target_rounds": None,
+                "votes": 0,
+                "voters": [],
+            },
+        ],
+    }
+
+    report = client.get("/api/game/random-events/vote", headers=headers).json()
+
+    assert report["poll"]["total_votes"] == 2
+    assert report["poll"]["candidates"][0]["voters"] == ["投票甲", "投票乙"]
+    assert report["poll"]["candidates"][1]["vacant"] is True
+
+    closed = client.post(
+        "/api/game/random-events/vote/close",
+        headers={**headers, "Idempotency-Key": "vote-close", "If-Match": "0"},
+        json={"winner_position": 3},
+    )
+
+    assert closed.status_code == 200
+    assert closed.json()["poll"]["winner_position"] == 3
+    assert core.random_event_vote_closes == [3]
+
+    cancelled = client.post(
+        "/api/game/random-events/vote/cancel",
+        headers={**headers, "Idempotency-Key": "vote-cancel", "If-Match": "1"},
+    )
+
+    assert cancelled.json()["poll"]["status"] == "cancelled"
+    assert core.random_event_vote_cancels == 1

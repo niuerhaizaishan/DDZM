@@ -173,6 +173,17 @@ def poll_row(session) -> RandomEventPollRecord:
     return session.scalar(select(RandomEventPollRecord))
 
 
+def outbound_texts(repository) -> list[str]:
+    from dzmm_bot.core.schema import OutboundRecord
+
+    with repository._session() as session:
+        return list(
+            session.scalars(
+                select(OutboundRecord.text).order_by(OutboundRecord.created_at)
+            )
+        )
+
+
 def schedule_row(session) -> RandomEventScheduleRecord:
     return session.scalar(
         select(RandomEventScheduleRecord).where(
@@ -530,3 +541,106 @@ def test_close_poll_is_idempotent(repository, seeded):
 
 def test_close_poll_without_a_poll_reports_no_poll(repository, seeded):
     assert repository.close_random_event_poll(NOW).status == "no_poll"
+
+
+# --------------------------------------------------------------------- 后台
+
+def test_poll_report_lists_candidates_voters_and_the_ad_slot(repository, seeded):
+    with seeded.begin() as session:
+        for name in ("甲", "乙", "丙"):
+            add_scene(session, name)
+        _open_poll(repository, session)
+
+    repository.cast_random_event_vote("p1", 1, NOW)
+    repository.cast_random_event_vote("p2", 1, NOW)
+    repository.cast_random_event_vote("p3", 2, NOW)
+
+    report = repository.random_event_poll_report()
+
+    assert report.status == "open"
+    assert report.total_votes == 3
+    assert report.winner_position is None
+    assert report.group_name == "主群聊"
+    assert [candidate.position for candidate in report.candidates] == [1, 2, 3, 4]
+    assert [candidate.votes for candidate in report.candidates] == [2, 1, 0, 0]
+    assert report.candidates[0].voters == ("小明", "小红")
+    assert report.candidates[2].source == "random"
+    assert report.candidates[3].vacant is True
+    assert report.candidates[3].source == "ad_slot"
+    assert report.candidates[0].scene_name is not None
+
+
+def test_poll_report_reports_the_winner_after_closing(repository, seeded):
+    with seeded.begin() as session:
+        for name in ("甲", "乙", "丙"):
+            add_scene(session, name)
+        _open_poll(repository, session)
+    repository.cast_random_event_vote("p1", 2, NOW)
+
+    repository.close_random_event_poll(CLOSE_AT)
+
+    report = repository.random_event_poll_report()
+    assert report.status == "closed"
+    assert report.winner_position == 2
+    assert report.closed_at == CLOSE_AT
+
+
+def test_admin_can_close_early(repository, seeded):
+    """票数不够或快到点了，管理员可以立刻截止。"""
+    with seeded.begin() as session:
+        for name in ("甲", "乙", "丙"):
+            add_scene(session, name)
+        _open_poll(repository, session)
+
+    result = repository.close_random_event_poll(NOW, force=True)
+
+    assert result.status == "closed"
+    assert result.fallback_reason == "no_votes"
+
+
+def test_admin_can_designate_a_winner_after_closing(repository, seeded):
+    """改判：已经定稿但场次还没开始时，管理员可以重新指定当选者。"""
+    with seeded.begin() as session:
+        for name in ("甲", "乙", "丙"):
+            add_scene(session, name)
+        poll = _open_poll(repository, session)
+    other_name = poll.candidates[2].scene_name
+    repository.close_random_event_poll(CLOSE_AT)
+
+    result = repository.close_random_event_poll(CLOSE_AT, winner_position=3)
+
+    assert result.status == "closed"
+    assert result.position == 3
+    assert result.fallback_reason == "manual"
+    with seeded() as session:
+        assert schedule_row(session).scene_name == other_name
+
+
+def test_admin_cannot_designate_once_the_event_started(repository, seeded):
+    with seeded.begin() as session:
+        for name in ("甲", "乙", "丙"):
+            add_scene(session, name)
+        _open_poll(repository, session)
+    with seeded.begin() as session:
+        schedule_row(session).status = "in_progress"
+
+    result = repository.close_random_event_poll(CLOSE_AT, winner_position=2)
+
+    assert result.status == "no_poll"
+
+
+def test_admin_can_cancel_the_poll(repository, seeded):
+    with seeded.begin() as session:
+        for name in ("甲", "乙", "丙"):
+            add_scene(session, name)
+        _open_poll(repository, session)
+
+    assert repository.cancel_random_event_poll(NOW) == "cancelled"
+
+    report = repository.random_event_poll_report()
+    assert report.status == "cancelled"
+    assert any("取消" in text for text in outbound_texts(repository))
+
+
+def test_admin_cancel_without_a_poll(repository, seeded):
+    assert repository.cancel_random_event_poll(NOW) == "no_poll"
