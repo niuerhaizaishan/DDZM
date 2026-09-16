@@ -1,4 +1,4 @@
-from datetime import UTC, datetime, timedelta
+﻿from datetime import UTC, datetime, timedelta
 from random import Random
 from zoneinfo import ZoneInfo
 
@@ -2236,7 +2236,7 @@ def test_balance_inventory_and_shop_require_employee_and_return_persisted_data()
     reply = _latest_reply(factory)
     assert "#1 初级赠送卡（3 摸鱼币，库存 不限，需 LV2）" in reply
     assert (
-        "#23 工位午睡券（5 摸鱼币，库存 3）\n"
+        "#24 工位午睡券（5 摸鱼币，库存 3）\n"
         "说明：允许正大光明眯十分钟。"
     ) in reply
 

@@ -10610,8 +10610,8 @@ def test_item_page_returns_newest_records_and_total(repository, session_factory,
 
     items, total = repository.list_active_items_page(3, 20)
 
-    assert total == 43
-    assert [item.name for item in items] == ["物品2", "物品1", "物品0"]
+    assert total == 44
+    assert [item.name for item in items] == ["物品3", "物品2", "物品1", "物品0"]
 
 
 def test_daily_jobs_backfill_current_day_history_and_legacy_checkin_income(

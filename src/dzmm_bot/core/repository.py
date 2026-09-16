@@ -26574,7 +26574,7 @@ class CoreRepository:
                     else:
                         bonus.multiplayer_total += 1
                     result = {"reward": 1}
-                if item.effect_type == "event_ad_slot":
+                elif item.effect_type == "event_ad_slot":
                     # 真正的消耗发生在 `/确认广告位`；这里只告诉命令层去开向导
                     return ShopUseResult("event_ad_slot_required", view)
                 else:

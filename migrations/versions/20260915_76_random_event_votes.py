@@ -53,6 +53,9 @@ def downgrade() -> None:
     op.drop_table("random_event_poll_candidates")
     op.drop_index("ix_random_event_polls_status_close", table_name="random_event_polls")
     op.drop_table("random_event_polls")
+    # 与 upgrade 一样要有守卫：迁移基线用例里可能根本没有这张表
+    if not sa.inspect(op.get_bind()).has_table("random_event_settings"):
+        return
     for column in reversed(VOTE_SETTINGS):
         op.drop_column("random_event_settings", column.name)
 
