@@ -222,3 +222,120 @@ def test_the_tip_command_is_registered():
 
     assert "/随礼" in _COMMANDS
     assert template_definition("/随礼", "tipped") is not None
+
+# ---------------------------------------------------------- 指令层（/随礼）
+
+def command_harness(harness):
+    from dzmm_bot.core.commands import GroupCommandHandler
+
+    repository, factory, group = harness
+    return GroupCommandHandler(repository), factory, group
+
+
+def send_tip(handler, factory, group, platform_id, content, *, message_id):
+    from dzmm_bot.runtime.contracts import InboundMessage
+
+    inbound(factory, message_id, platform_id, content)
+    reply = handler.handle(
+        InboundMessage(
+            message_id,
+            platform_id,
+            content,
+            NOW,
+            source_type="group",
+            chatroom_id=group.chatroom_id,
+        )
+    )
+    return "\n".join(reply) if isinstance(reply, list) else (reply or "")
+
+
+def test_the_tip_command_transfers_and_replies(harness):
+    handler, factory, group = command_harness(harness)
+
+    reply = send_tip(handler, factory, group, "p2", "/随礼 10", message_id="c-1")
+
+    assert "已给 小明 随礼 10" in reply
+    assert balance_of(factory, "p2") == 100 - 10
+    assert balance_of(factory, "p1") == 120 + 10
+
+
+def test_the_tip_command_needs_an_amount(harness):
+    handler, factory, group = command_harness(harness)
+
+    reply = send_tip(handler, factory, group, "p2", "/随礼", message_id="c-2")
+
+    assert "用法：/随礼 金额" in reply
+    assert balance_of(factory, "p2") == 100
+
+
+def test_the_tip_command_rejects_a_non_number(harness):
+    handler, factory, group = command_harness(harness)
+
+    reply = send_tip(handler, factory, group, "p2", "/随礼 一点心意", message_id="c-3")
+
+    assert "金额得是正整数" in reply
+    assert balance_of(factory, "p2") == 100
+
+
+def test_the_tip_command_rejects_an_amount_over_the_cap(harness):
+    handler, factory, group = command_harness(harness)
+
+    reply = send_tip(handler, factory, group, "p2", "/随礼 50", message_id="c-4")
+
+    assert "不超过 20" in reply
+    assert balance_of(factory, "p2") == 100
+
+
+def test_the_tip_command_refuses_a_second_tip_from_the_same_person(harness):
+    handler, factory, group = command_harness(harness)
+    send_tip(handler, factory, group, "p2", "/随礼 6", message_id="c-5")
+
+    reply = send_tip(handler, factory, group, "p2", "/随礼 6", message_id="c-6")
+
+    assert "已经给 小明 随过 6" in reply
+    assert balance_of(factory, "p2") == 100 - 6
+
+
+def test_the_tip_command_refuses_self_tipping(harness):
+    handler, factory, group = command_harness(harness)
+
+    reply = send_tip(handler, factory, group, "p1", "/随礼 5", message_id="c-7")
+
+    assert "自己给自己随礼" in reply
+
+
+def test_the_tip_command_accepts_a_named_recipient(harness):
+    handler, factory, group = command_harness(harness)
+
+    reply = send_tip(
+        handler, factory, group, "p3", "/随礼 小明 8", message_id="c-8"
+    )
+
+    assert "已给 小明 随礼 8" in reply
+    assert balance_of(factory, "p1") == 120 + 8
+
+
+def test_the_tip_command_reports_a_stranger(harness):
+    handler, factory, group = command_harness(harness)
+
+    reply = send_tip(
+        handler, factory, group, "p3", "/随礼 隔壁老王 8", message_id="c-9"
+    )
+
+    assert "没有这个名字" in reply
+    assert balance_of(factory, "p3") == 100
+
+
+def test_the_tip_command_says_so_when_nobody_is_celebrating(harness):
+    handler, factory, group = command_harness(harness)
+    late = NOW + timedelta(hours=5)
+    inbound(factory, "c-10", "p2", "/随礼 5")
+
+    reply = handler.handle(
+        __import__("dzmm_bot.runtime.contracts", fromlist=["InboundMessage"]).InboundMessage(
+            "c-10", "p2", "/随礼 5", late, source_type="group", chatroom_id=group.chatroom_id
+        )
+    )
+
+    assert "没有人在过生日" in reply
+

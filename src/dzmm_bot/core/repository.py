@@ -20914,8 +20914,16 @@ class CoreRepository:
                     )
                 )
                 if existing is not None:
+                    # 回执要带上上次随了多少，否则模板里的 {金额} 会渲染成 0
+                    previous = session.scalar(
+                        select(BirthdayTipRecord.amount).where(
+                            BirthdayTipRecord.id == existing
+                        )
+                    )
                     return BirthdayTipResult(
-                        "already_tipped", recipient_name=recipient.display_name
+                        "already_tipped",
+                        recipient_name=recipient.display_name,
+                        amount=int(previous or 0),
                     )
                 if sender.balance < amount:
                     return BirthdayTipResult("insufficient_balance")
