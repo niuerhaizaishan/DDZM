@@ -20741,6 +20741,65 @@ class CoreRepository:
         )
 
 
+
+    def birthday_settings_for(self, user_id: UUID, now: datetime) -> BirthdaySettings | None:
+        """今天过生日（且愿意公开、总开关开着）就返回设置，否则 `None`。
+
+        四项特权（打卡双倍、购彩免单、商店折扣、随机事件加成）都读这一个判断，
+        免得四处的口径漂掉；`private` 的人不公告、也不享受特权。
+        """
+        settings = self.get_birthday_settings()
+        if not settings.enabled:
+            return None
+        with self._session() as session:
+            record = session.scalar(
+                select(EmployeeBirthdayRecord).where(
+                    EmployeeBirthdayRecord.user_id == user_id
+                )
+            )
+        if record is None or record.visibility != "public":
+            return None
+        today = now.astimezone(BEIJING).date()
+        if not birthday_matches(record.month, record.day, today):
+            return None
+        return settings
+
+    def birthday_free_tickets_used(self, user_id: UUID, now: datetime) -> int | None:
+        """今年生日已经免单了几注；`None` = 当天还没祝福，免单资格还没生效。"""
+        year = now.astimezone(BEIJING).year
+        with self._session() as session:
+            used = session.scalar(
+                select(BirthdayGreetingRecord.lottery_tickets).where(
+                    BirthdayGreetingRecord.user_id == user_id,
+                    BirthdayGreetingRecord.greet_year == year,
+                )
+            )
+        return None if used is None else int(used)
+
+    def _record_birthday_free_tickets(
+        self, session: Session, user_id: UUID, now: datetime, count: int
+    ) -> None:
+        record = session.scalar(
+            select(BirthdayGreetingRecord).where(
+                BirthdayGreetingRecord.user_id == user_id,
+                BirthdayGreetingRecord.greet_year == now.astimezone(BEIJING).year,
+            )
+        )
+        if record is not None:
+            record.lottery_tickets += count
+
+    def shop_price_for(
+        self, price: int, user_id: UUID | None, now: datetime
+    ) -> int:
+        """商店实付价：生日当天按折扣算（展示价与结算价都走这里）。"""
+        if user_id is None:
+            return price
+        settings = self.birthday_settings_for(user_id, now)
+        if settings is None or settings.shop_discount_percent >= 100:
+            return price
+        return max(0, price * settings.shop_discount_percent // 100)
+
+
     def list_hide_and_seek_scenes_page(
         self, page: int, page_size: int
     ) -> tuple[list[HideAndSeekScene], int]:
@@ -21934,6 +21993,10 @@ class CoreRepository:
                         self._apply_balance_change(
                             user,
                             self.get_random_event_settings().global_completion_reward,
+                            birthday_completion_reward(
+                                self.get_random_event_settings().global_completion_reward,
+                                self.birthday_settings_for(user.id, now),
+                            ),
                             "random_event",
                             now,
                         )
@@ -25461,7 +25524,8 @@ class CoreRepository:
                     return ShopPurchaseResult("rank_required", view)
                 if not item.unlimited_stock and item.stock < 1:
                     return ShopPurchaseResult("out_of_stock", view)
-                if user.balance < item.price:
+                charged = self.shop_price_for(item.price, user.id, now)
+                if user.balance < charged:
                     return ShopPurchaseResult("insufficient_balance", view, user.balance)
                 category = (
                     purchase_category(item_by_key(item.system_key))
@@ -25507,7 +25571,9 @@ class CoreRepository:
                         created_at=now,
                     )
                     session.add(inventory)
-                self._apply_balance_change(user, -item.price, "shop_purchase", now)
+                self._apply_balance_change(
+                    user, -charged, "shop_purchase", now
+                )
                 if not item.unlimited_stock:
                     item.stock -= 1
                 inventory.quantity += 1
@@ -25519,7 +25585,7 @@ class CoreRepository:
                         user_id=user.id,
                         item_id=item.id,
                         group_chat_id=group_chat_id,
-                        price=item.price,
+                        price=charged,
                         created_at=now,
                     )
                 )
@@ -29165,6 +29231,16 @@ class CoreRepository:
                         return CompanyLotteryPurchaseResult(status="duplicate")
 
                 cost = rules.ticket_price * len(fresh)
+                birthday = self.birthday_settings_for(user.id, now)
+                used = None if birthday is None else self.birthday_free_tickets_used(
+                    user.id, now
+                )
+                if birthday is not None and used is not None and birthday.lottery_free_tickets > 0:
+                    remaining = birthday.lottery_free_tickets - used
+                    free = min(max(remaining, 0), len(fresh))
+                    if free:
+                        self._record_birthday_free_tickets(session, user.id, now, free)
+                        cost = rules.ticket_price * (len(fresh) - free)
                 if user.balance < cost:
                     return CompanyLotteryPurchaseResult(
                         status="insufficient_balance", needed=cost - user.balance
@@ -29657,6 +29733,16 @@ def _validate_random_event_blocked_message(message: str) -> str:
         raise ValueError("随机事件拦截提示不能为空且不能超过 2000 个字符")
     return message.strip()
 
+
+
+
+
+def birthday_completion_reward(base: int, settings: BirthdaySettings | None) -> int:
+    """随机事件完成奖励：寿星当天按加成放大（四舍五入到整数）。"""
+    if settings is None or settings.event_reward_bonus_percent <= 0:
+        return base
+    bonus = base * settings.event_reward_bonus_percent
+    return base + (bonus + 50) // 100
 
 
 def _birthday_moment(day: date, value: str) -> datetime:

@@ -1570,6 +1570,9 @@ class GroupCommandHandler:
             return self._reply("/打卡", "not_joined", received_at)
         employee = profile.user
         reward = profile.rank.checkin_reward
+        birthday = self._repository.birthday_settings_for(employee.id, received_at)
+        if birthday is not None and birthday.checkin_multiplier > 1:
+            reward = reward * birthday.checkin_multiplier
         if not self._repository.check_in(employee, received_at, reward):
             return self._reply(
                 "/打卡", "already_checked_in", received_at, {"{昵称}": employee.display_name}
