@@ -955,6 +955,17 @@ class MonthBirthdayList:
 
 
 @dataclass(frozen=True)
+class BirthdayMemberRow:
+    display_name: str
+    employee_number: int
+    month: int | None
+    day: int | None
+    visibility: str | None
+    is_today: bool
+
+
+
+@dataclass(frozen=True)
 class BirthdayTipResult:
     status: str
     recipient_name: str | None = None
@@ -2578,6 +2589,7 @@ class CoreRepository:
         enabled_game_types: Sequence[str] | None = None,
         adult_shop_enabled: bool = False,
         performances_enabled: bool = False,
+        birthdays_enabled: bool = True,
     ) -> GroupChatConfig:
         normalized_name = self._validate_group_chat_name(name)
         with self._session() as session:
@@ -2605,6 +2617,7 @@ class CoreRepository:
                 announcements_enabled=announcements_enabled,
                 adult_shop_enabled=adult_shop_enabled,
                 performances_enabled=performances_enabled,
+                birthdays_enabled=birthdays_enabled,
                 created_at=now,
                 updated_at=now,
             )
@@ -2634,6 +2647,7 @@ class CoreRepository:
         announcements_enabled: bool | None = None,
         adult_shop_enabled: bool | None = None,
         performances_enabled: bool | None = None,
+        birthdays_enabled: bool | None = None,
         now: datetime,
     ) -> GroupChatConfig:
         with self._session() as session:
@@ -2703,6 +2717,8 @@ class CoreRepository:
                 record.adult_shop_enabled = adult_shop_enabled
             if performances_enabled is not None:
                 record.performances_enabled = performances_enabled
+            if birthdays_enabled is not None:
+                record.birthdays_enabled = birthdays_enabled
             record.updated_at = now
             runtime = session.get(GroupChatRuntimeStateRecord, group_id)
             if runtime is not None:
@@ -2998,6 +3014,7 @@ class CoreRepository:
                 "announcements_enabled": config.announcements_enabled,
                 "adult_shop_enabled": config.adult_shop_enabled,
                 "performances_enabled": config.performances_enabled,
+                "birthdays_enabled": config.birthdays_enabled,
                 "deleted": config.deleted_at is not None,
             }
 
@@ -20942,6 +20959,89 @@ class CoreRepository:
                 return BirthdayTipResult(
                     "tipped", recipient_name=recipient.display_name, amount=amount
                 )
+
+
+
+    def list_birthday_members(self, now: datetime) -> list[BirthdayMemberRow]:
+        """后台名单：全员都列出来，没登记生日的 `month/day` 为 `None`。"""
+        today = now.astimezone(BEIJING).date()
+        with self._session() as session:
+            users = list(
+                session.scalars(
+                    select(UserRecord).order_by(UserRecord.employee_number)
+                )
+            )
+            records = {
+                record.user_id: record
+                for record in session.scalars(select(EmployeeBirthdayRecord))
+            }
+        rows = []
+        for user in users:
+            record = records.get(user.id)
+            rows.append(
+                BirthdayMemberRow(
+                    display_name=user.display_name,
+                    employee_number=user.employee_number,
+                    month=None if record is None else record.month,
+                    day=None if record is None else record.day,
+                    visibility=None if record is None else record.visibility,
+                    is_today=(
+                        record is not None
+                        and record.visibility == "public"
+                        and birthday_matches(record.month, record.day, today)
+                    ),
+                )
+            )
+        return rows
+
+    def greet_birthday_manually(
+        self, platform_id: str, now: datetime, *, dry_run: bool = True
+    ) -> str | None:
+        """后台补发/试跑：`dry_run=True` 只渲染文案，不发钱、不公告、不落记录。"""
+        now = now.astimezone(BEIJING)
+        settings = self.get_birthday_settings()
+        with self._session() as session:
+            user = session.scalar(
+                select(UserRecord).where(UserRecord.platform_id == platform_id)
+            )
+            if user is None:
+                return None
+            already = session.scalar(
+                select(BirthdayGreetingRecord.id).where(
+                    BirthdayGreetingRecord.user_id == user.id,
+                    BirthdayGreetingRecord.greet_year == now.year,
+                )
+            )
+            tenure = birthday_format_tenure(user.joined_at, now.date())
+            text = _render_birthday_greeting(
+                settings, [(user.display_name, tenure)], now
+            )
+            if dry_run or already is not None:
+                return text
+        with self.transaction():
+            with self._session() as session:
+                employee = session.get(UserRecord, user.id)
+                if employee is None:
+                    return None
+                self._apply_balance_change(
+                    employee, settings.gift_amount, "birthday_gift", now
+                )
+                session.add(
+                    BirthdayGreetingRecord(
+                        user_id=employee.id,
+                        greet_year=now.year,
+                        greeted_at=now,
+                        gift_amount=settings.gift_amount,
+                        lottery_tickets=0,
+                        tips_count=0,
+                        tips_total=0,
+                        tips_closed_at=None,
+                        status="greeted",
+                    )
+                )
+                session.flush()
+        self._birthday_announce(text)
+        return text
 
 
     def list_hide_and_seek_scenes_page(

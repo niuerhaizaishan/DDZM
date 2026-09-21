@@ -90,6 +90,7 @@ class GroupChatResponse(ApiModel):
     announcements_enabled: bool
     adult_shop_enabled: bool
     performances_enabled: bool
+    birthdays_enabled: bool
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None
@@ -108,6 +109,7 @@ class CreateGroupChatRequest(ApiModel):
     announcements_enabled: bool = True
     adult_shop_enabled: bool = False
     performances_enabled: bool = False
+    birthdays_enabled: bool = True
     now: AwareDatetime
 
 
@@ -121,6 +123,7 @@ class UpdateGroupChatRequest(ApiModel):
     announcements_enabled: bool | None = None
     adult_shop_enabled: bool | None = None
     performances_enabled: bool | None = None
+    birthdays_enabled: bool | None = None
     now: AwareDatetime
 
 
@@ -1498,6 +1501,28 @@ class BirthdaySettingsResponse(ApiModel):
 
 class SetBirthdaySettingsRequest(BirthdaySettingsResponse):
     pass
+
+
+class BirthdayMemberResponse(ApiModel):
+    display_name: str
+    employee_number: int
+    month: int | None
+    day: int | None
+    visibility: str | None
+    is_today: bool
+
+
+class BirthdayGreetRequest(ApiModel):
+    platform_id: str = Field(min_length=1, max_length=255)
+    dry_run: bool = True
+    now: AwareDatetime
+
+
+class BirthdayGreetResponse(ApiModel):
+    text: str
+    dry_run: bool
+    delivered: bool
+
 
 
 class UndercoverRoleRuleModel(ApiModel):

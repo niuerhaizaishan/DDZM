@@ -1,6 +1,7 @@
 from datetime import date, datetime
 from secrets import compare_digest
 from typing import Annotated, Callable, Literal
+from zoneinfo import ZoneInfo
 from uuid import UUID
 
 import httpx
@@ -149,6 +150,9 @@ from .api_models import (
     HideAndSeekSettingsResponse,
     SetHideAndSeekSettingsRequest,
     BirthdaySettingsResponse,
+    BirthdayGreetRequest,
+    BirthdayGreetResponse,
+    BirthdayMemberResponse,
     SetBirthdaySettingsRequest,
     MemoryAssessmentSettingsResponse,
     SetMemoryAssessmentSettingsRequest,
@@ -337,6 +341,7 @@ def create_app(
                 enabled_game_types=request.enabled_game_types,
                 adult_shop_enabled=request.adult_shop_enabled,
                 performances_enabled=request.performances_enabled,
+                birthdays_enabled=request.birthdays_enabled,
             )
         except (ValueError, GroupChatConflict) as error:
             raise HTTPException(status.HTTP_409_CONFLICT, str(error))
@@ -423,6 +428,7 @@ def create_app(
                 announcements_enabled=request.announcements_enabled,
                 adult_shop_enabled=request.adult_shop_enabled,
                 performances_enabled=request.performances_enabled,
+                birthdays_enabled=request.birthdays_enabled,
                 now=request.now,
             )
         except LookupError as error:
@@ -2614,6 +2620,45 @@ def create_app(
         return _birthday_settings_response(settings)
 
     @app.get(
+        "/internal/game/birthday/members",
+        response_model=list[BirthdayMemberResponse],
+    )
+    def birthday_members(
+        _: Annotated[None, Depends(authorize)],
+        now: datetime | None = Query(default=None),
+    ) -> list[BirthdayMemberResponse]:
+        now = datetime.now(ZoneInfo("Asia/Shanghai")) if now is None else now
+        return [
+            BirthdayMemberResponse(
+                display_name=row.display_name,
+                employee_number=row.employee_number,
+                month=row.month,
+                day=row.day,
+                visibility=row.visibility,
+                is_today=row.is_today,
+            )
+            for row in repository.list_birthday_members(now)
+        ]
+
+    @app.post(
+        "/internal/game/birthday/greet",
+        response_model=BirthdayGreetResponse,
+    )
+    def greet_birthday(
+        request: BirthdayGreetRequest,
+        _: Annotated[None, Depends(authorize)],
+    ) -> BirthdayGreetResponse:
+        text = repository.greet_birthday_manually(
+            request.platform_id, request.now, dry_run=request.dry_run
+        )
+        if text is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "员工不存在")
+        return BirthdayGreetResponse(
+            text=text, dry_run=request.dry_run, delivered=not request.dry_run
+        )
+
+
+    @app.get(
         "/internal/game/hide-and-seek/scenes",
         response_model=PaginatedHideAndSeekScenesResponse,
     )
@@ -3353,6 +3398,7 @@ def _group_chat_response(group, runtime) -> GroupChatResponse:
         announcements_enabled=group.announcements_enabled,
         adult_shop_enabled=group.adult_shop_enabled,
         performances_enabled=group.performances_enabled,
+        birthdays_enabled=group.birthdays_enabled,
         created_at=group.created_at,
         updated_at=group.updated_at,
         deleted_at=group.deleted_at,

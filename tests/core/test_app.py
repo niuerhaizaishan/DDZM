@@ -3413,3 +3413,89 @@ def test_birthday_settings_reject_a_malformed_time(client, headers):
     )
 
     assert rejected.status_code == 422
+
+def test_birthday_members_and_manual_greet_over_core_api(
+    client, headers, app_context
+):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from sqlalchemy import select
+
+    from dzmm_bot.core.schema import BirthdayGreetingRecord, UserRecord
+
+    repository = app_context.repository
+    now = datetime(2026, 9, 17, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    repository.create_user("birthday-1", "小明", now, 0)
+    repository.create_user("birthday-2", "小红", now, 0)
+    repository.set_employee_birthday("birthday-1", "9-17", now)
+    settings = repository.get_birthday_settings()
+    from dataclasses import replace
+
+    repository.set_birthday_settings(**vars(replace(settings, enabled=True)))
+
+    members = client.get(
+        "/internal/game/birthday/members",
+        headers=headers,
+        params={"now": now.isoformat()},
+    )
+    dry = client.post(
+        "/internal/game/birthday/greet",
+        headers=headers,
+        json={"platform_id": "birthday-1", "dry_run": True, "now": now.isoformat()},
+    )
+    real = client.post(
+        "/internal/game/birthday/greet",
+        headers=headers,
+        json={"platform_id": "birthday-1", "dry_run": False, "now": now.isoformat()},
+    )
+    missing = client.post(
+        "/internal/game/birthday/greet",
+        headers=headers,
+        json={"platform_id": "nobody", "now": now.isoformat()},
+    )
+
+    assert members.status_code == 200
+    rows = {row["display_name"]: row for row in members.json()}
+    assert rows["小明"]["month"] == 9 and rows["小明"]["is_today"] is True
+    assert rows["小红"]["month"] is None
+    assert dry.status_code == 200
+    assert "【生日祝福】" in dry.json()["text"]
+    assert dry.json()["delivered"] is False
+    assert real.status_code == 200
+    assert real.json()["delivered"] is True
+    assert missing.status_code == 404
+    with app_context.session_factory() as session:
+        user_id = session.scalar(
+            select(UserRecord.id).where(UserRecord.platform_id == "birthday-1")
+        )
+        greetings = list(session.scalars(select(BirthdayGreetingRecord)))
+        balance = session.scalar(
+            select(UserRecord.balance).where(UserRecord.id == user_id)
+        )
+    assert balance == 20  # dry-run 没发钱，真发那次发了 20
+    assert len(greetings) == 1
+
+
+def test_the_group_birthday_switch_round_trips_over_the_api(
+    client, headers, app_context
+):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    repository = app_context.repository
+    now = datetime(2026, 9, 17, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    target = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=birthday-switch", now
+    )
+    assert target.birthdays_enabled is True
+
+    updated = repository.update_group_chat(target.id, birthdays_enabled=False, now=now)
+    groups = client.get("/internal/group-chats", headers=headers)
+
+    assert updated.birthdays_enabled is False
+    assert [
+        group["birthdays_enabled"]
+        for group in groups.json()
+        if group["id"] == str(target.id)
+    ] == [False]
