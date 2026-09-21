@@ -227,3 +227,62 @@
 - `same_day_backfill=False` 的语义落地为"只在到点后 30 分钟内发"（常量 `_BIRTHDAY_BACKFILL_WINDOW_MINUTES`）。
 - 购彩免单**在当天祝福发出后才生效**（否则 09:00 前能无限刷免单）。
 - `/商店` 的**展示价**仍是原价，折扣只体现在实扣与流水上（展示价要跟着改需要给商店列表渲染传当前用户，留待 T6 一起做）。
+
+---
+
+## 剩余工作（可直接接手）
+
+> 只有一件：**T6 的管理端页面**（后端接口全部就绪）。T14 入职周年按 owner 要求不做。
+
+### 接线四步
+
+1. `src/dzmm_bot/admin/core_client.py`：仿 `get_hide_and_seek_settings` / `set_hide_and_seek_settings`（约 913–921 行）加四个方法：
+   - `get_birthday_settings() -> dict` → `self._get("/internal/game/birthday/settings")`
+   - `set_birthday_settings(settings: dict) -> dict` → `self._client.patch("/internal/game/birthday/settings", json=settings)`
+   - `list_birthday_members() -> list[dict]` → `self._get("/internal/game/birthday/members")`
+   - `greet_birthday(payload: dict) -> dict` → `self._client.post("/internal/game/birthday/greet", json=payload)`
+   抽象基类（约 257 行附近）也要补同名签名。
+2. `src/dzmm_bot/admin/app.py`：仿躲猫猫那 4 个代理（约 1956 行起，PATCH 要带 `_relay_core` + `repository.config_version()` + `Idempotency-Key` / `If-Match` 那套）：
+   - `GET /api/game/birthday/settings`、`PATCH /api/game/birthday/settings`
+   - `GET /api/game/birthday/members`
+   - `POST /api/game/birthday/greet`
+   - `PATCH /api/game/birthday/groups/{group_id}` → 转发核心的 `PATCH /internal/group-chats/{id}`，body 只带 `birthdays_enabled` 与 `now`（这样不必改现有的群配置页）
+3. `src/dzmm_bot/admin/templates/index.html`：
+   - 导航：仿第 66 行 `<button id="nav-hide-and-seek" class="nav-item" data-view="hide-and-seek" type="button">躲猫猫</button>` 加一个 `data-view="birthday"`；
+   - 面板：仿第 248 行 `<section id="hide-and-seek-view" class="dashboard-view panel" hidden>` 加 `<section id="birthday-view" ...>`，内容＝设置表单（总开关、两个时刻、礼金、免单注数、折扣、打卡倍率、加成、随礼上限、预告/补发/随礼/周年四个开关）+ 三个群的开关 + 名单表格（姓名/工号/生日/可见性/今天）+ 每行「试跑」「补发」按钮 + 一个显示 dry-run 文案的区块。
+4. `src/dzmm_bot/admin/static/admin.js`：
+   - `pageContext` 加 `birthday` 一项（约 99 行起）；
+   - `loadGameView`（2206 行起）里加 `if (view === "birthday") return loadBirthday();`
+   - 新增 `loadBirthday()` / `saveBirthdaySettings()` / 试跑与补发的点击处理（仿 `loadHideAndSeek()` 与 3815 行附近的保存写法）。
+
+### 上线前怎么先跑起来（不等 UI）
+
+```bash
+PATCH /internal/game/birthday/settings   # body 为 18 个字段的整份覆盖，enabled=true 开总开关
+PATCH /internal/group-chats/{id}         # {"birthdays_enabled": false, "now": "..."} 关掉某个群
+GET   /internal/game/birthday/members    # 名单（未登记的 month/day 为 null）
+POST  /internal/game/birthday/greet      # {"platform_id": "...", "dry_run": true, "now": "..."} 试跑文案
+```
+
+### 跑测试（每次都要这么设环境）
+
+```powershell
+$rt="D:\Deepseek\.runtime"; New-Item -ItemType Directory -Force -Path $rt | Out-Null
+$env:PYTHONPATH="D:\Deepseek\.pyfix;D:\Deepseek\DDZM\.pylibs;D:\Deepseek\DDZM\src"
+$env:TMP=$rt; $env:TEMP=$rt; $env:PYTHONUTF8="1"; $env:PYTHONIOENCODING="utf-8"
+python -m pytest -q -p no:cacheprovider tests/core/test_birthday.py tests/core/test_birthday_commands.py `
+  tests/core/test_birthday_jobs.py tests/core/test_birthday_perks.py tests/core/test_birthday_tips.py `
+  tests/deploy/test_birthday_migration.py tests/core/test_app.py -k "birthday"
+```
+（`PYTHONUTF8=1` 必需；长跑要 `timeoutMs >= 300000`。）
+
+### 这个仓库的踩坑清单（实现时踩过，接手别重犯）
+
+1. **别用"插到 `class Xxx:` 之前"当锚点**：如果那个类上面有 `@dataclass` 装饰器，插入点会落在装饰器与类之间，导致你的类被装饰两次（`TypeError: Cannot overwrite attribute __setattr__`）、原类丢掉装饰器。改用"插到上一个类的最后一个字段之后"或"插到下一个 `def` 之前"。
+2. **PowerShell 里别写 `python -c "..."` 带中文/引号**：会被拆坏。把脚本写到 `D:\Deepseek\.runtime\xxx.py` 再 `python xxx.py`（本仓库所有脚手架都这么做的）。
+3. **改了配置默认值，记得同步 Pydantic**：`tip_window_minutes` 从 60 改 0 时，`api_models.BirthdaySettingsResponse` 的 `ge=1` 没改 → 设置接口 500。
+4. **`sessionmaker()(bind)` 当上下文管理器不会提交**，要用 `sessionmaker.begin()`；测试里改数据忘了提交会得到"改了没生效"的假象。
+5. **改了指令清单要同步黄金断言**：`tests/core/test_app.py::test_game_management_lists_commands_employees_and_shop_items` 里那个大集合，每加一条指令都要补。
+6. **`_RANDOM_EVENT_INDEPENDENT_COMMANDS` 那条 line 没有尾逗号**：往里追加会隐式拼成一个字符串（`/当前游戏/随礼`），追加时记得补逗号。
+7. **新指令四处白名单**：`commands._COMMANDS`、`repository._COMMAND_DEFINITIONS`、`reply_templates.TEMPLATE_DEFINITIONS`、`repository._RANDOM_EVENT_CONFIGURABLE_COMMANDS`，以及 `admin/static/admin.js` 的 `randomEventCommandOptions`（漏了就"活动期间用不了"或"管理员存一次规则就被清掉"）。
+
