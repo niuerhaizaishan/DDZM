@@ -3499,3 +3499,100 @@ def test_the_group_birthday_switch_round_trips_over_the_api(
         for group in groups.json()
         if group["id"] == str(target.id)
     ] == [False]
+
+def test_birthday_flow_end_to_end(client, headers, app_context):
+    """真实入口串一遍：登记 → 预告 → 祝福（礼金+特权）→ 随礼 → 零点结算。"""
+    from dataclasses import replace
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    from sqlalchemy import select
+
+    from dzmm_bot.core.schema import (
+        BirthdayGreetingRecord,
+        OutboundRecord,
+        UserRecord,
+    )
+
+    repository = app_context.repository
+    repository.list_ranks()
+    beijing = ZoneInfo("Asia/Shanghai")
+    joined = datetime(2024, 2, 10, 12, 0, tzinfo=beijing)
+    morning = datetime(2026, 9, 17, 8, 0, tzinfo=beijing)
+    group = repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=e2e-birthday", morning
+    )
+    repository.create_user("e2e-a", "小明", joined, 100)
+    repository.create_user("e2e-b", "小红", joined, 100)
+    repository.set_birthday_settings(
+        **vars(replace(repository.get_birthday_settings(), enabled=True))
+    )
+
+    def inbound(message_id, platform_id, content, when):
+        return client.post(
+            "/internal/inbound",
+            headers=headers,
+            json={
+                "platform_message_id": message_id,
+                "sender_platform_id": platform_id,
+                "content": content,
+                "received_at": when.isoformat(),
+                "source_type": "group",
+                "chatroom_id": group.chatroom_id,
+            },
+        )
+
+    def tick(when):
+        return client.post(
+            "/internal/daily-jobs/run",
+            headers=headers,
+            json={"now": when.isoformat()},
+        )
+
+    def outbound_texts():
+        with app_context.session_factory() as session:
+            return [
+                record.text
+                for record in session.scalars(
+                    select(OutboundRecord).order_by(OutboundRecord.created_at)
+                )
+            ]
+
+    # 1) 登记生日（走真实入站入口）
+    assert inbound("e2e-register", "e2e-a", "/设置生日 9-17", morning).status_code == 200
+    # 2) 前一晚 20:00 的预告
+    assert tick(datetime(2026, 9, 16, 20, 0, tzinfo=beijing)).status_code == 200
+    # 3) 生日当天 09:00 的祝福
+    assert tick(datetime(2026, 9, 17, 9, 0, tzinfo=beijing)).status_code == 200
+    # 4) 同事随礼（回复寿星的消息即可）
+    assert inbound("e2e-tip", "e2e-b", "/随礼 10", datetime(2026, 9, 17, 9, 30, tzinfo=beijing)).status_code == 200
+    # 5) 寿星当天打卡（双倍）
+    assert inbound("e2e-checkin", "e2e-a", "/打卡", datetime(2026, 9, 17, 10, 0, tzinfo=beijing)).status_code == 200
+    # 6) 过了当天 24:00 结算随礼
+    assert tick(datetime(2026, 9, 18, 0, 0, 5, tzinfo=beijing)).status_code == 200
+    # 7) 再跑一个 tick，确认不重复
+    assert tick(datetime(2026, 9, 18, 0, 0, 6, tzinfo=beijing)).status_code == 200
+
+    texts = outbound_texts()
+    joined_text = "\n".join(texts)
+    assert "【生日预告】" in joined_text and "明天是 小明 的生日" in joined_text
+    assert "【生日祝福】" in joined_text and "生日礼金 20 摸鱼币" in joined_text
+    assert "/随礼 金额" in joined_text
+    assert "已给 小明 随礼 10" in joined_text
+    assert "【生日祝福·随礼】" in joined_text and "1 位同事" in joined_text
+    assert joined_text.count("【生日祝福·随礼】") == 1
+
+    with app_context.session_factory() as session:
+        balances = {
+            user.platform_id: user.balance
+            for user in session.scalars(select(UserRecord))
+        }
+        greeting = session.scalar(select(BirthdayGreetingRecord))
+    assert greeting is not None
+    assert greeting.tips_count == 1 and greeting.tips_total == 10
+    assert greeting.status == "settled"
+    assert greeting.gift_amount == 20
+    # 寿星：礼金 20 + 随礼 10 + 打卡双倍 10 = 140；同事：随礼 -10
+    assert balances["e2e-a"] == 100 + 20 + 10 + 10
+    assert balances["e2e-b"] == 100 - 10
+
