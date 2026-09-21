@@ -52,6 +52,14 @@ from .ai_knowledge import (
 )
 
 from .ai_mentions import normalize_ai_mention
+from .birthday import (
+    matches as birthday_matches,
+    next_occurrence as birthday_next_occurrence,
+    parse_birthday,
+    strip_visibility,
+)
+from .birthday import format_tenure as birthday_format_tenure
+
 from .company_lottery import (
     DEFAULT_BLUE_POOL,
     DEFAULT_MAX_TICKETS_PER_DAY,
@@ -580,6 +588,7 @@ _DEFAULT_RANDOM_EVENT_TIPPING_DURATION_SECONDS = 120
 _RANDOM_EVENT_CONFIGURABLE_COMMANDS = frozenset(
     {
         "/入职", "/我的物品", "/购买", "/使用", "/邀请参与", "/取消使用", "/同意使用", "/拒绝使用", "/打卡", "/余额", "/我", "/编辑档案", "/编辑档案形象", "/我的档案", "/商店", "/帮助", "/当前游戏",
+        "/设置生日", "/我的生日", "/本月生日",
         "/加入", "/退出", "/开始", "/跳过", "/摸鱼躲猫猫", "/记忆考核", "/继续", "/收手", "/投降",
         "/部门", "/部门人数", "/我的部门人数", "/加入部门", "/切换部门", "/部门申请列表",
         "/同意部门", "/全部同意部门", "/拒绝部门", "/全部拒绝部门",
@@ -906,6 +915,37 @@ class BirthdaySettings:
     greet_template: str
     preview_template: str
     tips_summary_template: str
+
+
+@dataclass(frozen=True)
+class EmployeeBirthdayView:
+    month: int
+    day: int
+    year: int | None
+    visibility: str
+    next_occurrence: date
+    tenure: str
+    changed_this_year: bool
+
+
+@dataclass(frozen=True)
+class BirthdaySaveResult:
+    status: str
+    view: EmployeeBirthdayView | None = None
+
+
+@dataclass(frozen=True)
+class MonthBirthdayEntry:
+    display_name: str
+    month: int
+    day: int
+    is_today: bool
+
+
+@dataclass(frozen=True)
+class MonthBirthdayList:
+    month: int
+    entries: tuple[MonthBirthdayEntry, ...]
 
 
 @dataclass(frozen=True)
@@ -2057,6 +2097,13 @@ _COMMAND_DEFINITIONS = (
     ("/打卡", "/打卡", "每日领取配置的打卡奖励"),
     ("/余额", "/余额", "查看当前摸鱼币余额"),
     ("/修改名称", "/修改名称 新名称", "修改自己的员工名称"),
+    (
+        "/设置生日",
+        "/设置生日 5-20（也可写 5月20日 / 1995-5-20；末尾可加「不公开」）",
+        "登记或修改自己的生日",
+    ),
+    ("/我的生日", "/我的生日", "查看自己的生日登记"),
+    ("/本月生日", "/本月生日", "查看本月过生日的同事"),
     ("/编辑档案", "/编辑档案 档案内容", "更新自己的个人档案"),
     ("/编辑档案形象", "/编辑档案形象（回复一张图片）", "更新自己的档案形象"),
     ("/我的档案", "/我的档案", "查看自己的个人档案"),
@@ -20545,6 +20592,149 @@ class CoreRepository:
             record.tips_summary_template = tips_summary_template
             session.flush()
             return _birthday_settings(record)
+
+
+    def _employee_birthday_view(
+        self,
+        user: UserRecord,
+        record: EmployeeBirthdayRecord,
+        now: datetime,
+    ) -> EmployeeBirthdayView:
+        today = now.astimezone(BEIJING).date()
+        return EmployeeBirthdayView(
+            month=record.month,
+            day=record.day,
+            year=record.year,
+            visibility=record.visibility,
+            next_occurrence=birthday_next_occurrence(record.month, record.day, today),
+            tenure=birthday_format_tenure(user.joined_at, today),
+            changed_this_year=(
+                record.edit_count_year == today.year and record.edit_count > 0
+            ),
+        )
+
+    def get_employee_birthday(
+        self, platform_id: str, now: datetime
+    ) -> EmployeeBirthdayView | None:
+        """没登记返回 `None`；调用方据此给「还没登记」的提示。"""
+        now = now.astimezone(BEIJING)
+        with self._session() as session:
+            user = session.scalar(
+                select(UserRecord).where(UserRecord.platform_id == platform_id)
+            )
+            if user is None:
+                return None
+            record = session.scalar(
+                select(EmployeeBirthdayRecord).where(
+                    EmployeeBirthdayRecord.user_id == user.id
+                )
+            )
+            if record is None:
+                return None
+            return self._employee_birthday_view(user, record, now)
+
+    def set_employee_birthday(
+        self,
+        platform_id: str,
+        text: str,
+        now: datetime,
+        *,
+        visibility: str | None = None,
+    ) -> BirthdaySaveResult:
+        """登记或修改生日；「一年只能改几次」由设置里的额度控制，首次登记不算改。"""
+        now = now.astimezone(BEIJING)
+        settings = self.get_birthday_settings()
+        raw = text.strip()
+        parsed = parse_birthday(strip_visibility(raw))
+        with self.transaction():
+            with self._session() as session:
+                user = session.scalar(
+                    select(UserRecord).where(UserRecord.platform_id == platform_id)
+                )
+                if user is None:
+                    return BirthdaySaveResult("not_joined")
+                if parsed is None:
+                    return BirthdaySaveResult("usage" if not raw else "invalid_date")
+                record = session.scalar(
+                    select(EmployeeBirthdayRecord)
+                    .where(EmployeeBirthdayRecord.user_id == user.id)
+                    .with_for_update()
+                )
+                if record is None:
+                    record = EmployeeBirthdayRecord(
+                        user_id=user.id,
+                        month=parsed.month,
+                        day=parsed.day,
+                        year=parsed.year,
+                        visibility=visibility if visibility is not None else "public",
+                        edit_count=0,
+                        edit_count_year=None,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                    session.add(record)
+                else:
+                    used = (
+                        record.edit_count
+                        if record.edit_count_year == now.year
+                        else 0
+                    )
+                    if used >= settings.edit_limit_per_year:
+                        return BirthdaySaveResult(
+                            "limit", self._employee_birthday_view(user, record, now)
+                        )
+                    record.month = parsed.month
+                    record.day = parsed.day
+                    record.year = parsed.year
+                    record.edit_count = used + 1
+                    record.edit_count_year = now.year
+                    record.last_edited_at = now
+                    record.updated_at = now
+                    if visibility is not None:
+                        record.visibility = visibility
+                if record.visibility not in ("public", "private"):
+                    record.visibility = "public"
+                session.flush()
+                return BirthdaySaveResult(
+                    "saved", self._employee_birthday_view(user, record, now)
+                )
+
+    def list_month_birthdays(
+        self, now: datetime, month: int | None = None
+    ) -> MonthBirthdayList:
+        """本月寿星名单；`private` 的人不出现（他就是不想被提）。"""
+        today = now.astimezone(BEIJING).date()
+        target = today.month if month is None else month
+        with self._session() as session:
+            rows = session.execute(
+                select(
+                    UserRecord.display_name,
+                    EmployeeBirthdayRecord.month,
+                    EmployeeBirthdayRecord.day,
+                )
+                .join(
+                    EmployeeBirthdayRecord,
+                    EmployeeBirthdayRecord.user_id == UserRecord.id,
+                )
+                .where(
+                    EmployeeBirthdayRecord.month == target,
+                    EmployeeBirthdayRecord.visibility == "public",
+                )
+                .order_by(EmployeeBirthdayRecord.day, UserRecord.employee_number)
+            ).all()
+        return MonthBirthdayList(
+            month=target,
+            entries=tuple(
+                MonthBirthdayEntry(
+                    display_name=name,
+                    month=row_month,
+                    day=day,
+                    is_today=birthday_matches(row_month, day, today),
+                )
+                for name, row_month, day in rows
+            ),
+        )
+
 
     def list_hide_and_seek_scenes_page(
         self, page: int, page_size: int

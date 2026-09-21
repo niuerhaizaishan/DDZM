@@ -31,6 +31,8 @@ def upgrade() -> None:
         sa.Column("year", sa.Integer()),
         sa.Column("visibility", sa.String(length=16), nullable=False),
         sa.Column("last_edited_at", sa.DateTime(timezone=True)),
+        sa.Column("edit_count", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column("edit_count_year", sa.Integer()),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"]),

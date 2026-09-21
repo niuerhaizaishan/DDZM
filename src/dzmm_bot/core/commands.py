@@ -6,6 +6,8 @@ from zoneinfo import ZoneInfo
 from dzmm_bot.runtime.contracts import InboundMessage
 
 from .group_games import GROUP_GAME_COMMANDS, GROUP_GAME_LABELS
+from .birthday import parse_visibility
+
 from .company_lottery import (
     ALL_TIERS,
     OrderKind,
@@ -45,6 +47,7 @@ from .service import CommandReply
 _BEIJING = ZoneInfo("Asia/Shanghai")
 _COMMANDS = {
     "/入职", "/我的物品", "/购买", "/使用", "/邀请参与", "/取消使用", "/同意使用", "/拒绝使用", "/打卡", "/余额", "/修改名称", "/编辑档案", "/编辑档案形象", "/我的档案", "/公司的故事集", "/发奖金", "/发红包", "/抢红包", "/打赏", "/我", "/商店", "/帮助", "/当前游戏", "/加入", "/退出", "/开始", "/摸鱼躲猫猫", "/记忆考核", "/答案", "/继续", "/收手", "/投降", "/队伍1", "/队伍2", "/队伍1人员", "/队伍2人员", "/公会赛场次", "/开始对战", "/上场", "/部门", "/部门人数", "/我的部门人数", "/加入部门", "/切换部门", "/部门申请列表", "/同意部门", "/全部同意部门", "/拒绝部门", "/全部拒绝部门", "/职位", "/晋升", "/晋升申请列表", "/同意", "/全部同意", "/拒绝", "/全部拒绝", "/谁是卧底", "/开始投票", "/投票", "/退出谁是卧底", "/结束游戏", "/甩锅游戏", "/甩锅", "/退出甩锅", "/我有你没有", "/发言", "/扣", "/不扣", "/国王游戏", "/国王游戏数据", "/蹦蹦数字炸弹", "/报数", "/跳过", "/德州扑克", "/看牌", "/过牌", "/跟注", "/加注", "/全下", "/弃牌", "/上架暗网", "/取消上架", "/确认", "/报价", "/公开", "/不公开", "/查看暗网", "/确认收货", "/投诉", "/预约公演", "/我的公演预约", "/取消公演预约", "/公演日程", "/延期", "/end", "/购买彩票", "/彩票", "/我的彩票", "/确认彩票", "/取消彩票", "/彩票验证",
+    "/设置生日", "/我的生日", "/本月生日",
 }
 
 _LOTTERY_COMMANDS = {
@@ -559,6 +562,14 @@ class GroupCommandHandler:
             return self._edit_profile_image(message, content, received_at)
         if command == "/我的档案":
             return self._my_profile(message.sender_platform_id, received_at)
+        if command == "/设置生日":
+            return self._set_birthday(
+                message.sender_platform_id, content, received_at
+            )
+        if command == "/我的生日":
+            return self._my_birthday(message.sender_platform_id, received_at)
+        if command == "/本月生日":
+            return self._month_birthdays(received_at)
         if command == "/公司的故事集":
             resource_id = company_story_novel_resource_id(
                 self._repository.get_game_settings().company_story_novel_url
@@ -1702,6 +1713,78 @@ class GroupCommandHandler:
                 },
             )
         return self._reply("/编辑档案", result.status, received_at)
+
+
+    def _set_birthday(self, platform_id: str, content: str, received_at) -> str:
+        text = content[len("/设置生日") :].strip()
+        result = self._repository.set_employee_birthday(
+            platform_id,
+            text,
+            received_at,
+            visibility=parse_visibility(text),
+        )
+        if result.status != "saved":
+            values = {}
+            if result.view is not None:
+                values["{生日}"] = self._format_birthday(result.view)
+            return self._reply("/设置生日", result.status, received_at, values)
+        view = result.view
+        assert view is not None
+        return self._reply(
+            "/设置生日",
+            "saved",
+            received_at,
+            {
+                "{生日}": self._format_birthday(view),
+                "{可见性}": "公开" if view.visibility == "public" else "不公开",
+                "{下次}": view.next_occurrence.isoformat(),
+                "{工龄}": view.tenure,
+            },
+        )
+
+    def _my_birthday(self, platform_id: str, received_at) -> str:
+        view = self._repository.get_employee_birthday(platform_id, received_at)
+        if view is None:
+            return self._reply("/我的生日", "missing", received_at)
+        return self._reply(
+            "/我的生日",
+            "shown",
+            received_at,
+            {
+                "{生日}": self._format_birthday(view),
+                "{可见性}": "公开" if view.visibility == "public" else "不公开",
+                "{下次}": view.next_occurrence.isoformat(),
+                "{工龄}": view.tenure,
+            },
+        )
+
+    def _month_birthdays(self, received_at) -> str:
+        listing = self._repository.list_month_birthdays(received_at)
+        if not listing.entries:
+            return self._reply(
+                "/本月生日", "empty", received_at, {"{月份}": str(listing.month)}
+            )
+        names = "、".join(
+            f"{entry.display_name}（{entry.month}-{entry.day}"
+            + ("，就是今天" if entry.is_today else "")
+            + "）"
+            for entry in listing.entries
+        )
+        return self._reply(
+            "/本月生日",
+            "shown",
+            received_at,
+            {
+                "{月份}": str(listing.month),
+                "{名单}": names,
+                "{人数}": str(len(listing.entries)),
+            },
+        )
+
+    @staticmethod
+    def _format_birthday(view) -> str:
+        return f"{view.month} 月 {view.day} 日"
+
 
     def _edit_profile_image(
         self, message: InboundMessage, content: str, received_at

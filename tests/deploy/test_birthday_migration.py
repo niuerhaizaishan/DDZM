@@ -238,3 +238,14 @@ def test_birthday_migration_round_trips_after_downgrade(tmp_path, monkeypatch):
     assert EXPECTED_TABLES <= set(inspect(engine).get_table_names())
     with engine.connect() as connection:
         assert connection.scalar(text("SELECT COUNT(*) FROM birthday_settings")) == 0
+
+
+def test_birthday_migration_tracks_the_yearly_edit_quota(tmp_path, monkeypatch):
+    """「一年只能改几次」需要一个计数器，否则配额设成 0 或 2 都落不了地。"""
+    engine, _ = migrated_engine(tmp_path, monkeypatch)
+
+    columns = {
+        column["name"] for column in inspect(engine).get_columns("employee_birthdays")
+    }
+
+    assert {"edit_count", "edit_count_year"} <= columns

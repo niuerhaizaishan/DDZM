@@ -3269,6 +3269,10 @@ class EmployeeBirthdayRecord(Base):
         String(16), default="public", nullable=False
     )
     last_edited_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    edit_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    edit_count_year: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
 
