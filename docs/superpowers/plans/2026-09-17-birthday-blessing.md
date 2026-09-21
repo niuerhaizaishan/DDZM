@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
-> **状态：主体已完成，剩余 T6（后台面板）与 T15（端到端验收）；T14（入职周年）按 owner 要求暂缓。**
+> **状态：全部完成**（T1–T13 与 T15 端到端验收均已交付）；T14（入职周年）按 owner 要求暂缓。
 
 **Goal:** 给公司群加一套生日仪式：员工自助登记生日 → 生日当天早上自动祝福 + 发礼金 → 同事可随礼并汇总播报 → 寿星当天享几项小特权；顺带用同一套引擎支持"入职周年"。
 
@@ -214,6 +214,16 @@
 - 本分支与干净 `4a65a64`（`git worktree` 另开一份跑的）**失败集合逐项一致**：两边都是同一批本机既有失败（24–25 个 deploy 迁移基线失败 + 3 个既有业务用例 + 偶发的彩票 E2E）。
 - 生日相关测试：`tests/core/test_birthday.py`（9）、`test_birthday_commands.py`（13）、`test_birthday_jobs.py`（14）、`test_birthday_perks.py`（8）、`test_birthday_tips.py`（10）、`tests/deploy/test_birthday_migration.py`（8）、`tests/core/test_app.py::*birthday*`（2）＝ **64 项全绿**。
 - 过程中新增的一次性黄金断言修正：指令清单（`test_game_management_lists_commands_employees_and_shop_items`）按惯例补上 `/设置生日`、`/我的生日`、`/本月生日`、`/随礼`。
+
+**收尾记录（在初版进度表之后完成）**：
+
+| 内容 | 提交 |
+| --- | --- |
+| T6 管理端：「生日祝福」页面（18 项配置 + 三个群开关 + 生日名单 + 试跑/补发） | `bb59a8d` |
+| 随礼两点调整：**回复寿星即可随礼** + 窗口**到当天 24:00** | `194af79` |
+| 端到端验收（真实入口串全流程） | `44a048c` |
+| 修复：随礼窗口允许 0 后响应模型仍写 `ge=1`（接口 500） | `087a5e9` |
+| 修复：重复随礼的回执金额显示 0 | `5b9baef` |
 
 **剩余**：
 
