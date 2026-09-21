@@ -82,6 +82,9 @@ class GroupChatRecord(Base):
     performances_enabled: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=false(), nullable=False
     )
+    birthdays_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=true(), nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
     deleted_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
@@ -3250,3 +3253,131 @@ class CompanyLotteryWelfarePayoutRecord(Base):
     user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
     amount: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+
+
+class EmployeeBirthdayRecord(Base):
+    __tablename__ = "employee_birthdays"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id"), unique=True, nullable=False
+    )
+    month: Mapped[int] = mapped_column(Integer, nullable=False)
+    day: Mapped[int] = mapped_column(Integer, nullable=False)
+    year: Mapped[int | None] = mapped_column(Integer)
+    visibility: Mapped[str] = mapped_column(
+        String(16), default="public", nullable=False
+    )
+    last_edited_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+
+
+class BirthdayGreetingRecord(Base):
+    __tablename__ = "birthday_greetings"
+    __table_args__ = (
+        UniqueConstraint("user_id", "greet_year"),
+        Index("ix_birthday_greetings_pending_tips", "tips_closed_at", "greeted_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    greet_year: Mapped[int] = mapped_column(Integer, nullable=False)
+    greeted_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    gift_amount: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    lottery_tickets: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    tips_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    tips_total: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    tips_closed_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    status: Mapped[str] = mapped_column(
+        String(16), default="greeted", nullable=False
+    )
+
+
+class BirthdayPreviewRecord(Base):
+    __tablename__ = "birthday_previews"
+    __table_args__ = (UniqueConstraint("user_id", "preview_year"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    preview_year: Mapped[int] = mapped_column(Integer, nullable=False)
+    previewed_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+
+
+class BirthdayTipRecord(Base):
+    __tablename__ = "birthday_tips"
+    __table_args__ = (
+        UniqueConstraint("greeting_id", "from_user_id"),
+        Index("ix_birthday_tips_inbound", "inbound_message_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    greeting_id: Mapped[UUID] = mapped_column(
+        ForeignKey("birthday_greetings.id"), nullable=False
+    )
+    from_user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    amount: Mapped[int] = mapped_column(Integer, nullable=False)
+    inbound_message_id: Mapped[UUID] = mapped_column(
+        ForeignKey("inbound_messages.id"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+
+
+class BirthdaySettingsRecord(Base):
+    __tablename__ = "birthday_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false(), nullable=False
+    )
+    greet_time: Mapped[str] = mapped_column(
+        String(5), default="09:00", server_default="09:00", nullable=False
+    )
+    preview_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=true(), nullable=False
+    )
+    preview_time: Mapped[str] = mapped_column(
+        String(5), default="20:00", server_default="20:00", nullable=False
+    )
+    gift_amount: Mapped[int] = mapped_column(
+        Integer, default=20, server_default="20", nullable=False
+    )
+    same_day_backfill: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=true(), nullable=False
+    )
+    edit_limit_per_year: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1", nullable=False
+    )
+    checkin_multiplier: Mapped[int] = mapped_column(
+        Integer, default=2, server_default="2", nullable=False
+    )
+    shop_discount_percent: Mapped[int] = mapped_column(
+        Integer, default=80, server_default="80", nullable=False
+    )
+    lottery_free_tickets: Mapped[int] = mapped_column(
+        Integer, default=5, server_default="5", nullable=False
+    )
+    event_reward_bonus_percent: Mapped[int] = mapped_column(
+        Integer, default=50, server_default="50", nullable=False
+    )
+    tips_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=true(), nullable=False
+    )
+    tip_max_amount: Mapped[int] = mapped_column(
+        Integer, default=20, server_default="20", nullable=False
+    )
+    tip_window_minutes: Mapped[int] = mapped_column(
+        Integer, default=60, server_default="60", nullable=False
+    )
+    anniversary_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=true(), nullable=False
+    )
+    greet_template: Mapped[str] = mapped_column(
+        Text, default="", server_default="", nullable=False
+    )
+    preview_template: Mapped[str] = mapped_column(
+        Text, default="", server_default="", nullable=False
+    )
+    tips_summary_template: Mapped[str] = mapped_column(
+        Text, default="", server_default="", nullable=False
+    )
