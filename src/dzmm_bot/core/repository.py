@@ -193,6 +193,11 @@ from .schema import (
     HideAndSeekGameRecord,
     HideAndSeekSceneRecord,
     HideAndSeekSettingsRecord,
+    BirthdayGreetingRecord,
+    BirthdayPreviewRecord,
+    BirthdaySettingsRecord,
+    BirthdayTipRecord,
+    EmployeeBirthdayRecord,
     IncomeReportDeliveryRecord,
     IncomeReportScheduleRecord,
     InboundRecord,
@@ -588,6 +593,24 @@ _DEFAULT_HIDE_AND_SEEK_ENTRY_FEE = 1
 _DEFAULT_HIDE_AND_SEEK_WIN_REWARD = 3
 _DEFAULT_HIDE_AND_SEEK_DAILY_LIMIT = 2
 _DEFAULT_HIDE_AND_SEEK_SELECTION_TIMEOUT_MINUTES = 2
+_DEFAULT_BIRTHDAY_GREET_TIME = "09:00"
+_DEFAULT_BIRTHDAY_PREVIEW_TIME = "20:00"
+_DEFAULT_BIRTHDAY_GIFT_AMOUNT = 20
+_DEFAULT_BIRTHDAY_EDIT_LIMIT_PER_YEAR = 1
+_DEFAULT_BIRTHDAY_CHECKIN_MULTIPLIER = 2
+_DEFAULT_BIRTHDAY_SHOP_DISCOUNT_PERCENT = 80
+_DEFAULT_BIRTHDAY_LOTTERY_FREE_TICKETS = 5
+_DEFAULT_BIRTHDAY_EVENT_REWARD_BONUS_PERCENT = 50
+_DEFAULT_BIRTHDAY_TIP_MAX_AMOUNT = 20
+_DEFAULT_BIRTHDAY_TIP_WINDOW_MINUTES = 60
+_DEFAULT_BIRTHDAY_GREET_LINE = "生日快乐，愿你今天的每一次摸鱼都格外顺利 🎂"
+_DEFAULT_BIRTHDAY_PREVIEW_TEMPLATE = (
+    "明天是 {寿星} 的生日，想随礼的同事记得提前准备 💐"
+)
+_DEFAULT_BIRTHDAY_TIPS_SUMMARY_TEMPLATE = (
+    "{寿星} 收到 {随礼人数} 位同事的随礼，共 {随礼总额} 摸鱼币 💐"
+)
+
 _DEFAULT_HIDE_AND_SEEK_SCENES = (
     "公司前台",
     "茶水间",
@@ -861,6 +884,28 @@ class HideAndSeekSettings:
     win_reward: int
     daily_limit: int
     selection_timeout_minutes: int
+
+
+@dataclass(frozen=True)
+class BirthdaySettings:
+    enabled: bool
+    greet_time: str
+    preview_enabled: bool
+    preview_time: str
+    gift_amount: int
+    same_day_backfill: bool
+    edit_limit_per_year: int
+    checkin_multiplier: int
+    shop_discount_percent: int
+    lottery_free_tickets: int
+    event_reward_bonus_percent: int
+    tips_enabled: bool
+    tip_max_amount: int
+    tip_window_minutes: int
+    anniversary_enabled: bool
+    greet_template: str
+    preview_template: str
+    tips_summary_template: str
 
 
 @dataclass(frozen=True)
@@ -20383,6 +20428,124 @@ class CoreRepository:
             session.flush()
             return _hide_and_seek_settings(record)
 
+
+    def get_birthday_settings(self) -> BirthdaySettings:
+        with self._session() as session:
+            record = session.get(BirthdaySettingsRecord, 1)
+            if record is None:
+                record = BirthdaySettingsRecord(
+                    id=1,
+                    enabled=False,
+                    greet_time=_DEFAULT_BIRTHDAY_GREET_TIME,
+                    preview_enabled=True,
+                    preview_time=_DEFAULT_BIRTHDAY_PREVIEW_TIME,
+                    gift_amount=_DEFAULT_BIRTHDAY_GIFT_AMOUNT,
+                    same_day_backfill=True,
+                    edit_limit_per_year=_DEFAULT_BIRTHDAY_EDIT_LIMIT_PER_YEAR,
+                    checkin_multiplier=_DEFAULT_BIRTHDAY_CHECKIN_MULTIPLIER,
+                    shop_discount_percent=_DEFAULT_BIRTHDAY_SHOP_DISCOUNT_PERCENT,
+                    lottery_free_tickets=_DEFAULT_BIRTHDAY_LOTTERY_FREE_TICKETS,
+                    event_reward_bonus_percent=(
+                        _DEFAULT_BIRTHDAY_EVENT_REWARD_BONUS_PERCENT
+                    ),
+                    tips_enabled=True,
+                    tip_max_amount=_DEFAULT_BIRTHDAY_TIP_MAX_AMOUNT,
+                    tip_window_minutes=_DEFAULT_BIRTHDAY_TIP_WINDOW_MINUTES,
+                    anniversary_enabled=True,
+                    greet_template=_DEFAULT_BIRTHDAY_GREET_LINE,
+                    preview_template=_DEFAULT_BIRTHDAY_PREVIEW_TEMPLATE,
+                    tips_summary_template=_DEFAULT_BIRTHDAY_TIPS_SUMMARY_TEMPLATE,
+                )
+                session.add(record)
+                session.flush()
+            return _birthday_settings(record)
+
+    def set_birthday_settings(
+        self,
+        enabled: bool,
+        greet_time: str,
+        preview_enabled: bool,
+        preview_time: str,
+        gift_amount: int,
+        same_day_backfill: bool,
+        edit_limit_per_year: int,
+        checkin_multiplier: int,
+        shop_discount_percent: int,
+        lottery_free_tickets: int,
+        event_reward_bonus_percent: int,
+        tips_enabled: bool,
+        tip_max_amount: int,
+        tip_window_minutes: int,
+        anniversary_enabled: bool,
+        greet_template: str,
+        preview_template: str,
+        tips_summary_template: str,
+    ) -> BirthdaySettings:
+        """整份覆盖：与躲猫猫那套设置接口保持一致，校验先跑完再落库。"""
+        for label, flag in (
+            ("生日祝福开关", enabled),
+            ("预告开关", preview_enabled),
+            ("当天补发开关", same_day_backfill),
+            ("随礼开关", tips_enabled),
+            ("入职周年开关", anniversary_enabled),
+        ):
+            if not isinstance(flag, bool):
+                raise ValueError(f"{label}无效")
+        for label, value in (("祝福时刻", greet_time), ("预告时刻", preview_time)):
+            if not isinstance(value, str) or _event_time_minutes(value) is None:
+                raise ValueError(f"{label}必须使用 HH:mm 格式")
+        ranges = (
+            ("生日礼金", gift_amount, 0, 999),
+            ("改生日次数", edit_limit_per_year, 0, 12),
+            ("打卡倍率", checkin_multiplier, 1, 10),
+            ("商店折扣", shop_discount_percent, 1, 100),
+            ("免单注数", lottery_free_tickets, 0, 20),
+            ("随机事件加成", event_reward_bonus_percent, 0, 500),
+            ("随礼上限", tip_max_amount, 1, 999),
+            ("随礼窗口", tip_window_minutes, 1, 1440),
+        )
+        for label, value, minimum, maximum in ranges:
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or not minimum <= value <= maximum
+            ):
+                raise ValueError(f"{label}需在 {minimum} 至 {maximum} 之间")
+        for label, text in (
+            ("祝福语", greet_template),
+            ("预告文案", preview_template),
+            ("随礼汇总文案", tips_summary_template),
+        ):
+            if not isinstance(text, str) or not text.strip():
+                raise ValueError(f"{label}不能为空")
+            if len(text) > 300:
+                raise ValueError(f"{label}不能超过 300 个字符")
+        self.get_birthday_settings()
+        with self._session() as session:
+            record = session.get(BirthdaySettingsRecord, 1)
+            if record is None:
+                raise RuntimeError("生日设置消失")
+            record.enabled = enabled
+            record.greet_time = greet_time
+            record.preview_enabled = preview_enabled
+            record.preview_time = preview_time
+            record.gift_amount = gift_amount
+            record.same_day_backfill = same_day_backfill
+            record.edit_limit_per_year = edit_limit_per_year
+            record.checkin_multiplier = checkin_multiplier
+            record.shop_discount_percent = shop_discount_percent
+            record.lottery_free_tickets = lottery_free_tickets
+            record.event_reward_bonus_percent = event_reward_bonus_percent
+            record.tips_enabled = tips_enabled
+            record.tip_max_amount = tip_max_amount
+            record.tip_window_minutes = tip_window_minutes
+            record.anniversary_enabled = anniversary_enabled
+            record.greet_template = greet_template
+            record.preview_template = preview_template
+            record.tips_summary_template = tips_summary_template
+            session.flush()
+            return _birthday_settings(record)
+
     def list_hide_and_seek_scenes_page(
         self, page: int, page_size: int
     ) -> tuple[list[HideAndSeekScene], int]:
@@ -29165,6 +29328,34 @@ def _hide_and_seek_settings(record: HideAndSeekSettingsRecord) -> HideAndSeekSet
         daily_limit=record.daily_limit,
         selection_timeout_minutes=record.selection_timeout_minutes,
     )
+
+
+def _birthday_settings(record: BirthdaySettingsRecord) -> BirthdaySettings:
+    return BirthdaySettings(
+        enabled=record.enabled,
+        greet_time=record.greet_time,
+        preview_enabled=record.preview_enabled,
+        preview_time=record.preview_time,
+        gift_amount=record.gift_amount,
+        same_day_backfill=record.same_day_backfill,
+        edit_limit_per_year=record.edit_limit_per_year,
+        checkin_multiplier=record.checkin_multiplier,
+        shop_discount_percent=record.shop_discount_percent,
+        lottery_free_tickets=record.lottery_free_tickets,
+        event_reward_bonus_percent=record.event_reward_bonus_percent,
+        tips_enabled=record.tips_enabled,
+        tip_max_amount=record.tip_max_amount,
+        tip_window_minutes=record.tip_window_minutes,
+        anniversary_enabled=record.anniversary_enabled,
+        greet_template=record.greet_template or _DEFAULT_BIRTHDAY_GREET_LINE,
+        preview_template=(
+            record.preview_template or _DEFAULT_BIRTHDAY_PREVIEW_TEMPLATE
+        ),
+        tips_summary_template=(
+            record.tips_summary_template or _DEFAULT_BIRTHDAY_TIPS_SUMMARY_TEMPLATE
+        ),
+    )
+
 
 
 def _memory_assessment_settings(

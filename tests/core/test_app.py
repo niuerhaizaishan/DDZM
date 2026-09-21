@@ -3357,3 +3357,59 @@ def test_trigger_random_event_rejects_active_game_through_internal_api(
     assert response.status_code == 422
     assert response.json() == {"detail": "当前有游戏进行中"}
     assert repository.list_today_random_event_schedules(NOW)[0].status == "pending"
+
+def test_birthday_settings_are_managed_over_core_api(client, headers):
+    initial = client.get("/internal/game/birthday/settings", headers=headers)
+    payload = dict(initial.json())
+    payload.update(
+        {
+            "enabled": True,
+            "greet_time": "08:30",
+            "preview_enabled": False,
+            "preview_time": "21:00",
+            "gift_amount": 30,
+            "same_day_backfill": False,
+            "edit_limit_per_year": 2,
+            "checkin_multiplier": 3,
+            "shop_discount_percent": 90,
+            "lottery_free_tickets": 2,
+            "event_reward_bonus_percent": 100,
+            "tips_enabled": False,
+            "tip_max_amount": 50,
+            "tip_window_minutes": 30,
+            "anniversary_enabled": False,
+            "greet_template": "生日快乐，{寿星}！",
+            "preview_template": "明天是 {寿星} 的生日。",
+            "tips_summary_template": "{寿星} 收到 {随礼总额} 摸鱼币。",
+        }
+    )
+    updated = client.patch(
+        "/internal/game/birthday/settings", headers=headers, json=payload
+    )
+    rejected = client.patch(
+        "/internal/game/birthday/settings",
+        headers=headers,
+        json={**payload, "shop_discount_percent": 0},
+    )
+
+    assert initial.status_code == 200
+    assert initial.json()["enabled"] is False
+    assert initial.json()["greet_time"] == "09:00"
+    assert initial.json()["gift_amount"] == 20
+    assert initial.json()["lottery_free_tickets"] == 5
+    assert updated.status_code == 200
+    assert updated.json()["greet_time"] == "08:30"
+    assert updated.json()["shop_discount_percent"] == 90
+    assert rejected.status_code == 422
+
+
+def test_birthday_settings_reject_a_malformed_time(client, headers):
+    initial = client.get("/internal/game/birthday/settings", headers=headers)
+    payload = dict(initial.json())
+    payload["greet_time"] = "9点"
+
+    rejected = client.patch(
+        "/internal/game/birthday/settings", headers=headers, json=payload
+    )
+
+    assert rejected.status_code == 422

@@ -148,6 +148,8 @@ from .api_models import (
     RescheduleRandomEventRequest,
     HideAndSeekSettingsResponse,
     SetHideAndSeekSettingsRequest,
+    BirthdaySettingsResponse,
+    SetBirthdaySettingsRequest,
     MemoryAssessmentSettingsResponse,
     SetMemoryAssessmentSettingsRequest,
     MemoryAssessmentLevelRuleModel,
@@ -2570,6 +2572,48 @@ def create_app(
         return _hide_and_seek_settings_response(settings)
 
     @app.get(
+        "/internal/game/birthday/settings",
+        response_model=BirthdaySettingsResponse,
+    )
+    def birthday_settings(
+        _: Annotated[None, Depends(authorize)],
+    ) -> BirthdaySettingsResponse:
+        return _birthday_settings_response(repository.get_birthday_settings())
+
+    @app.patch(
+        "/internal/game/birthday/settings",
+        response_model=BirthdaySettingsResponse,
+    )
+    def set_birthday_settings(
+        request: SetBirthdaySettingsRequest,
+        _: Annotated[None, Depends(authorize)],
+    ) -> BirthdaySettingsResponse:
+        try:
+            settings = repository.set_birthday_settings(
+                request.enabled,
+                request.greet_time,
+                request.preview_enabled,
+                request.preview_time,
+                request.gift_amount,
+                request.same_day_backfill,
+                request.edit_limit_per_year,
+                request.checkin_multiplier,
+                request.shop_discount_percent,
+                request.lottery_free_tickets,
+                request.event_reward_bonus_percent,
+                request.tips_enabled,
+                request.tip_max_amount,
+                request.tip_window_minutes,
+                request.anniversary_enabled,
+                request.greet_template,
+                request.preview_template,
+                request.tips_summary_template,
+            )
+        except ValueError as error:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error))
+        return _birthday_settings_response(settings)
+
+    @app.get(
         "/internal/game/hide-and-seek/scenes",
         response_model=PaginatedHideAndSeekScenesResponse,
     )
@@ -3663,6 +3707,30 @@ def _hide_and_seek_settings_response(settings) -> HideAndSeekSettingsResponse:
         daily_limit=settings.daily_limit,
         selection_timeout_minutes=settings.selection_timeout_minutes,
     )
+
+
+def _birthday_settings_response(settings) -> BirthdaySettingsResponse:
+    return BirthdaySettingsResponse(
+        enabled=settings.enabled,
+        greet_time=settings.greet_time,
+        preview_enabled=settings.preview_enabled,
+        preview_time=settings.preview_time,
+        gift_amount=settings.gift_amount,
+        same_day_backfill=settings.same_day_backfill,
+        edit_limit_per_year=settings.edit_limit_per_year,
+        checkin_multiplier=settings.checkin_multiplier,
+        shop_discount_percent=settings.shop_discount_percent,
+        lottery_free_tickets=settings.lottery_free_tickets,
+        event_reward_bonus_percent=settings.event_reward_bonus_percent,
+        tips_enabled=settings.tips_enabled,
+        tip_max_amount=settings.tip_max_amount,
+        tip_window_minutes=settings.tip_window_minutes,
+        anniversary_enabled=settings.anniversary_enabled,
+        greet_template=settings.greet_template,
+        preview_template=settings.preview_template,
+        tips_summary_template=settings.tips_summary_template,
+    )
+
 
 
 def _hide_and_seek_scene_response(scene) -> HideAndSeekSceneResponse:

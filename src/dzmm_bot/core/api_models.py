@@ -1473,6 +1473,33 @@ class SetMemoryAssessmentSettingsRequest(MemoryAssessmentSettingsResponse):
     pass
 
 
+
+
+class BirthdaySettingsResponse(ApiModel):
+    enabled: bool
+    greet_time: str = Field(min_length=4, max_length=5)
+    preview_enabled: bool
+    preview_time: str = Field(min_length=4, max_length=5)
+    gift_amount: int = Field(ge=0, le=999)
+    same_day_backfill: bool
+    edit_limit_per_year: int = Field(ge=0, le=12)
+    checkin_multiplier: int = Field(ge=1, le=10)
+    shop_discount_percent: int = Field(ge=1, le=100)
+    lottery_free_tickets: int = Field(ge=0, le=20)
+    event_reward_bonus_percent: int = Field(ge=0, le=500)
+    tips_enabled: bool
+    tip_max_amount: int = Field(ge=1, le=999)
+    tip_window_minutes: int = Field(ge=1, le=1440)
+    anniversary_enabled: bool
+    greet_template: str = Field(min_length=1, max_length=300)
+    preview_template: str = Field(min_length=1, max_length=300)
+    tips_summary_template: str = Field(min_length=1, max_length=300)
+
+
+class SetBirthdaySettingsRequest(BirthdaySettingsResponse):
+    pass
+
+
 class UndercoverRoleRuleModel(ApiModel):
     player_count: int = Field(ge=4, le=8)
     civilian_count: int = Field(ge=0, le=8)
