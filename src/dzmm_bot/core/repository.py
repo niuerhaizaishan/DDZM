@@ -614,7 +614,8 @@ _DEFAULT_BIRTHDAY_SHOP_DISCOUNT_PERCENT = 80
 _DEFAULT_BIRTHDAY_LOTTERY_FREE_TICKETS = 5
 _DEFAULT_BIRTHDAY_EVENT_REWARD_BONUS_PERCENT = 50
 _DEFAULT_BIRTHDAY_TIP_MAX_AMOUNT = 20
-_DEFAULT_BIRTHDAY_TIP_WINDOW_MINUTES = 60
+#: 0 = 随礼一直有效到当天 24:00（默认）；>0 = 从祝福发出起最多这么多分钟
+_DEFAULT_BIRTHDAY_TIP_WINDOW_MINUTES = 0
 #: `same_day_backfill=False` 时只在这个窗口内补发，超过就当天不再发。
 _BIRTHDAY_BACKFILL_WINDOW_MINUTES = 30
 
@@ -20582,7 +20583,7 @@ class CoreRepository:
             ("免单注数", lottery_free_tickets, 0, 20),
             ("随机事件加成", event_reward_bonus_percent, 0, 500),
             ("随礼上限", tip_max_amount, 1, 999),
-            ("随礼窗口", tip_window_minutes, 1, 1440),
+            ("随礼窗口", tip_window_minutes, 0, 1440),
         )
         for label, value, minimum, maximum in ranges:
             if (
@@ -20840,11 +20841,10 @@ class CoreRepository:
             .order_by(BirthdayGreetingRecord.greeted_at)
             .with_for_update()
         ).all()
-        window = timedelta(minutes=settings.tip_window_minutes)
         return [
             (greeting, user)
             for greeting, user in rows
-            if greeting.greeted_at + window > now
+            if _birthday_tips_close_at(greeting, settings) > now
         ]
 
     def tip_birthday(
@@ -28403,9 +28403,8 @@ class CoreRepository:
             .join(UserRecord, UserRecord.id == BirthdayGreetingRecord.user_id)
             .where(BirthdayGreetingRecord.tips_closed_at.is_(None))
         ).all()
-        window = timedelta(minutes=settings.tip_window_minutes)
         for greeting, user in rows:
-            if greeting.greeted_at + window > now:
+            if _birthday_tips_close_at(greeting, settings) > now:
                 continue
             count, total = session.execute(
                 select(
@@ -30025,6 +30024,17 @@ def birthday_completion_reward(base: int, settings: BirthdaySettings | None) -> 
 
 
 
+def _birthday_tips_close_at(greeting, settings) -> datetime:
+    """随礼截止：默认到当天 24:00；配了分钟数就取"祝福时刻 + N 分钟"里更早的那个。"""
+    end_of_day = greeting.greeted_at.astimezone(BEIJING).replace(
+        hour=23, minute=59, second=59, microsecond=0
+    )
+    if settings.tip_window_minutes <= 0:
+        return end_of_day
+    limited = greeting.greeted_at + timedelta(minutes=settings.tip_window_minutes)
+    return min(limited, end_of_day)
+
+
 def _render_birthday_tips_summary(
     settings, name: str, count: int, total: int
 ) -> str:
@@ -30079,10 +30089,14 @@ def _render_birthday_greeting(
         perks.append(f"✅ 打卡 {settings.checkin_multiplier} 倍")
     lines.append(" · ".join(perks))
     if settings.tips_enabled:
-        closes_at = now + timedelta(minutes=settings.tip_window_minutes)
+        if settings.tip_window_minutes <= 0:
+            closes_text = "今晚 24:00"
+        else:
+            closes_at = now + timedelta(minutes=settings.tip_window_minutes)
+            closes_text = closes_at.strftime("%H:%M")
         lines.append(
-            f"💐 想随礼的同事：/随礼 金额（最多 {settings.tip_max_amount}，"
-            f"截止 {closes_at.strftime('%H:%M')}）"
+            f"💐 想随礼的同事：回复这条消息或 /随礼 金额"
+            f"（最多 {settings.tip_max_amount}，截止 {closes_text}）"
         )
     template = settings.greet_template or _DEFAULT_BIRTHDAY_GREET_LINE
     lines.append(template.replace("{寿星}", names))

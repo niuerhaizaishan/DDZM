@@ -1754,6 +1754,13 @@ class GroupCommandHandler:
         recipient_name: str | None = None
         if len(parts) == 2:
             amount_text = parts[1]
+            # 回复寿星的消息就等于点名（同 /发奖金 的写法），一天多人过生日时最省事
+            if message.reference is not None:
+                replied = self._repository.find_user(
+                    message.reference.sender_platform_id
+                )
+                if replied is not None:
+                    recipient_name = replied.display_name
         elif len(parts) == 3:
             recipient_name, amount_text = parts[1], parts[2]
         else:

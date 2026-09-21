@@ -161,7 +161,7 @@ def test_a_replayed_message_does_not_transfer_twice(harness):
 
 def test_a_tip_after_the_window_is_refused(harness):
     repository, factory, _ = harness
-    late = NOW + timedelta(hours=3)
+    late = NOW + timedelta(days=1)
 
     inbound(factory, "late-tip", "p2")
     result = repository.tip_birthday(
@@ -193,7 +193,7 @@ def test_the_settlement_fills_the_totals_and_announces_once(harness):
     with factory.begin() as session:
         session.query(OutboundRecord).delete()
 
-    close_at = NOW + timedelta(minutes=61)
+    close_at = NOW.replace(hour=23, minute=59, second=59) + timedelta(seconds=2)
     repository.run_birthday_jobs(close_at)
     repository.run_birthday_jobs(close_at)
 
@@ -328,7 +328,7 @@ def test_the_tip_command_reports_a_stranger(harness):
 
 def test_the_tip_command_says_so_when_nobody_is_celebrating(harness):
     handler, factory, group = command_harness(harness)
-    late = NOW + timedelta(hours=5)
+    late = NOW + timedelta(days=1)
     inbound(factory, "c-10", "p2", "/随礼 5")
 
     reply = handler.handle(
@@ -339,3 +339,58 @@ def test_the_tip_command_says_so_when_nobody_is_celebrating(harness):
 
     assert "没有人在过生日" in reply
 
+def test_a_late_night_tip_still_counts(harness):
+    """祝福发出后一直有效到当天 24:00，深夜随礼也算。"""
+    repository, factory, _ = harness
+    late = NOW.replace(hour=23, minute=30)
+
+    inbound(factory, "late-night", "p2")
+    result = repository.tip_birthday("p2", 10, late, platform_message_id="late-night")
+
+    assert result.status == "tipped"
+    assert balance_of(factory, "p1") == 120 + 10
+
+
+def test_the_window_can_still_be_shortened_by_config(harness):
+    from dataclasses import replace
+
+    repository, factory, _ = harness
+    settings = repository.get_birthday_settings()
+    repository.set_birthday_settings(
+        **vars(replace(settings, tip_window_minutes=30))
+    )
+
+    inbound(factory, "too-late", "p2")
+    result = repository.tip_birthday(
+        "p2", 10, NOW + timedelta(minutes=31), platform_message_id="too-late"
+    )
+
+    assert result.status == "no_birthday"
+
+
+def test_replying_to_the_birthday_person_tips_them(harness):
+    """一天多人过生日时，回复寿星的消息就等于点名（/随礼 金额 即可）。"""
+    from dzmm_bot.core.commands import GroupCommandHandler
+    from dzmm_bot.runtime.contracts import InboundMessage, MessageReference
+
+    repository, factory, group = harness
+    handler = GroupCommandHandler(repository)
+    inbound(factory, "reply-1", "p3", "/随礼 8")
+    reply = handler.handle(
+        InboundMessage(
+            "reply-1",
+            "p3",
+            "/随礼 8",
+            NOW,
+            source_type="group",
+            chatroom_id=group.chatroom_id,
+            reference=MessageReference(
+                message_id="m-1",
+                sender_platform_id="p1",
+                content_type="text",
+            ),
+        )
+    )
+
+    assert "已给 小明 随礼 8" in (reply or "")
+    assert balance_of(factory, "p1") == 120 + 8

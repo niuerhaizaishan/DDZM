@@ -3371,7 +3371,7 @@ class BirthdaySettingsRecord(Base):
         Integer, default=20, server_default="20", nullable=False
     )
     tip_window_minutes: Mapped[int] = mapped_column(
-        Integer, default=60, server_default="60", nullable=False
+        Integer, default=0, server_default="0", nullable=False
     )
     anniversary_enabled: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default=true(), nullable=False
