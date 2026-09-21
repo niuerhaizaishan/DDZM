@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
-> **状态：尚未开工**（等 owner 过目本文与 spec 后再动手）。
+> **状态：主体已完成，剩余 T6（后台面板）与 T15（端到端验收）；T14（入职周年）按 owner 要求暂缓。**
 
 **Goal:** 给公司群加一套生日仪式：员工自助登记生日 → 生日当天早上自动祝福 + 发礼金 → 同事可随礼并汇总播报 → 寿星当天享几项小特权；顺带用同一套引擎支持"入职周年"。
 
@@ -190,3 +190,40 @@
 3. **三个群入口可配置**（你：做成可配置）→ Task 1 加列、Task 4 按群广播、Task 6 加群开关。
 
 > 其余 6 项（随礼窗口 60 分钟 / 每人每场一次 / 单次上限 20、2/29 按 2/28、预告默认开、群开关默认开、随礼必须写金额、同日多人合并）已按 spec §14 的默认值写入，随时可改。
+
+---
+
+## 实现进度（2026-09-17）
+
+> **已完成并提交**：T1–T5、T7、T8–T13。分支 `feat/birthday-blessing`（基于 `4a65a64`，迁移 `20260917_76`，单头）。
+
+| Task | 内容 | 提交 |
+| --- | --- | --- |
+| T1 | 迁移 + 5 张表 + `group_chats.birthdays_enabled` | `aaed519` |
+| T2 | 生日设置（仓储 + 校验 + 内部接口） | `fd3a8b8` |
+| T3 | `/设置生日`、`/我的生日`、`/本月生日` + 四处白名单 + 可选年份/可见性/一年改一次 | `1d40437`、`0e15863` |
+| T4 | `run_birthday_jobs`：预告 + 祝福 + 幂等 + 按群广播 | `637966f` |
+| T5 | 生日礼金与今日收益口径（不计入改动，`today_income` 未动） | `637966f` |
+| T7 | `rule.md` 新增 §21 + §3/§4/§5/§6/§16.2 交叉说明 | `d8ae5d3` 后一支 |
+| T8/T9 | `/随礼` 转账 + 窗口结算与汇总播报 | `d8ae5d3` |
+| T10–T13 | 打卡双倍、购彩前 N 注免单、商店折扣、随机事件完成奖励加成 | `9f76003`、`e3dfc6e` |
+| T15（部分） | 与干净 `4a65a64` 的失败集合逐项对照 | 见下 |
+
+**验收证据（`tests/core` + `tests/deploy`）**：
+
+- 本分支与干净 `4a65a64`（`git worktree` 另开一份跑的）**失败集合逐项一致**：两边都是同一批本机既有失败（24–25 个 deploy 迁移基线失败 + 3 个既有业务用例 + 偶发的彩票 E2E）。
+- 生日相关测试：`tests/core/test_birthday.py`（9）、`test_birthday_commands.py`（13）、`test_birthday_jobs.py`（14）、`test_birthday_perks.py`（8）、`test_birthday_tips.py`（10）、`tests/deploy/test_birthday_migration.py`（8）、`tests/core/test_app.py::*birthday*`（2）＝ **64 项全绿**。
+- 过程中新增的一次性黄金断言修正：指令清单（`test_game_management_lists_commands_employees_and_shop_items`）按惯例补上 `/设置生日`、`/我的生日`、`/本月生日`、`/随礼`。
+
+**剩余**：
+
+1. **T6 后台生日面板**：目前只有核心内部接口（`GET/PATCH /internal/game/birthday/settings`），还没有管理端页面与群级开关的 UI；上线要开功能得先直接调这个接口。
+2. **T15 正式验收**：端到端用例（真实入口串起"登记 → 预告 → 祝福 → 随礼 → 结算 → 特权"）与验收结语。
+3. **T14 入职周年**：按 owner 要求暂缓（引擎已就绪：`birthday.matches` 与 `format_tenure` 都可直接复用）。
+
+**已知取舍（实现时定的，与 spec 有出入的地方）**：
+
+- 三段文案（祝福语 / 预告 / 随礼汇总）放在 `birthday_settings` 里由后台编辑，**没有**走 `reply_templates` 白名单（那是给指令回复用的）；指令回复走 `reply_templates` 不变。
+- `same_day_backfill=False` 的语义落地为"只在到点后 30 分钟内发"（常量 `_BIRTHDAY_BACKFILL_WINDOW_MINUTES`）。
+- 购彩免单**在当天祝福发出后才生效**（否则 09:00 前能无限刷免单）。
+- `/商店` 的**展示价**仍是原价，折扣只体现在实扣与流水上（展示价要跟着改需要给商店列表渲染传当前用户，留待 T6 一起做）。
