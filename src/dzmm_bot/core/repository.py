@@ -591,6 +591,7 @@ _RANDOM_EVENT_CONFIGURABLE_COMMANDS = frozenset(
     {
         "/入职", "/我的物品", "/购买", "/使用", "/邀请参与", "/取消使用", "/同意使用", "/拒绝使用", "/打卡", "/余额", "/我", "/编辑档案", "/编辑档案形象", "/我的档案", "/商店", "/帮助", "/当前游戏",
         "/设置生日", "/我的生日", "/本月生日",
+        "/随礼",
         "/加入", "/退出", "/开始", "/跳过", "/摸鱼躲猫猫", "/记忆考核", "/继续", "/收手", "/投降",
         "/部门", "/部门人数", "/我的部门人数", "/加入部门", "/切换部门", "/部门申请列表",
         "/同意部门", "/全部同意部门", "/拒绝部门", "/全部拒绝部门",
@@ -951,6 +952,15 @@ class MonthBirthdayEntry:
 class MonthBirthdayList:
     month: int
     entries: tuple[MonthBirthdayEntry, ...]
+
+
+@dataclass(frozen=True)
+class BirthdayTipResult:
+    status: str
+    recipient_name: str | None = None
+    amount: int = 0
+    maximum: int = 0
+
 
 
 @dataclass(frozen=True)
@@ -2107,6 +2117,7 @@ _COMMAND_DEFINITIONS = (
         "/设置生日 5-20（也可写 5月20日 / 1995-5-20；末尾可加「不公开」）",
         "登记或修改自己的生日",
     ),
+    ("/随礼", "/随礼 金额（同一天两位寿星时写 /随礼 姓名 金额）", "给今天过生日的同事随礼"),
     ("/我的生日", "/我的生日", "查看自己的生日登记"),
     ("/本月生日", "/本月生日", "查看本月过生日的同事"),
     ("/编辑档案", "/编辑档案 档案内容", "更新自己的个人档案"),
@@ -20800,6 +20811,131 @@ class CoreRepository:
         return max(0, price * settings.shop_discount_percent // 100)
 
 
+
+    def _open_birthday_greetings(
+        self, session: Session, settings: BirthdaySettings, now: datetime
+    ) -> list[tuple[BirthdayGreetingRecord, UserRecord]]:
+        """还在随礼窗口里的祝福记录（窗口 = 祝福时刻 + 配置分钟数）。"""
+        rows = session.execute(
+            select(BirthdayGreetingRecord, UserRecord)
+            .join(UserRecord, UserRecord.id == BirthdayGreetingRecord.user_id)
+            .where(BirthdayGreetingRecord.tips_closed_at.is_(None))
+            .order_by(BirthdayGreetingRecord.greeted_at)
+            .with_for_update()
+        ).all()
+        window = timedelta(minutes=settings.tip_window_minutes)
+        return [
+            (greeting, user)
+            for greeting, user in rows
+            if greeting.greeted_at + window > now
+        ]
+
+    def tip_birthday(
+        self,
+        platform_id: str,
+        amount: int,
+        now: datetime,
+        *,
+        platform_message_id: str,
+        recipient_name: str | None = None,
+    ) -> BirthdayTipResult:
+        """同事随礼：纯玩家间转移，不新增货币；每人每场一次、单次不超上限。"""
+        now = now.astimezone(BEIJING)
+        settings = self.get_birthday_settings()
+        with self.transaction():
+            with self._session() as session:
+                sender = session.scalar(
+                    select(UserRecord).where(UserRecord.platform_id == platform_id)
+                )
+                if sender is None:
+                    return BirthdayTipResult("not_joined")
+                if not settings.enabled or not settings.tips_enabled:
+                    return BirthdayTipResult("disabled")
+                if (
+                    isinstance(amount, bool)
+                    or not isinstance(amount, int)
+                    or not 1 <= amount <= settings.tip_max_amount
+                ):
+                    return BirthdayTipResult(
+                        "invalid_amount", maximum=settings.tip_max_amount
+                    )
+                inbound_id = session.scalar(
+                    select(InboundRecord.id).where(
+                        InboundRecord.platform_message_id == platform_message_id,
+                        InboundRecord.sender_platform_id == platform_id,
+                    )
+                )
+                if inbound_id is None:
+                    return BirthdayTipResult("inbound_not_found")
+                replay = session.scalar(
+                    select(BirthdayTipRecord).where(
+                        BirthdayTipRecord.inbound_message_id == inbound_id
+                    )
+                )
+                if replay is not None:
+                    # 同一条消息重复投递：不再转账，按已登记的金额回执
+                    recipient = session.scalar(
+                        select(UserRecord.display_name).where(
+                            UserRecord.id
+                            == session.scalar(
+                                select(BirthdayGreetingRecord.user_id).where(
+                                    BirthdayGreetingRecord.id == replay.greeting_id
+                                )
+                            )
+                        )
+                    )
+                    return BirthdayTipResult(
+                        "already_tipped",
+                        recipient_name=recipient,
+                        amount=replay.amount,
+                    )
+                candidates = self._open_birthday_greetings(session, settings, now)
+                if not candidates:
+                    return BirthdayTipResult("no_birthday")
+                if recipient_name:
+                    wanted = recipient_name.strip()
+                    matched = [
+                        pair for pair in candidates if pair[1].display_name == wanted
+                    ]
+                    if not matched:
+                        return BirthdayTipResult("recipient_not_found")
+                    greeting, recipient = matched[0]
+                elif len(candidates) == 1:
+                    greeting, recipient = candidates[0]
+                else:
+                    # 同一天两位寿星：必须点名，别让人随错
+                    return BirthdayTipResult("recipient_required")
+                if recipient.id == sender.id:
+                    return BirthdayTipResult("self_tip")
+                existing = session.scalar(
+                    select(BirthdayTipRecord.id).where(
+                        BirthdayTipRecord.greeting_id == greeting.id,
+                        BirthdayTipRecord.from_user_id == sender.id,
+                    )
+                )
+                if existing is not None:
+                    return BirthdayTipResult(
+                        "already_tipped", recipient_name=recipient.display_name
+                    )
+                if sender.balance < amount:
+                    return BirthdayTipResult("insufficient_balance")
+                self._apply_balance_change(sender, -amount, "birthday_tip_out", now)
+                self._apply_balance_change(recipient, amount, "birthday_tip_in", now)
+                session.add(
+                    BirthdayTipRecord(
+                        greeting_id=greeting.id,
+                        from_user_id=sender.id,
+                        amount=amount,
+                        inbound_message_id=inbound_id,
+                        created_at=now,
+                    )
+                )
+                session.flush()
+                return BirthdayTipResult(
+                    "tipped", recipient_name=recipient.display_name, amount=amount
+                )
+
+
     def list_hide_and_seek_scenes_page(
         self, page: int, page_size: int
     ) -> tuple[list[HideAndSeekScene], int]:
@@ -28148,6 +28284,40 @@ class CoreRepository:
             )
 
 
+    def _run_birthday_tips_settlement(
+        self, session: Session, settings: BirthdaySettings, now: datetime
+    ) -> None:
+        """随礼窗口到点：回填人数与总额并播报汇总（每人每场只结算一次）。"""
+        if not settings.tips_enabled:
+            return
+        rows = session.execute(
+            select(BirthdayGreetingRecord, UserRecord)
+            .join(UserRecord, UserRecord.id == BirthdayGreetingRecord.user_id)
+            .where(BirthdayGreetingRecord.tips_closed_at.is_(None))
+        ).all()
+        window = timedelta(minutes=settings.tip_window_minutes)
+        for greeting, user in rows:
+            if greeting.greeted_at + window > now:
+                continue
+            count, total = session.execute(
+                select(
+                    func.count(BirthdayTipRecord.id),
+                    func.coalesce(func.sum(BirthdayTipRecord.amount), 0),
+                ).where(BirthdayTipRecord.greeting_id == greeting.id)
+            ).one()
+            greeting.tips_count = int(count)
+            greeting.tips_total = int(total)
+            greeting.tips_closed_at = now
+            greeting.status = "settled"
+            session.flush()
+            if count:
+                self._birthday_announce(
+                    _render_birthday_tips_summary(
+                        settings, user.display_name, int(count), int(total)
+                    )
+                )
+
+
     def _birthday_announce(self, text: str) -> int:
         """生日公告：只发给开着生日开关、且允许公告的已监听群。"""
         delivered = 0
@@ -28203,6 +28373,7 @@ class CoreRepository:
                 if settings.preview_enabled:
                     self._run_birthday_previews(session, settings, now)
                 self._run_birthday_greetings(session, settings, now)
+                self._run_birthday_tips_settlement(session, settings, now)
 
     def _run_birthday_previews(
         self, session: Session, settings: BirthdaySettings, now: datetime
@@ -29742,6 +29913,20 @@ def birthday_completion_reward(base: int, settings: BirthdaySettings | None) -> 
         return base
     bonus = base * settings.event_reward_bonus_percent
     return base + (bonus + 50) // 100
+
+
+
+
+def _render_birthday_tips_summary(
+    settings, name: str, count: int, total: int
+) -> str:
+    template = settings.tips_summary_template or _DEFAULT_BIRTHDAY_TIPS_SUMMARY_TEMPLATE
+    text = (
+        template.replace("{寿星}", name)
+        .replace("{随礼人数}", str(count))
+        .replace("{随礼总额}", str(total))
+    )
+    return "【生日祝福·随礼】" + text
 
 
 def _birthday_moment(day: date, value: str) -> datetime:
