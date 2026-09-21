@@ -1492,7 +1492,7 @@ class BirthdaySettingsResponse(ApiModel):
     event_reward_bonus_percent: int = Field(ge=0, le=500)
     tips_enabled: bool
     tip_max_amount: int = Field(ge=1, le=999)
-    tip_window_minutes: int = Field(ge=1, le=1440)
+    tip_window_minutes: int = Field(ge=0, le=1440)
     anniversary_enabled: bool
     greet_template: str = Field(min_length=1, max_length=300)
     preview_template: str = Field(min_length=1, max_length=300)
