@@ -21992,7 +21992,6 @@ class CoreRepository:
                     if participant.rounds >= event.target_rounds:
                         self._apply_balance_change(
                             user,
-                            self.get_random_event_settings().global_completion_reward,
                             birthday_completion_reward(
                                 self.get_random_event_settings().global_completion_reward,
                                 self.birthday_settings_for(user.id, now),
