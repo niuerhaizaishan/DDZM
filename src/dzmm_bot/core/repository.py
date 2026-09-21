@@ -323,6 +323,7 @@ class GroupChatConfig:
     announcements_enabled: bool
     adult_shop_enabled: bool
     performances_enabled: bool
+    birthdays_enabled: bool
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None
@@ -441,6 +442,7 @@ def _group_chat_config(record: GroupChatRecord) -> GroupChatConfig:
         announcements_enabled=record.announcements_enabled,
         adult_shop_enabled=record.adult_shop_enabled,
         performances_enabled=record.performances_enabled,
+        birthdays_enabled=record.birthdays_enabled,
         created_at=record.created_at,
         updated_at=record.updated_at,
         deleted_at=record.deleted_at,
@@ -612,6 +614,9 @@ _DEFAULT_BIRTHDAY_LOTTERY_FREE_TICKETS = 5
 _DEFAULT_BIRTHDAY_EVENT_REWARD_BONUS_PERCENT = 50
 _DEFAULT_BIRTHDAY_TIP_MAX_AMOUNT = 20
 _DEFAULT_BIRTHDAY_TIP_WINDOW_MINUTES = 60
+#: `same_day_backfill=False` 时只在这个窗口内补发，超过就当天不再发。
+_BIRTHDAY_BACKFILL_WINDOW_MINUTES = 30
+
 _DEFAULT_BIRTHDAY_GREET_LINE = "生日快乐，愿你今天的每一次摸鱼都格外顺利 🎂"
 _DEFAULT_BIRTHDAY_PREVIEW_TEMPLATE = (
     "明天是 {寿星} 的生日，想随礼的同事记得提前准备 💐"
@@ -22916,6 +22921,7 @@ class CoreRepository:
         self.run_dark_market_jobs(now)
         self.run_shop_card_jobs(now)
         self.run_company_lottery_jobs(now)
+        self.run_birthday_jobs(now)
         with self.transaction():
             with self._session() as session:
                 self._lock_gameplay_gate(session)
@@ -28076,6 +28082,148 @@ class CoreRepository:
                 ),
             )
 
+
+    def _birthday_announce(self, text: str) -> int:
+        """生日公告：只发给开着生日开关、且允许公告的已监听群。"""
+        delivered = 0
+        for group in self.list_group_chats():
+            if (
+                not group.listening_enabled
+                or not group.announcements_enabled
+                or not group.birthdays_enabled
+            ):
+                continue
+            destination = self.group_chat_destination(group.id)
+            if destination is None:
+                continue
+            self.enqueue_system_outbound(
+                text,
+                group_chat_id=group.id,
+                destination_chatroom_id=destination,
+            )
+            delivered += 1
+        return delivered
+
+    def _birthday_candidates(
+        self, session: Session, target: date
+    ) -> list[tuple[UserRecord, EmployeeBirthdayRecord]]:
+        """在某一天过生日、且愿意公开的员工。"""
+        rows = session.execute(
+            select(UserRecord, EmployeeBirthdayRecord)
+            .join(
+                EmployeeBirthdayRecord,
+                EmployeeBirthdayRecord.user_id == UserRecord.id,
+            )
+            .where(EmployeeBirthdayRecord.visibility == "public")
+            .order_by(UserRecord.employee_number)
+        ).all()
+        return [
+            (user, record)
+            for user, record in rows
+            if birthday_matches(record.month, record.day, target)
+        ]
+
+    def run_birthday_jobs(self, now: datetime) -> None:
+        """生日祝福的两段：昨天的预告、今天的祝福（随礼结算见随礼任务）。
+
+        每段都靠落库记录幂等（`birthday_previews` / `birthday_greetings` 的唯一
+        约束），所以 Worker 每秒跑一次也不会重复发；`enabled=false` 时全静默。
+        """
+        now = now.astimezone(BEIJING)
+        settings = self.get_birthday_settings()
+        if not settings.enabled:
+            return
+        with self.transaction():
+            with self._session() as session:
+                if settings.preview_enabled:
+                    self._run_birthday_previews(session, settings, now)
+                self._run_birthday_greetings(session, settings, now)
+
+    def _run_birthday_previews(
+        self, session: Session, settings: BirthdaySettings, now: datetime
+    ) -> None:
+        """前一天预告：到点之后、且明天确实有人过生日，才播报（每人每年一次）。"""
+        today = now.date()
+        if now < _birthday_moment(today, settings.preview_time):
+            return
+        tomorrow = today + timedelta(days=1)
+        pairs = self._birthday_candidates(session, tomorrow)
+        if not pairs:
+            return
+        already = set(
+            session.scalars(
+                select(BirthdayPreviewRecord.user_id).where(
+                    BirthdayPreviewRecord.preview_year == tomorrow.year
+                )
+            )
+        )
+        fresh = [user for user, _ in pairs if user.id not in already]
+        if not fresh:
+            return
+        for user in fresh:
+            session.add(
+                BirthdayPreviewRecord(
+                    user_id=user.id,
+                    preview_year=tomorrow.year,
+                    previewed_at=now,
+                )
+            )
+        session.flush()
+        self._birthday_announce(
+            _render_birthday_preview(settings, [user.display_name for user in fresh])
+        )
+
+    def _run_birthday_greetings(
+        self, session: Session, settings: BirthdaySettings, now: datetime
+    ) -> None:
+        """当天祝福：到点之后开始算，一年只发一次；礼金与公告同事务。"""
+        today = now.date()
+        greet_at = _birthday_moment(today, settings.greet_time)
+        if now < greet_at:
+            return
+        if not settings.same_day_backfill and now >= greet_at + timedelta(
+            minutes=_BIRTHDAY_BACKFILL_WINDOW_MINUTES
+        ):
+            return
+        pairs = self._birthday_candidates(session, today)
+        if not pairs:
+            return
+        already = set(
+            session.scalars(
+                select(BirthdayGreetingRecord.user_id).where(
+                    BirthdayGreetingRecord.greet_year == today.year
+                )
+            )
+        )
+        fresh = [(user, record) for user, record in pairs if user.id not in already]
+        if not fresh:
+            return
+        entries: list[tuple[str, str]] = []
+        for user, _ in fresh:
+            self._apply_balance_change(user, settings.gift_amount, "birthday_gift", now)
+            session.add(
+                BirthdayGreetingRecord(
+                    user_id=user.id,
+                    greet_year=today.year,
+                    greeted_at=now,
+                    gift_amount=settings.gift_amount,
+                    lottery_tickets=0,
+                    tips_count=0,
+                    tips_total=0,
+                    tips_closed_at=None,
+                    status="greeted",
+                )
+            )
+            entries.append(
+                (
+                    user.display_name,
+                    birthday_format_tenure(user.joined_at, today),
+                )
+            )
+        session.flush()
+        self._birthday_announce(_render_birthday_greeting(settings, entries, now))
+
+
     def _company_lottery_announce(self, text: str) -> int:
         """把公告广播到允许公告的已监听群；返回实际投递的群数。"""
         delivered = 0
@@ -29508,6 +29656,60 @@ def _validate_random_event_blocked_message(message: str) -> str:
     if not isinstance(message, str) or not message.strip() or len(message) > 2000:
         raise ValueError("随机事件拦截提示不能为空且不能超过 2000 个字符")
     return message.strip()
+
+
+
+def _birthday_moment(day: date, value: str) -> datetime:
+    """把 `HH:mm` 配置落到某一天的具体时刻上。"""
+    minute = _event_time_minutes(value)
+    if minute is None:
+        raise RuntimeError("生日时刻消失")
+    return datetime(
+        day.year, day.month, day.day, minute // 60, minute % 60, tzinfo=BEIJING
+    )
+
+
+def _format_discount(percent: int) -> str:
+    """80 → `8 折`；85 → `8.5 折`。"""
+    value = percent / 10
+    text = f"{value:g}"
+    return f"{text} 折"
+
+
+def _render_birthday_preview(settings, names: list[str]) -> str:
+    template = settings.preview_template or _DEFAULT_BIRTHDAY_PREVIEW_TEMPLATE
+    return "【生日预告】" + template.replace("{寿星}", "、".join(names))
+
+
+def _render_birthday_greeting(
+    settings, entries: list[tuple[str, str]], now: datetime
+) -> str:
+    """一条公告列完当天所有寿星：人头多的时候也不会刷屏（预算 10 行）。"""
+    names = "、".join(name for name, _ in entries)
+    lines = [f"【生日祝福】今天是 {names} 的生日 🎂"]
+    for name, tenure in entries:
+        lines.append(
+            f"{name} · 入职 {tenure} · 🎁 生日礼金 {settings.gift_amount} 摸鱼币已到账"
+        )
+    if settings.lottery_free_tickets > 0:
+        lines.append(
+            f"🎫 今天购彩前 {settings.lottery_free_tickets} 注公司买单"
+            "（发 /购买彩票 机选）"
+        )
+    perks = [f"🏪 商店 {_format_discount(settings.shop_discount_percent)}"]
+    if settings.checkin_multiplier > 1:
+        perks.append(f"✅ 打卡 {settings.checkin_multiplier} 倍")
+    lines.append(" · ".join(perks))
+    if settings.tips_enabled:
+        closes_at = now + timedelta(minutes=settings.tip_window_minutes)
+        lines.append(
+            f"💐 想随礼的同事：/随礼 金额（最多 {settings.tip_max_amount}，"
+            f"截止 {closes_at.strftime('%H:%M')}）"
+        )
+    template = settings.greet_template or _DEFAULT_BIRTHDAY_GREET_LINE
+    lines.append(template.replace("{寿星}", names))
+    return "\n".join(lines)
+
 
 
 def _hide_and_seek_settings(record: HideAndSeekSettingsRecord) -> HideAndSeekSettings:
