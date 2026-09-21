@@ -1953,6 +1953,89 @@ def create_app(
             scope="random-event-settings",
         )
 
+    @app.get("/api/game/birthday/settings")
+    def birthday_settings(_: Annotated[None, Depends(authorize)]) -> dict:
+        return {
+            **_relay_core(core.get_birthday_settings),
+            "version": repository.config_version(),
+        }
+
+    @app.patch("/api/game/birthday/settings")
+    def set_birthday_settings(
+        request: dict,
+        identity: Annotated[AdminIdentity, Depends(authorize)],
+        idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+        if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+    ) -> JSONResponse:
+        required = (
+            "enabled",
+            "greet_time",
+            "preview_enabled",
+            "preview_time",
+            "gift_amount",
+            "same_day_backfill",
+            "edit_limit_per_year",
+            "checkin_multiplier",
+            "shop_discount_percent",
+            "lottery_free_tickets",
+            "event_reward_bonus_percent",
+            "tips_enabled",
+            "tip_max_amount",
+            "tip_window_minutes",
+            "anniversary_enabled",
+            "greet_template",
+            "preview_template",
+            "tips_summary_template",
+        )
+        if not all(key in request for key in required):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid settings")
+        return versioned_configuration_response(
+            identity,
+            idempotency_key,
+            if_match,
+            lambda: _relay_core(
+                lambda: core.set_birthday_settings(
+                    {key: request[key] for key in required}
+                )
+            ),
+            scope="birthday-settings",
+        )
+
+    @app.get("/api/game/birthday/members")
+    def birthday_members(_: Annotated[None, Depends(authorize)]) -> list[dict]:
+        return _relay_core(core.list_birthday_members)
+
+    @app.post("/api/game/birthday/greet")
+    def greet_birthday(
+        request: dict,
+        _: Annotated[None, Depends(authorize)],
+    ) -> dict:
+        return _relay_core(lambda: core.greet_birthday(request))
+
+    @app.patch("/api/game/birthday/groups/{group_id}")
+    def set_group_birthdays(
+        group_id: str,
+        request: dict,
+        identity: Annotated[AdminIdentity, Depends(authorize)],
+        idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+        if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+    ) -> JSONResponse:
+        required = ("birthdays_enabled", "now")
+        if not all(key in request for key in required):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid settings")
+        return versioned_configuration_response(
+            identity,
+            idempotency_key,
+            if_match,
+            lambda: _relay_core(
+                lambda: core.set_group_birthdays(
+                    group_id, {key: request[key] for key in required}
+                )
+            ),
+            scope="group-birthdays",
+        )
+
+
     @app.get("/api/game/hide-and-seek/settings")
     def hide_and_seek_settings(_: Annotated[None, Depends(authorize)]) -> dict:
         return {

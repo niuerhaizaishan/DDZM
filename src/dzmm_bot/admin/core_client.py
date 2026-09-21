@@ -255,6 +255,11 @@ class AdminCorePort(Protocol):
     def get_hide_and_seek_settings(self) -> dict: ...
 
     def set_hide_and_seek_settings(self, settings: dict) -> dict: ...
+    def get_birthday_settings(self) -> dict: ...
+    def set_birthday_settings(self, settings: dict) -> dict: ...
+    def list_birthday_members(self) -> list[dict]: ...
+    def greet_birthday(self, payload: dict) -> dict: ...
+    def set_group_birthdays(self, group_id: str, payload: dict) -> dict: ...
 
     def get_memory_assessment_settings(self) -> dict: ...
 
@@ -909,6 +914,32 @@ class CoreClient:
         )
         response.raise_for_status()
         return response.json()
+
+    def get_birthday_settings(self) -> dict:
+        return self._get("/internal/game/birthday/settings")
+
+    def set_birthday_settings(self, settings: dict) -> dict:
+        response = self._client.patch(
+            "/internal/game/birthday/settings", json=settings
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def list_birthday_members(self) -> list[dict]:
+        return self._get("/internal/game/birthday/members")
+
+    def greet_birthday(self, payload: dict) -> dict:
+        response = self._client.post("/internal/game/birthday/greet", json=payload)
+        response.raise_for_status()
+        return response.json()
+
+    def set_group_birthdays(self, group_id: str, payload: dict) -> dict:
+        response = self._client.patch(
+            f"/internal/group-chats/{group_id}", json=payload
+        )
+        response.raise_for_status()
+        return response.json()
+
 
     def get_hide_and_seek_settings(self) -> dict:
         return self._get("/internal/game/hide-and-seek/settings")

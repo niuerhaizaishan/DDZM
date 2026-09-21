@@ -100,6 +100,7 @@ const pageContext = {
   overview: {crumb: "运营概览", title: "机器人运行状态", description: "查看服务、浏览器和人工登录状态。"},
   events: {crumb: "游戏运营 / 随机事件", title: "随机事件运营", description: "安排今日场次，管理场景、角色席位与剧情事件。"},
   "hide-and-seek": {crumb: "游戏运营 / 躲猫猫", title: "躲猫猫运营", description: "管理单人躲猫猫的经济规则与可用躲藏地点。"},
+  birthday: {crumb: "游戏运营 / 生日祝福", title: "生日祝福运营", description: "配置生日祝福、礼金、随礼与寿星特权，并查看生日名单。"},
   "memory-assessment": {crumb: "游戏运营 / 记忆考核", title: "记忆考核运营", description: "配置单人挑战与双人对战的难度、奖池和限制。"},
   undercover: {crumb: "游戏运营 / 谁是卧底", title: "谁是卧底运营", description: "查看公开对局进度，并维护多人推理局的基础规则。"},
   "blame-bomb": {crumb: "游戏运营 / 甩锅游戏", title: "甩锅游戏运营", description: "管理事故卡、逐人数时长规则和当前公开对局。"},
@@ -2203,6 +2204,127 @@ function showView(view) {
   }
 }
 
+let birthdaySettings = null;
+
+async function loadBirthday() {
+  const [settings, members, groups] = await Promise.all([
+    requestGame("/api/game/birthday/settings"),
+    requestGame("/api/game/birthday/members"),
+    requestGame("/api/group-chats", {cache: "no-store"}),
+  ]);
+  birthdaySettings = settings;
+  renderBirthdayPanel(settings, members, groups);
+}
+
+function birthdayNumberField(id, label, value, min, max) {
+  return `<label>${label}<input id="${id}" type="number" min="${min}" max="${max}" value="${value}"></label>`;
+}
+
+function birthdayFlagField(id, label, checked) {
+  return `<label><input id="${id}" type="checkbox"${checked ? " checked" : ""}>${label}</label>`;
+}
+
+function renderBirthdayPanel(settings, members, groups) {
+  const panel = document.querySelector("#birthday-panel");
+  if (!panel) return;
+  const groupSwitches = groups.map((group) =>
+    `<label><input data-birthday-group="${group.id}" type="checkbox"${group.birthdays_enabled ? " checked" : ""}>${escapeHtml(group.name)}</label>`
+  ).join("");
+  const rows = members.map((member) => {
+    const date = member.month === null ? '<span class="muted">未登记</span>' : `${member.month} 月 ${member.day} 日${member.is_today ? " 🎂" : ""}`;
+    const visibility = member.visibility === "private" ? "不公开" : member.visibility === "public" ? "公开" : "—";
+    return `<tr><td>${escapeHtml(member.display_name)}</td><td>${member.employee_number}</td><td>${date}</td><td>${visibility}</td><td><button class="secondary" data-birthday-dry="${member.platform_id}" type="button">试跑</button> <button class="secondary" data-birthday-greet="${member.platform_id}" type="button">补发</button></td></tr>`;
+  }).join("") || '<tr><td colspan="5" class="muted">还没有员工。</td></tr>';
+  panel.innerHTML = `
+    <div class="panel-heading"><div><h2>生日祝福</h2><p class="muted">总开关默认关闭；群开关默认开启。随礼窗口填 0 表示一直有效到当天 24:00。</p></div><div class="command-actions"><button id="birthday-save" class="primary" type="button">保存生日设置</button></div></div>
+    <div class="event-input-grid">${birthdayFlagField("birthday-enabled", "开启生日祝福", settings.enabled)}${birthdayFlagField("birthday-preview-enabled", "前一天预告", settings.preview_enabled)}${birthdayFlagField("birthday-backfill", "当天补发", settings.same_day_backfill)}</div>
+    <div class="event-input-grid">${birthdayFlagField("birthday-tips-enabled", "允许随礼", settings.tips_enabled)}${birthdayFlagField("birthday-anniversary-enabled", "入职周年", settings.anniversary_enabled)}</div>
+    <div class="event-input-grid"><label>祝福时刻<input id="birthday-greet-time" type="time" value="${escapeHtml(settings.greet_time)}"></label><label>预告时刻<input id="birthday-preview-time" type="time" value="${escapeHtml(settings.preview_time)}"></label></div>
+    <div class="event-input-grid">${birthdayNumberField("birthday-gift", "生日礼金", settings.gift_amount, 0, 999)}${birthdayNumberField("birthday-free-tickets", "免单注数", settings.lottery_free_tickets, 0, 20)}${birthdayNumberField("birthday-discount", "商店折扣(%)", settings.shop_discount_percent, 1, 100)}</div>
+    <div class="event-input-grid">${birthdayNumberField("birthday-checkin", "打卡倍率", settings.checkin_multiplier, 1, 10)}${birthdayNumberField("birthday-bonus", "事件奖励加成(%)", settings.event_reward_bonus_percent, 0, 500)}${birthdayNumberField("birthday-tip-max", "随礼单次上限", settings.tip_max_amount, 1, 999)}${birthdayNumberField("birthday-tip-window", "随礼窗口(分钟，0=到24:00)", settings.tip_window_minutes, 0, 1440)}</div>
+    <div class="event-input-grid"><label>祝福语（可用 {寿星}）<textarea id="birthday-greet-template" rows="2">${escapeHtml(settings.greet_template)}</textarea></label><label>预告文案<textarea id="birthday-preview-template" rows="2">${escapeHtml(settings.preview_template)}</textarea></label><label>随礼汇总<textarea id="birthday-tips-template" rows="2">${escapeHtml(settings.tips_summary_template)}</textarea></label></div>
+    <div class="panel-heading"><div><h2>群开关</h2><p class="muted">只有开着的群才收生日公告与预告；礼金、特权与随礼记录始终全公司一份。</p></div></div>
+    <div class="event-input-grid">${groupSwitches}</div>
+    <div class="panel-heading"><div><h2>生日名单</h2><p class="muted">试跑只渲染文案，不发钱、不公告；补发会真发礼金并公告。</p></div></div>
+    <table class="data-table"><thead><tr><th>姓名</th><th>工号</th><th>生日</th><th>可见性</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table>
+    <pre id="birthday-preview-output" class="muted"></pre>`;
+  document.querySelector("#birthday-save").addEventListener("click", saveBirthdaySettings);
+  for (const button of panel.querySelectorAll("[data-birthday-dry]")) {
+    button.addEventListener("click", () => previewBirthdayGreeting(button.dataset.birthdayDry, true));
+  }
+  for (const button of panel.querySelectorAll("[data-birthday-greet]")) {
+    button.addEventListener("click", () => previewBirthdayGreeting(button.dataset.birthdayGreet, false));
+  }
+  for (const toggle of panel.querySelectorAll("[data-birthday-group]")) {
+    toggle.addEventListener("change", () => toggleGroupBirthday(toggle.dataset.birthdayGroup, toggle.checked));
+  }
+}
+
+async function saveBirthdaySettings() {
+  const button = document.querySelector("#birthday-save");
+  const payload = {
+    enabled: document.querySelector("#birthday-enabled").checked,
+    preview_enabled: document.querySelector("#birthday-preview-enabled").checked,
+    same_day_backfill: document.querySelector("#birthday-backfill").checked,
+    tips_enabled: document.querySelector("#birthday-tips-enabled").checked,
+    anniversary_enabled: document.querySelector("#birthday-anniversary-enabled").checked,
+    greet_time: document.querySelector("#birthday-greet-time").value,
+    preview_time: document.querySelector("#birthday-preview-time").value,
+    gift_amount: Number(document.querySelector("#birthday-gift").value),
+    lottery_free_tickets: Number(document.querySelector("#birthday-free-tickets").value),
+    shop_discount_percent: Number(document.querySelector("#birthday-discount").value),
+    checkin_multiplier: Number(document.querySelector("#birthday-checkin").value),
+    event_reward_bonus_percent: Number(document.querySelector("#birthday-bonus").value),
+    tip_max_amount: Number(document.querySelector("#birthday-tip-max").value),
+    tip_window_minutes: Number(document.querySelector("#birthday-tip-window").value),
+    edit_limit_per_year: birthdaySettings ? birthdaySettings.edit_limit_per_year : 1,
+    greet_template: document.querySelector("#birthday-greet-template").value,
+    preview_template: document.querySelector("#birthday-preview-template").value,
+    tips_summary_template: document.querySelector("#birthday-tips-template").value,
+  };
+  try {
+    await runMutation(button, "保存中…", async () => {
+      birthdaySettings = await requestGame("/api/game/birthday/settings", {
+        method: "PATCH",
+        headers: {"Content-Type": "application/json", ...configurationHeaders()},
+        body: JSON.stringify(payload),
+      });
+      configurationVersion = birthdaySettings.version;
+    });
+    setResult("生日设置已保存", "success");
+  } catch (error) {
+    setResult(`保存失败（${error.message}）`, "error");
+  }
+}
+
+async function previewBirthdayGreeting(platformId, dryRun) {
+  const output = document.querySelector("#birthday-preview-output");
+  if (!dryRun && !window.confirm("真的给这位员工补发生日祝福吗？会发礼金并公告。")) return;
+  try {
+    const result = await requestGame("/api/game/birthday/greet", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({platform_id: platformId, dry_run: dryRun, now: new Date().toISOString()}),
+    });
+    if (output) output.textContent = result.text;
+    setResult(dryRun ? "试跑完成（未发送）" : "已补发生日祝福", "success");
+  } catch (error) {
+    setResult(`操作失败（${error.message}）`, "error");
+  }
+}
+
+async function toggleGroupBirthday(groupId, enabled) {
+  try {
+    await requestGame(`/api/game/birthday/groups/${groupId}`, {
+      method: "PATCH",
+      headers: {"Content-Type": "application/json", ...configurationHeaders()},
+      body: JSON.stringify({birthdays_enabled: enabled, now: new Date().toISOString()}),
+    });
+    setResult(enabled ? "该群已开启生日祝福" : "该群已关闭生日祝福", "success");
+  } catch (error) {
+    setResult(`保存失败（${error.message}）`, "error");
+  }
+}
 async function loadGameView(view) {
   setPageContext(view);
   showView(view);
@@ -2214,6 +2336,7 @@ async function loadGameView(view) {
     }
     if (view === "events") return loadRandomEvents();
     if (view === "hide-and-seek") return loadHideAndSeek();
+    if (view === "birthday") return loadBirthday();
     if (view === "memory-assessment") return loadMemoryAssessment();
     if (view === "undercover") return loadUndercover();
     if (view === "blame-bomb") return loadBlameBomb();

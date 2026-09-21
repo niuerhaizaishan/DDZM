@@ -1504,6 +1504,7 @@ class SetBirthdaySettingsRequest(BirthdaySettingsResponse):
 
 
 class BirthdayMemberResponse(ApiModel):
+    platform_id: str
     display_name: str
     employee_number: int
     month: int | None

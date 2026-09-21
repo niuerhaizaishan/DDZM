@@ -957,6 +957,7 @@ class MonthBirthdayList:
 
 @dataclass(frozen=True)
 class BirthdayMemberRow:
+    platform_id: str
     display_name: str
     employee_number: int
     month: int | None
@@ -20980,6 +20981,7 @@ class CoreRepository:
             record = records.get(user.id)
             rows.append(
                 BirthdayMemberRow(
+                    platform_id=user.platform_id,
                     display_name=user.display_name,
                     employee_number=user.employee_number,
                     month=None if record is None else record.month,

@@ -2630,6 +2630,7 @@ def create_app(
         now = datetime.now(ZoneInfo("Asia/Shanghai")) if now is None else now
         return [
             BirthdayMemberResponse(
+                platform_id=row.platform_id,
                 display_name=row.display_name,
                 employee_number=row.employee_number,
                 month=row.month,
