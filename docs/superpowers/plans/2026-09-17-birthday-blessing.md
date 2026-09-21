@@ -286,6 +286,35 @@ python -m pytest -q -p no:cacheprovider tests/core/test_birthday.py tests/core/t
 ```
 （`PYTHONUTF8=1` 必需；长跑要 `timeoutMs >= 300000`。）
 
+### 迁移重编号清单（编号已定 `79`，等 PR #2 合并后执行）
+
+> **为什么现在不改**：本分支基于 `4a65a64`，仓库里只有到 `20260915_75` 的迁移；`20260915_76`–`78` 在「随机事件投票」分支（PR #2）上。若现在把本迁移的 `down_revision` 指向 `20260915_78`，alembic 会报 `Revision 20260915_78 not found`，`tests/deploy/test_birthday_migration.py` 的 8 个用例会全红。**编号已定死为 `20260917_79`**，落地只需在 PR #2 合并后执行下面三步。
+
+```bash
+# 1) 拉最新 main 并 rebase（此时 76/77/78 三个迁移会一起进来）
+git fetch origin && git rebase origin/main
+
+# 2) 改名：20260917_76_birthday_blessing.py → 20260917_79_birthday_blessing.py
+git mv migrations/versions/20260917_76_birthday_blessing.py \
+       migrations/versions/20260917_79_birthday_blessing.py
+
+# 3) 改两行
+#    revision: str = "20260917_76"        → "20260917_79"
+#    down_revision: str | None = "20260915_75" → "20260915_78"
+
+# 4) 验证单头 + 跑迁移与生日用例
+python -c "from alembic.config import Config; from alembic.script import ScriptDirectory; \
+cfg=Config('alembic.ini'); cfg.set_main_option('script_location','migrations'); \
+print(ScriptDirectory.from_config(cfg).get_heads())"   # 期望 ['20260917_79']
+python -m pytest -q tests/deploy/test_birthday_migration.py
+```
+
+> 反过来若**本分支先合并**，则由 PR #2 那边顺延重编号（它已有 76–78，改为 79–81 并把 `down_revision` 接到 `20260917_76`）。
+
+### 另一个今天就能用 79 的选项（堆叠 PR）
+
+把本分支改基到投票分支的 PR 提交上（`7968ebf`，即 PR #2 的 head），本分支就会有 76–78，可以立刻把生日迁移写成 79，并把 **PR #3 的目标分支改成 `feat/random-event-vote`**（堆叠 PR，等 #2 合并后 GitHub 会自动把 #3 转回 `main`）。代价：`git rebase --onto 7968ebf 4a65a64` 会在 `commands.py` / `repository.py` / `service.py` / `reply_templates.py` / `schema.py` / `api_models.py` / `app.py` / `admin.js` 这些两边都动过的文件上产生冲突，需要逐个手动解，**不建议在没必要时做**。
+
 ### 这个仓库的踩坑清单（实现时踩过，接手别重犯）
 
 1. **别用"插到 `class Xxx:` 之前"当锚点**：如果那个类上面有 `@dataclass` 装饰器，插入点会落在装饰器与类之间，导致你的类被装饰两次（`TypeError: Cannot overwrite attribute __setattr__`）、原类丢掉装饰器。改用"插到上一个类的最后一个字段之后"或"插到下一个 `def` 之前"。
@@ -295,4 +324,3 @@ python -m pytest -q -p no:cacheprovider tests/core/test_birthday.py tests/core/t
 5. **改了指令清单要同步黄金断言**：`tests/core/test_app.py::test_game_management_lists_commands_employees_and_shop_items` 里那个大集合，每加一条指令都要补。
 6. **`_RANDOM_EVENT_INDEPENDENT_COMMANDS` 那条 line 没有尾逗号**：往里追加会隐式拼成一个字符串（`/当前游戏/随礼`），追加时记得补逗号。
 7. **新指令四处白名单**：`commands._COMMANDS`、`repository._COMMAND_DEFINITIONS`、`reply_templates.TEMPLATE_DEFINITIONS`、`repository._RANDOM_EVENT_CONFIGURABLE_COMMANDS`，以及 `admin/static/admin.js` 的 `randomEventCommandOptions`（漏了就"活动期间用不了"或"管理员存一次规则就被清掉"）。
-
