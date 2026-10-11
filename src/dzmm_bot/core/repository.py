@@ -160,6 +160,8 @@ from .liar_dice import (
     roll_wild,
     wild_note,
 )
+from .liar_dice import end_message as liar_dice_end_message
+from .liar_dice import statistic_lines as liar_dice_statistic_lines
 from .shop_cards import item_by_key
 from .shop_cards import (
     SYSTEM_SHOP_ITEMS,
@@ -13129,6 +13131,9 @@ class CoreRepository(ShopManagementMixin, HonorsMixin):
                     message = render_template(definition, template, context)
                 except ValueError:
                     message = render_template(definition, definition.default, context)
+                if game_type == "liar_dice":
+                    # 大话骰子：管理员结束后同样把本局战绩发到群里
+                    message = self._liar_dice_end_message(session, game_id, message)
                 group = session.get(GroupChatRecord, group_chat_id)
                 self.enqueue_system_outbound(
                     message,
@@ -14138,11 +14143,14 @@ class CoreRepository(ShopManagementMixin, HonorsMixin):
                     player.seat_number = None
                     remaining = self._liar_dice_players(session, game.id, ("active",))
                     if game.state != "signup" and len(remaining) < 2:
+                        statistics = self._liar_dice_game_statistics(
+                            session, (game.id,)
+                        )
                         self._finish_liar_dice_locked(
                             session, game, "completed", "not_enough_players", now
                         )
                         return self._liar_dice_result_locked(
-                            session, game, "completed"
+                            session, game, "completed", statistics=statistics
                         )
                     return self._liar_dice_result_locked(session, game, "left_game")
                 player.left_at = now
@@ -14421,18 +14429,18 @@ class CoreRepository(ShopManagementMixin, HonorsMixin):
                 self._promote_liar_dice_joiners_locked(session, game.id)
                 players = self._liar_dice_players(session, game.id, ("active",))
                 if len(players) < 2:
+                    statistics = self._liar_dice_game_statistics(session, (game.id,))
                     self._finish_liar_dice_locked(
                         session, game, "completed", "not_enough_players", now
                     )
-                    return self._liar_dice_result_locked(session, game, "completed")
-                # 连续轮转：从开牌者（current_seat）的下一位开始新一轮
-                start_seat = self._liar_dice_next_active_seat(
-                    players, game.current_seat
-                )
-                if start_seat is None:
-                    start_seat = 1
+                    return self._liar_dice_result_locked(
+                        session, game, "completed", statistics=statistics
+                    )
+                # 每轮重新随机座位（1..N 重编号），首叫固定为 1号：
+                # 固定轮转会让同一对相邻玩家整局反复互压，也避免超时留下的大号座位
+                self._shuffle_liar_dice_seats(session, game)
                 game.timeout_streak = 0
-                self._liar_dice_deal_round(session, game, now, start_seat)
+                self._liar_dice_deal_round(session, game, now, start_seat=1)
                 return self._liar_dice_result_locked(session, game, "dealing")
 
     def liar_dice_end(
@@ -14649,6 +14657,31 @@ class CoreRepository(ShopManagementMixin, HonorsMixin):
             penalty_leaders=leaders(penalties),
             catch_leaders=leaders(catches),
         )
+
+    def _liar_dice_end_message(
+        self, session: Session, game_id: UUID, reason: str
+    ) -> str:
+        """结束公告：原因 + 本局战绩 + 指引，自动结束与手动结束同一形状。"""
+        return liar_dice_end_message(
+            reason, self._liar_dice_game_statistics(session, (game_id,))
+        )
+
+    def _shuffle_liar_dice_seats(
+        self, session: Session, game: LiarDiceGameRecord
+    ) -> None:
+        """每轮重新随机座位（1..N 重编号）：固定轮转会让同一对相邻玩家反复互压。
+
+        也让「超时移到队尾」产生的大号座位（4号/5号）在下一轮归位。
+        """
+        players = self._liar_dice_players(session, game.id, ("active",))
+        order = list(range(len(players)))
+        self._liar_dice_random.shuffle(order)
+        # 先清位再赋号：直接改号会撞 (game_id, seat_number) 唯一约束
+        for player, _ in players:
+            player.seat_number = None
+        session.flush()
+        for seat, index in enumerate(order, start=1):
+            players[index][0].seat_number = seat
 
     # ------------------------------------------------------------------
     # 真心换真心：群轮流问答游戏
@@ -16684,7 +16717,11 @@ class CoreRepository(ShopManagementMixin, HonorsMixin):
             return messages
         self._finish_liar_dice_locked(session, game, "cancelled", "dealing_timeout", now)
         messages.append(
-            "⚠️【大话骰子】骰子私聊没送达，本局已取消，可重新发 /大话骰子 开新局。"
+            self._liar_dice_end_message(
+                session,
+                game.id,
+                "⚠️【大话骰子】骰子私聊没送达，本局已取消，可重新发 /大话骰子 开新局。",
+            )
         )
         return messages
 
@@ -16707,9 +16744,12 @@ class CoreRepository(ShopManagementMixin, HonorsMixin):
             return messages
         self._finish_liar_dice_locked(session, game, "completed", "continue_expired", now)
         messages.append(
-            "⏰【大话骰子】本轮结束后 "
-            f"{settings.continue_timeout_minutes} 分钟没人 /继续，本局已自动结束。"
-            "\n发 /大话骰子数据 可看本局战绩。"
+            self._liar_dice_end_message(
+                session,
+                game.id,
+                "⏰【大话骰子】本轮结束后 "
+                f"{settings.continue_timeout_minutes} 分钟没人 /继续，本局已自动结束。",
+            )
         )
         return messages
 
@@ -16729,9 +16769,13 @@ class CoreRepository(ShopManagementMixin, HonorsMixin):
                             session, game, "cancelled", "signup_expired", now
                         )
                         messages.append(
-                            "【大话骰子】报名 "
-                            f"{self._liar_dice_settings_row(session, PRIMARY_GROUP_CHAT_ID).signup_timeout_minutes}"
-                            " 分钟内没人 /开始，本局已自动取消。"
+                            self._liar_dice_end_message(
+                                session,
+                                game.id,
+                                "【大话骰子】报名 "
+                                f"{self._liar_dice_settings_row(session, PRIMARY_GROUP_CHAT_ID).signup_timeout_minutes}"
+                                " 分钟内没人 /开始，本局已自动取消。",
+                            )
                         )
                     return messages
                 if game.state == "dealing":

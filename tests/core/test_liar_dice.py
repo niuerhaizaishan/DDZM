@@ -254,22 +254,24 @@ def test_liar_dice_full_flow():
     _receive(service, "m9", "user-0", "/大话骰子数据", now)
     reply = _latest_reply(factory)
     assert "大话骰子数据" in reply
-    assert "本局：" in reply and "总战绩：" in reply
+    assert "本局：" in reply and "总历史数据：" in reply
 
-    # 第 2 轮：连续轮转——开牌者是 2号，下家本应是 3号，但 3号已退出，回绕到 1号
+    # 第 2 轮：每轮重新随机座位（1..N 重编号），首叫固定 1号；洗牌后 1号 可能换人
     _receive(service, "m10", "user-0", "/继续", now)
     assert "第 2 轮" in _latest_reply(factory)
     _flush_all_outbound(repository, now)
     assert _dice_game(repository).state == "calling"
     assert _dice_game(repository).current_seat == 1
     assert len(_hand_texts(factory, since_round=2)) == 2
+    round2 = _seat_map(factory)
+    assert sorted(round2) == [1, 2]
 
-    _receive(service, "m11", seat1, "2个1", now)
+    _receive(service, "m11", round2[1], "2个1", now)
     assert "叫 2个1" in _latest_reply(factory)
-    _receive(service, "m12", seat2, "/开骰", now)
+    _receive(service, "m12", round2[2], "/开骰", now)
     assert _dice_game(repository).state == "round_end"
 
-    # 已退出者重新加入：下一轮排到末尾（座位 3），并成为轮转起点
+    # 已退出者重新加入：下一轮被洗进随机座位，首叫仍是 1号
     _receive(service, "m13", seat3, "/加入", now)
     assert "下一轮开骰时参战" in _latest_reply(factory)
     _receive(service, "m14", "user-0", "/继续", now)
@@ -277,12 +279,14 @@ def test_liar_dice_full_flow():
     _flush_all_outbound(repository, now)
     game = _dice_game(repository)
     assert game.state == "calling"
-    assert game.current_seat == 3
+    assert game.current_seat == 1
     assert len(_hand_texts(factory, since_round=3)) == 3
+    round3 = _seat_map(factory)
+    assert sorted(round3) == [1, 2, 3]  # 每轮重编号：不会留下超时产生的大号座位
 
-    _receive(service, "m15", seat3, "3个1", now)
+    _receive(service, "m15", round3[1], "3个1", now)
     assert "叫 3个1" in _latest_reply(factory)
-    _receive(service, "m16", seat1, "/开骰", now)
+    _receive(service, "m16", round3[2], "/开骰", now)
     assert _dice_game(repository).state == "round_end"
 
     # 只剩 1 人时退出 → 直接散局
@@ -319,7 +323,7 @@ def test_liar_dice_career_statistics_accumulate_across_games():
     _seed_direct_chats(factory, now)
 
     def career_opens_total(reply):
-        career = reply.split("总战绩：", 1)[1]
+        career = reply.split("总历史数据：", 1)[1]
         opens = career.split("开牌次数最多：", 1)[1].splitlines()[0]
         return sum(int(count) for count in re.findall(r"（(\d+) 次）", opens))
 
@@ -342,7 +346,7 @@ def test_liar_dice_career_statistics_accumulate_across_games():
     assert "本局结束" in _latest_reply(factory)
     _receive(service, "stat1", "user-0", "/大话骰子数据", now)
     reply = _latest_reply(factory)
-    assert "总战绩：" in reply
+    assert "总历史数据：" in reply
     assert "本局：" not in reply
     assert career_opens_total(reply) == 1
 
@@ -455,7 +459,11 @@ def test_liar_dice_signup_timeout_notice_states_the_deadline():
     _receive(service, "m1", "user-0", "/大话骰子", now)
     group_chat_id = _dice_game(repository).group_chat_id
     messages = repository.run_liar_dice_jobs(now + timedelta(minutes=6), group_chat_id)
-    assert messages == ["【大话骰子】报名 5 分钟内没人 /开始，本局已自动取消。"]
+    _assert_end_message(
+        messages,
+        "【大话骰子】报名 5 分钟内没人 /开始，本局已自动取消。",
+        has_report=False,
+    )
     assert _dice_game(repository) is None
 
 
@@ -485,8 +493,11 @@ def test_liar_dice_round_end_expires_with_notice():
     messages = repository.run_liar_dice_jobs(
         now + timedelta(minutes=5), group_chat_id
     )
-    assert len(messages) == 1
-    assert "本轮结束后 5 分钟没人 /继续，本局已自动结束" in messages[0]
+    _assert_end_message(
+        messages,
+        "⏰【大话骰子】本轮结束后 5 分钟没人 /继续，本局已自动结束。",
+        has_report=True,
+    )
     assert _dice_game(repository) is None
     with factory() as session:
         from dzmm_bot.core.schema import LiarDiceGameRecord
@@ -557,9 +568,11 @@ def test_liar_dice_dealing_timeout_cancels_the_game():
     messages = repository.run_liar_dice_jobs(
         now + timedelta(seconds=180), group_chat_id
     )
-    assert messages == [
-        "⚠️【大话骰子】骰子私聊没送达，本局已取消，可重新发 /大话骰子 开新局。"
-    ]
+    _assert_end_message(
+        messages,
+        "⚠️【大话骰子】骰子私聊没送达，本局已取消，可重新发 /大话骰子 开新局。",
+        has_report=False,
+    )
     assert _dice_game(repository) is None
 
 
@@ -568,6 +581,26 @@ def _outbound_count(factory) -> int:
 
     with factory() as session:
         return len(session.scalars(select(OutboundRecord)).all())
+
+
+def _assert_end_message(messages, reason, *, has_report: bool) -> str:
+    """结束公告统一形状：原因 + 本局战绩块 + 指引（自动结束与手动结束同一形状）。"""
+    assert len(messages) == 1
+    text = messages[0]
+    assert text.startswith(reason)
+    if has_report:
+        assert "【本局战绩】" in text
+        for label in (
+            "开牌次数最多",
+            "虚张声势败露最多",
+            "拆穿他人最多",
+            "受罚次数最多",
+        ):
+            assert label in text
+    else:
+        assert "本局无对局数据。" in text
+    assert text.endswith("发 /大话骰子数据 可看总历史数据。")
+    return text
 
 
 def _to_round_end(service, repository, factory, now):
@@ -633,7 +666,7 @@ def test_liar_dice_call_without_any_game_stays_silent():
 
 
 def test_liar_dice_admin_force_end_announces_in_the_group():
-    """锁定既有行为：管理端强制结束会给群里发公告（函数末尾统一发 /结束游戏 admin_forced 模板）。"""
+    """管理端强制结束：一条消息里既有结束说明，也带本局战绩（自动/手动/管理端同一形状）。"""
     service, repository, factory = _service(liar_dice_random=Random(11))
     now = datetime(2026, 10, 2, 16, 0, tzinfo=BEIJING)
     repository.bootstrap_primary_group(
@@ -647,7 +680,10 @@ def test_liar_dice_admin_force_end_announces_in_the_group():
 
     assert repository.force_end_gameplay("liar_dice", game.id, now, game.group_chat_id)
     assert _outbound_count(factory) == before + 1
-    assert "管理员已强制结束当前游戏" in _latest_reply(factory)
+    reply = _latest_reply(factory)
+    assert "管理员已强制结束当前游戏" in reply
+    assert "【本局战绩】" in reply
+    assert reply.endswith("发 /大话骰子数据 可看总历史数据。")
     assert _dice_game(repository) is None
 
 
@@ -769,10 +805,11 @@ def test_liar_dice_continue_timeout_setting_governs_the_jobs():
 
     # 7 分钟时巡检：自动收尾并公告
     messages = repository.run_liar_dice_jobs(now + timedelta(minutes=7))
-    assert messages == [
-        "⏰【大话骰子】本轮结束后 7 分钟没人 /继续，本局已自动结束。"
-        "\n发 /大话骰子数据 可看本局战绩。"
-    ]
+    _assert_end_message(
+        messages,
+        "⏰【大话骰子】本轮结束后 7 分钟没人 /继续，本局已自动结束。",
+        has_report=True,
+    )
     assert _dice_game(repository) is None
 
 
@@ -792,6 +829,115 @@ def test_liar_dice_signup_timeout_setting_governs_the_jobs():
     assert game.signup_deadline == now + timedelta(minutes=7)
     assert repository.run_liar_dice_jobs(now + timedelta(minutes=6)) == []
     assert _dice_game(repository) is not None
-    assert repository.run_liar_dice_jobs(now + timedelta(minutes=7)) == [
-        "【大话骰子】报名 7 分钟内没人 /开始，本局已自动取消。"
-    ]
+    _assert_end_message(
+        repository.run_liar_dice_jobs(now + timedelta(minutes=7)),
+        "【大话骰子】报名 7 分钟内没人 /开始，本局已自动取消。",
+        has_report=False,
+    )
+
+
+def test_liar_dice_reshuffles_seats_every_round():
+    """每轮重新随机座位：座位永远是 1..N，且首叫者不会整局固定同一人。"""
+    service, repository, factory = _service(liar_dice_random=Random(11))
+    now = datetime(2026, 10, 2, 16, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=group-main", now
+    )
+    _join_employees(service, now)
+    _seed_direct_chats(factory, now)
+    _to_round_end(service, repository, factory, now)
+
+    first_callers = [_seat_map(factory)[1]]
+    for index in range(4):
+        _receive(service, f"c{index}", "user-0", "/继续", now)
+        _flush_all_outbound(repository, now)
+        seats = _seat_map(factory)
+        assert sorted(seats) == [1, 2, 3]  # 每轮重编号，不留大号座位
+        first_callers.append(seats[1])
+        assert _dice_game(repository).current_seat == 1
+        _receive(service, f"d{index}", seats[1], "3个3", now)
+        _receive(service, f"e{index}", seats[2], "/开骰", now)
+        assert _dice_game(repository).state == "round_end"
+
+    assert len(set(first_callers)) >= 2  # 洗牌生效：首叫者不会永远同一人
+
+
+def test_liar_dice_timeout_tail_seat_is_renumbered_next_round():
+    """超时移到队尾会出现 4号/5号；下一轮重洗后座位回到 1..N。"""
+    service, repository, factory = _service(liar_dice_random=Random(11))
+    now = datetime(2026, 10, 2, 16, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=group-main", now
+    )
+    _join_employees(service, now)
+    _seed_direct_chats(factory, now)
+    _receive(service, "m1", "user-0", "/大话骰子", now)
+    _receive(service, "m2", "user-1", "/加入", now)
+    _receive(service, "m3", "user-2", "/加入", now)
+    _receive(service, "m4", "user-0", "/开始", now)
+    _flush_all_outbound(repository, now)
+
+    # 1号 不动 → 回合超时被推到队尾（座位 4）
+    messages = repository.run_liar_dice_jobs(now + timedelta(seconds=120))
+    assert any("超时，自动跳到最后" in text for text in messages)
+    assert 4 in _seat_map(factory)
+
+    seats = _seat_map(factory)
+    current = _dice_game(repository).current_seat
+    _receive(service, "m5", seats[current], "3个3", now)
+    _receive(
+        service, "m6", seats[sorted(s for s in seats if s != current)[0]], "/开骰", now
+    )
+    assert _dice_game(repository).state == "round_end"
+
+    _receive(service, "m7", "user-0", "/继续", now)
+    _flush_all_outbound(repository, now)
+    assert sorted(_seat_map(factory)) == [1, 2, 3]
+    assert _dice_game(repository).current_seat == 1
+
+
+def test_liar_dice_manual_end_posts_the_game_report():
+    service, repository, factory = _service(liar_dice_random=Random(11))
+    now = datetime(2026, 10, 2, 16, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=group-main", now
+    )
+    _join_employees(service, now)
+    _seed_direct_chats(factory, now)
+    _to_round_end(service, repository, factory, now)
+
+    _receive(service, "end", "user-0", "/结束游戏", now)
+    reply = _latest_reply(factory)
+    assert reply.startswith("【大话骰子】本局结束。")
+    assert "【本局战绩】" in reply
+    for label in (
+        "开牌次数最多",
+        "虚张声势败露最多",
+        "拆穿他人最多",
+        "受罚次数最多",
+    ):
+        assert label in reply
+    assert reply.endswith("发 /大话骰子数据 可看总历史数据。")
+
+
+def test_liar_dice_statistics_command_labels_current_and_career_only():
+    service, repository, factory = _service(liar_dice_random=Random(11))
+    now = datetime(2026, 10, 2, 16, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=group-main", now
+    )
+    _join_employees(service, now)
+    _seed_direct_chats(factory, now)
+    _to_round_end(service, repository, factory, now)
+
+    _receive(service, "s1", "user-0", "/大话骰子数据", now)
+    during = _latest_reply(factory)
+    assert "本局：" in during and "总历史数据：" in during
+    assert "上一局" not in during
+
+    _receive(service, "s2", "user-0", "/结束游戏", now)
+    _receive(service, "s3", "user-0", "/大话骰子数据", now)
+    after = _latest_reply(factory)
+    assert "本局：" not in after
+    assert "总历史数据：" in after
+    assert "上一局" not in after

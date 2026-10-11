@@ -38,9 +38,9 @@ WORKERS="dzmm-browser-worker dzmm-ai-worker dzmm-ai-memory-worker"
 # 期望哈希（对应分支 nuo/performance_ganize 的 HEAD；改代码后须同步更新，否则脚本会拒跑）
 declare -A WANT=(
   [core_schema.py]=684c40f8d5efdc8afce4433bdd597e879f2964535241e2616fec1883aeb35e20
-  [core_repository.py]=399ac16aba970bf2230e2a86f9b8237311e6f60ecfc4a5c0642e03d4da473276
-  [core_commands.py]=aec019397ddaba7e1f07dbce0fe129eb0b5191554e89c3a8101bc13ed9660f2b
-  [core_liar_dice.py]=d74b36d6a0229ea7dd11bf541f1d9c32a3ca00f3fd173de876ac16c5bbd61c89
+  [core_repository.py]=8963d5e4b57e194b3b1f328a731f797a6b23398feefad0d4f94e8fa58beea285
+  [core_commands.py]=a8ecacc6fb2a31cab48ef91bdd5081df43ce36fea12e6aa02c16fd581bf9309d
+  [core_liar_dice.py]=fe555ae6639917386664c399375d04cc0d695e5e853303d8edb6666ca6325f81
   [core_api_models.py]=8f3998ecb38d591850ad1ce880eb9d3f76f30945ddb5bce7ce0796711b04423d
   [core_app.py]=c7ba1e7023987dcf90c822832b441980357e7b5b221e5c1652eca60756c1d1f5
   [admin_app.py]=df77026a3803b92a231ca785fe1b686b8260be21317ecd327779da630fd7f4ea

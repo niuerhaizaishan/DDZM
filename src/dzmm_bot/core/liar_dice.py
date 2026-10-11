@@ -101,3 +101,45 @@ def parse_call(text: str) -> tuple[int, int] | None:
     if match is None:
         return None
     return int(match.group("count")), int(match.group("face"))
+
+
+LIAR_DICE_STATS_HINT = "发 /大话骰子数据 可看总历史数据。"
+LIAR_DICE_REPORT_TITLE = "【本局战绩】"
+LIAR_DICE_NO_REPORT_DATA = "本局无对局数据。"
+
+
+def statistic_lines(statistics) -> list[str]:
+    """四项领先者的渲染（命令输出与结束公告共用同一份文案）。"""
+
+    def line(label: str, leaders) -> str:
+        if not leaders:
+            return f"{label}：暂无"
+        return f"{label}：" + "、".join(
+            f"{name}（{count} 次）" for name, count in leaders
+        )
+
+    return [
+        line("开牌次数最多", statistics.opens_leaders),
+        line("虚张声势败露最多", statistics.bluff_caught_leaders),
+        line("拆穿他人最多", statistics.catch_leaders),
+        line("受罚次数最多", statistics.penalty_leaders),
+    ]
+
+
+def report_lines(statistics) -> list[str]:
+    """本局战绩块：有数据给标题 + 四行；零轮次的局（报名/发牌超时）只给一行说明。"""
+    if not any(
+        (
+            statistics.opens_leaders,
+            statistics.bluff_caught_leaders,
+            statistics.catch_leaders,
+            statistics.penalty_leaders,
+        )
+    ):
+        return [LIAR_DICE_NO_REPORT_DATA]
+    return [LIAR_DICE_REPORT_TITLE, *statistic_lines(statistics)]
+
+
+def end_message(reason: str, statistics) -> str:
+    """结束公告统一形状：原因 + 本局战绩 + 指引（自动结束与手动结束共用）。"""
+    return "\n".join((reason, *report_lines(statistics), LIAR_DICE_STATS_HINT))

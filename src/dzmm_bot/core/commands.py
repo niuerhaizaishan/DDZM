@@ -9,7 +9,11 @@ from dzmm_bot.runtime.contracts import InboundMessage
 from .group_games import GROUP_GAME_COMMANDS, GROUP_GAME_LABELS
 from .birthday import parse_visibility
 from .honors import honor_award_lines
-from .liar_dice import parse_call
+from .liar_dice import (
+    end_message as liar_dice_end_message,
+    parse_call,
+    statistic_lines as liar_dice_statistic_lines,
+)
 
 from .company_lottery import (
     ALL_TIERS,
@@ -1945,7 +1949,9 @@ class GroupCommandHandler:
                 "新骰子正在私聊发放，未收到的话稍后私聊发 /看骰。"
             )
         if result.status == "completed":
-            return "【大话骰子】剩余人数不足 2 人，本局结束。"
+            return liar_dice_end_message(
+                "【大话骰子】剩余人数不足 2 人，本局结束。", result.statistics
+            )
         return {
             "no_game": "当前没有大话骰子对局。",
             "not_joined": "请先用 /入职 名字 加入摸鱼公司。",
@@ -1964,7 +1970,9 @@ class GroupCommandHandler:
         if result.status == "leave_queued":
             return "已登记退出，本轮结束后生效。"
         if result.status == "completed":
-            return "【大话骰子】剩余人数不足 2 人，本局已结束。"
+            return liar_dice_end_message(
+                "【大话骰子】剩余人数不足 2 人，本局已结束。", result.statistics
+            )
         return {
             "no_game": "当前没有大话骰子对局。",
             "not_joined": "请先用 /入职 名字 加入摸鱼公司。",
@@ -1978,8 +1986,8 @@ class GroupCommandHandler:
             message.sender_platform_id, received_at, group_chat_id
         )
         if result.status == "completed":
-            return "【大话骰子】本局结束。\n" + self._liar_dice_statistics_message(
-                result.statistics
+            return liar_dice_end_message(
+                "【大话骰子】本局结束。", result.statistics
             )
         return {
             "no_game": "当前没有可结束的大话骰子局。",
@@ -2014,25 +2022,13 @@ class GroupCommandHandler:
         if report.current is not None:
             lines.append("本局：")
             lines.extend(self._liar_dice_statistic_lines(report.current))
-        lines.append("总战绩：")
+        lines.append("总历史数据：")
         lines.extend(self._liar_dice_statistic_lines(report.career))
         return "\n".join(lines)
 
     @staticmethod
     def _liar_dice_statistic_lines(statistics) -> list[str]:
-        def line(label, leaders) -> str:
-            if not leaders:
-                return f"{label}：暂无"
-            return f"{label}：" + "、".join(
-                f"{name}（{count} 次）" for name, count in leaders
-            )
-
-        return [
-            line("开牌次数最多", statistics.opens_leaders),
-            line("虚张声势败露最多", statistics.bluff_caught_leaders),
-            line("拆穿他人最多", statistics.catch_leaders),
-            line("受罚次数最多", statistics.penalty_leaders),
-        ]
+        return liar_dice_statistic_lines(statistics)
 
     @classmethod
     def _liar_dice_statistics_message(cls, statistics) -> str:
