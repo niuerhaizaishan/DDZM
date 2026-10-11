@@ -630,3 +630,22 @@ def test_liar_dice_call_without_any_game_stays_silent():
     before = _outbound_count(factory)
     _receive(service, "m1", "user-0", "3个4", now)
     assert _outbound_count(factory) == before
+
+
+def test_liar_dice_admin_force_end_announces_in_the_group():
+    """锁定既有行为：管理端强制结束会给群里发公告（函数末尾统一发 /结束游戏 admin_forced 模板）。"""
+    service, repository, factory = _service(liar_dice_random=Random(11))
+    now = datetime(2026, 10, 2, 16, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=group-main", now
+    )
+    _join_employees(service, now)
+    _seed_direct_chats(factory, now)
+    _to_round_end(service, repository, factory, now)
+    game = _dice_game(repository)
+    before = _outbound_count(factory)
+
+    assert repository.force_end_gameplay("liar_dice", game.id, now, game.group_chat_id)
+    assert _outbound_count(factory) == before + 1
+    assert "管理员已强制结束当前游戏" in _latest_reply(factory)
+    assert _dice_game(repository) is None
