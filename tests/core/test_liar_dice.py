@@ -941,3 +941,30 @@ def test_liar_dice_statistics_command_labels_current_and_career_only():
     assert "本局：" not in after
     assert "总历史数据：" in after
     assert "上一局" not in after
+
+
+def test_liar_dice_open_accepts_short_alias():
+    """/开 与 /开骰 等价：都走同一处理器（也验证 /开 在指令门控集里）。"""
+    service, repository, factory = _service(liar_dice_random=Random(11))
+    now = datetime(2026, 10, 2, 16, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=group-main", now
+    )
+    _join_employees(service, now)
+    _seed_direct_chats(factory, now)
+    _receive(service, "m1", "user-0", "/大话骰子", now)
+    _receive(service, "m2", "user-1", "/加入", now)
+    _receive(service, "m3", "user-2", "/加入", now)
+    _receive(service, "m4", "user-0", "/开始", now)
+    _flush_all_outbound(repository, now)
+    seats = _seat_map(factory)
+
+    _receive(service, "m5", seats[1], "3个3", now)
+    assert "叫 3个3" in _latest_reply(factory)
+
+    before = _outbound_count(factory)
+    _receive(service, "m6", seats[2], "/开", now)
+    assert _outbound_count(factory) == before + 1  # 别名必须真的被识别，而不是被当普通聊天忽略
+    reply = _latest_reply(factory)
+    assert "全场骰子" in reply
+    assert _dice_game(repository).state == "round_end"
