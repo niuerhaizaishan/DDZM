@@ -134,6 +134,9 @@ for pair in $ADMINPAIRS; do
 done
 
 echo "== 4) 重启 core + 后台，等就绪后再拉起 worker =="
+# 先停 worker 再重启 core：否则 worker 会在 core 重启窗口里 Connection refused 崩溃重启，
+# 触发 "Start request repeated too quickly" 短暂进入 failed（实测每次约 5 秒）
+systemctl stop $WORKERS 2>/dev/null || true
 systemctl restart dzmm-core || fail "dzmm-core 重启失败"
 wait_core || { journalctl -u dzmm-core -n 30 --no-pager; fail "core 未就绪"; }
 systemctl restart dzmm-admin-web || fail "dzmm-admin-web 重启失败"
