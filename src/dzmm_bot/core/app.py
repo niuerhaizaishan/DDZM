@@ -2895,7 +2895,14 @@ def create_app(
         _: Annotated[None, Depends(authorize)],
     ) -> LiarDiceSettingsResponse:
         settings = repository.get_liar_dice_settings()
-        return LiarDiceSettingsResponse(turn_seconds=settings.turn_seconds, enabled=settings.enabled, min_players=settings.min_players)
+        return LiarDiceSettingsResponse(
+            turn_seconds=settings.turn_seconds,
+            enabled=settings.enabled,
+            min_players=settings.min_players,
+            signup_timeout_minutes=settings.signup_timeout_minutes,
+            continue_timeout_minutes=settings.continue_timeout_minutes,
+            deal_timeout_seconds=settings.deal_timeout_seconds,
+        )
 
     @app.patch(
         "/internal/game/liar-dice/settings",
@@ -2910,10 +2917,20 @@ def create_app(
                 turn_seconds=request.turn_seconds,
                 enabled=request.enabled,
                 min_players=request.min_players,
+                signup_timeout_minutes=request.signup_timeout_minutes,
+                continue_timeout_minutes=request.continue_timeout_minutes,
+                deal_timeout_seconds=request.deal_timeout_seconds,
             )
         except ValueError as error:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error))
-        return LiarDiceSettingsResponse(turn_seconds=settings.turn_seconds, enabled=settings.enabled, min_players=settings.min_players)
+        return LiarDiceSettingsResponse(
+            turn_seconds=settings.turn_seconds,
+            enabled=settings.enabled,
+            min_players=settings.min_players,
+            signup_timeout_minutes=settings.signup_timeout_minutes,
+            continue_timeout_minutes=settings.continue_timeout_minutes,
+            deal_timeout_seconds=settings.deal_timeout_seconds,
+        )
 
     @app.get(
         "/internal/game/truth-trade/settings",

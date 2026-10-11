@@ -2370,7 +2370,18 @@ def create_app(
             if_match,
             lambda: _relay_core(
                 lambda: core.set_liar_dice_settings(
-                    {key: request[key] for key in ("turn_seconds", "enabled", "min_players") if key in request}
+                    {
+                        key: request[key]
+                        for key in (
+                            "turn_seconds",
+                            "enabled",
+                            "min_players",
+                            "signup_timeout_minutes",
+                            "continue_timeout_minutes",
+                            "deal_timeout_seconds",
+                        )
+                        if key in request
+                    }
                 )
             ),
             scope="liar-dice-settings",

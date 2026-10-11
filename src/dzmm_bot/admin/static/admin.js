@@ -2779,14 +2779,20 @@ function renderLiarDiceSettingsPanel(settings) {
     ruleStatusCard("开启状态", settings.enabled === false ? "已关闭" : "已开启", "开局同时受群聊玩法开关控制"),
     ruleStatusCard("开局人数", `至少 ${settings.min_players ?? 2} 人`, "开始对局时校验报名人数"),
     ruleStatusCard("回合时限", `${settings.turn_seconds} 秒`, "每回合的操作超时时间"),
+    ruleStatusCard("报名时限", `${settings.signup_timeout_minutes ?? 5} 分钟`, "报名期间没人 /开始 就自动取消"),
+    ruleStatusCard("等待继续", `${settings.continue_timeout_minutes ?? 5} 分钟`, "一轮结束后没人 /继续 就自动收尾"),
+    ruleStatusCard("发牌时限", `${settings.deal_timeout_seconds ?? 180} 秒`, "私聊骰子迟迟没送达时的兜底"),
   ].join(""));
   const fields = `
     <div class="event-input-grid">
       ${birthdayFlagField("liar-dice-enabled", "开启大话骰子", settings.enabled !== false)}
       ${birthdayNumberField("liar-dice-min-players", "最少开局人数", settings.min_players ?? 2, 2, 10)}
       ${birthdayNumberField("liar-dice-turn-seconds", "回合超时秒数", settings.turn_seconds, 30, 600)}
+      ${birthdayNumberField("liar-dice-signup-minutes", "报名超时分钟", settings.signup_timeout_minutes ?? 5, 1, 60)}
+      ${birthdayNumberField("liar-dice-continue-minutes", "等待继续分钟", settings.continue_timeout_minutes ?? 5, 1, 60)}
+      ${birthdayNumberField("liar-dice-deal-seconds", "发牌超时秒数", settings.deal_timeout_seconds ?? 180, 30, 600)}
     </div>`;
-  mountRuleEditor("liar-dice", "大话骰子", "开关控制新建对局，人数在开始时校验，时限从下一次行动起生效。", fields, saveLiarDiceSettings);
+  mountRuleEditor("liar-dice", "大话骰子", "开关控制新建对局，人数在开始时校验，各项时限从下一次行动（新一局/新一轮）起生效；超时都会在群里公告说明。", fields, saveLiarDiceSettings);
 }
 
 async function saveLiarDiceSettings() {
@@ -2795,6 +2801,9 @@ async function saveLiarDiceSettings() {
     turn_seconds: Number(document.querySelector("#liar-dice-turn-seconds").value),
     enabled: document.querySelector("#liar-dice-enabled").checked,
     min_players: Number(document.querySelector("#liar-dice-min-players").value),
+    signup_timeout_minutes: Number(document.querySelector("#liar-dice-signup-minutes").value),
+    continue_timeout_minutes: Number(document.querySelector("#liar-dice-continue-minutes").value),
+    deal_timeout_seconds: Number(document.querySelector("#liar-dice-deal-seconds").value),
   };
   try {
     await runMutation(button, "保存中…", async () => {

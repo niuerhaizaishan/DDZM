@@ -1919,11 +1919,17 @@ class LiarDiceSettingsResponse(ApiModel):
     turn_seconds: int = Field(ge=30, le=600)
     enabled: bool = True
     min_players: int = Field(default=2, ge=2, le=10)
+    signup_timeout_minutes: int = Field(default=5, ge=1, le=60)
+    continue_timeout_minutes: int = Field(default=5, ge=1, le=60)
+    deal_timeout_seconds: int = Field(default=180, ge=30, le=600)
 
 
 class SetLiarDiceSettingsRequest(LiarDiceSettingsResponse):
     enabled: bool | None = None
     min_players: int | None = Field(default=None, ge=2, le=10)
+    signup_timeout_minutes: int | None = Field(default=None, ge=1, le=60)
+    continue_timeout_minutes: int | None = Field(default=None, ge=1, le=60)
+    deal_timeout_seconds: int | None = Field(default=None, ge=30, le=600)
 
 
 class TruthTradeSettingsResponse(ApiModel):

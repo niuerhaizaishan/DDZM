@@ -2142,6 +2142,39 @@ def test_admin_proxies_dice_truth_controls_with_versioning(client, headers, core
     assert settings["enabled"] is False
 
 
+def test_admin_exposes_the_liar_dice_timeout_settings(client, headers, core, monkeypatch):
+    """三个超时必须能穿过后台白名单：白名单丢字段＝后台改了也不生效。"""
+    settings = {
+        "turn_seconds": 120,
+        "enabled": True,
+        "min_players": 2,
+        "signup_timeout_minutes": 5,
+        "continue_timeout_minutes": 5,
+        "deal_timeout_seconds": 180,
+    }
+    received: dict = {}
+
+    def save(updated):
+        received.update(updated)
+        settings.update(updated)
+        return settings.copy()
+
+    monkeypatch.setattr(
+        core, "get_liar_dice_settings", lambda: settings.copy(), raising=False
+    )
+    monkeypatch.setattr(core, "set_liar_dice_settings", save, raising=False)
+
+    initial = client.get("/api/game/liar-dice/settings", headers=headers)
+    assert initial.status_code == 200
+    assert initial.json() == {**settings, "version": 0}
+
+    payload = {**settings, "continue_timeout_minutes": 7, "deal_timeout_seconds": 240}
+    updated = client.patch("/api/game/liar-dice/settings", headers=headers, json=payload)
+    assert updated.status_code == 200
+    assert updated.json() == {**payload, "version": 1}
+    assert received == payload
+
+
 @pytest.fixture
 def estrus_core_settings(core, monkeypatch):
     settings = {

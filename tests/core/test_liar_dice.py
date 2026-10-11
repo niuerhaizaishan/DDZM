@@ -744,3 +744,54 @@ def test_liar_dice_wild_point_invalidation_is_shown_in_look_dice():
         chatroom_id="dm-user-0",
     )
     assert wild_note(wild_face, True) in _latest_reply(factory)
+
+
+def test_liar_dice_continue_timeout_setting_governs_the_jobs():
+    """后台把「等待继续」改成 7 分钟 → 新局兜底按 7 分钟判定（证明设置真的生效，不只是存下来）。"""
+    service, repository, factory = _service(liar_dice_random=Random(11))
+    now = datetime(2026, 10, 2, 16, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=group-main", now
+    )
+    repository.set_liar_dice_settings(turn_seconds=120, continue_timeout_minutes=7)
+    _join_employees(service, now)
+    _seed_direct_chats(factory, now)
+    _to_round_end(service, repository, factory, now)
+
+    game = _dice_game(repository)
+    assert game.round_end_deadline == now + timedelta(minutes=7)
+
+    # 6 分钟时巡检：局还在，且没有多余公告
+    before = _outbound_count(factory)
+    assert repository.run_liar_dice_jobs(now + timedelta(minutes=6)) == []
+    assert _dice_game(repository) is not None
+    assert _outbound_count(factory) == before
+
+    # 7 分钟时巡检：自动收尾并公告
+    messages = repository.run_liar_dice_jobs(now + timedelta(minutes=7))
+    assert messages == [
+        "⏰【大话骰子】本轮结束后 7 分钟没人 /继续，本局已自动结束。"
+        "\n发 /大话骰子数据 可看本局战绩。"
+    ]
+    assert _dice_game(repository) is None
+
+
+def test_liar_dice_signup_timeout_setting_governs_the_jobs():
+    """报名时限同理：默认 5 分钟，后台改成 7 分钟后新局按 7 分钟取消。"""
+    service, repository, factory = _service(liar_dice_random=Random(11))
+    now = datetime(2026, 10, 2, 16, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=group-main", now
+    )
+    repository.set_liar_dice_settings(turn_seconds=120, signup_timeout_minutes=7)
+    _join_employees(service, now)
+    _seed_direct_chats(factory, now)
+    _receive(service, "m1", "user-0", "/大话骰子", now)
+
+    game = _dice_game(repository)
+    assert game.signup_deadline == now + timedelta(minutes=7)
+    assert repository.run_liar_dice_jobs(now + timedelta(minutes=6)) == []
+    assert _dice_game(repository) is not None
+    assert repository.run_liar_dice_jobs(now + timedelta(minutes=7)) == [
+        "【大话骰子】报名 7 分钟内没人 /开始，本局已自动取消。"
+    ]

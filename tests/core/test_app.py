@@ -2445,18 +2445,44 @@ def test_liar_dice_settings_are_managed_over_core_api(client, headers):
     assert initial.json()["turn_seconds"] == 120
     assert initial.json()["enabled"] is True
     assert initial.json()["min_players"] == 2
+    # 三个超时兜底的默认值（报名 5 分钟 / 等待继续 5 分钟 / 发牌 180 秒）
+    assert initial.json()["signup_timeout_minutes"] == 5
+    assert initial.json()["continue_timeout_minutes"] == 5
+    assert initial.json()["deal_timeout_seconds"] == 180
 
     updated = client.patch(
         "/internal/game/liar-dice/settings",
         headers=headers,
-        json={"turn_seconds": 90, "enabled": False, "min_players": 3},
+        json={
+            "turn_seconds": 90,
+            "enabled": False,
+            "min_players": 3,
+            "signup_timeout_minutes": 7,
+            "continue_timeout_minutes": 8,
+            "deal_timeout_seconds": 240,
+        },
     )
     assert updated.status_code == 200
-    assert updated.json()["turn_seconds"] == 90
-    assert updated.json()["enabled"] is False
-    assert updated.json()["min_players"] == 3
-    legacy = client.patch("/internal/game/liar-dice/settings", headers=headers, json={"turn_seconds": 100})
-    assert legacy.json() == {"turn_seconds": 100, "enabled": False, "min_players": 3}
+    assert updated.json() == {
+        "turn_seconds": 90,
+        "enabled": False,
+        "min_players": 3,
+        "signup_timeout_minutes": 7,
+        "continue_timeout_minutes": 8,
+        "deal_timeout_seconds": 240,
+    }
+    # 老的只带 turn_seconds 的请求仍然可用，且不动其它字段
+    legacy = client.patch(
+        "/internal/game/liar-dice/settings", headers=headers, json={"turn_seconds": 100}
+    )
+    assert legacy.json() == {
+        "turn_seconds": 100,
+        "enabled": False,
+        "min_players": 3,
+        "signup_timeout_minutes": 7,
+        "continue_timeout_minutes": 8,
+        "deal_timeout_seconds": 240,
+    }
     assert (
         client.get("/internal/game/liar-dice/settings", headers=headers).json()[
             "turn_seconds"
@@ -2464,12 +2490,21 @@ def test_liar_dice_settings_are_managed_over_core_api(client, headers):
         == 100
     )
 
-    invalid = client.patch(
-        "/internal/game/liar-dice/settings",
-        headers=headers,
-        json={"turn_seconds": 10},
-    )
-    assert invalid.status_code == 422
+    for payload in (
+        {"turn_seconds": 10},
+        {"turn_seconds": 100, "min_players": 11},
+        {"turn_seconds": 100, "signup_timeout_minutes": 0},
+        {"turn_seconds": 100, "signup_timeout_minutes": 61},
+        {"turn_seconds": 100, "continue_timeout_minutes": 61},
+        {"turn_seconds": 100, "deal_timeout_seconds": 10},
+        {"turn_seconds": 100, "deal_timeout_seconds": 601},
+    ):
+        assert (
+            client.patch(
+                "/internal/game/liar-dice/settings", headers=headers, json=payload
+            ).status_code
+            == 422
+        )
 
 
 def test_truth_trade_settings_are_managed_over_core_api(client, headers):
