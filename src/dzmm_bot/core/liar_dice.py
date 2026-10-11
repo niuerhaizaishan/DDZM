@@ -32,6 +32,21 @@ def dice_str(dice: list[int]) -> str:
     return " ".join(DIE_EMOJI.get(face, str(face)) for face in dice)
 
 
+def wild_note(wild_face: int, invalidated: bool, *, verbose: bool = True) -> str:
+    """万能点提示的唯一来源（发骰私聊 / 看骰 / 开局公告 / 牌局四处共用）。
+
+    历史上这几处文案各写各的，结果「私聊发骰」那处漏掉了万能点。
+    """
+    if invalidated:
+        return f"⚠️ 本轮万能点 {dice_str([wild_face])} 已被叫过，不再生效"
+    if verbose:
+        return (
+            f"🃏 本轮万能点：{dice_str([wild_face])}"
+            "（可顶任何点数；有人叫过它之后失效）"
+        )
+    return f"🃏 本轮万能点：{dice_str([wild_face])}（可顶任何点数）"
+
+
 def count_point(
     all_dice: dict[str, list[int]],
     face: int,

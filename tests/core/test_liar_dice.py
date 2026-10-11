@@ -649,3 +649,98 @@ def test_liar_dice_admin_force_end_announces_in_the_group():
     assert _outbound_count(factory) == before + 1
     assert "管理员已强制结束当前游戏" in _latest_reply(factory)
     assert _dice_game(repository) is None
+
+
+def test_liar_dice_private_hand_mentions_the_wild_point():
+    """问题修复：私聊发骰必须带万能点（历史文案只在 /看骰 与群公告里有）。"""
+    from dzmm_bot.core.liar_dice import wild_note
+    from dzmm_bot.core.schema import LiarDiceRoundRecord
+
+    service, repository, factory = _service(liar_dice_random=Random(11))
+    now = datetime(2026, 10, 2, 16, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=group-main", now
+    )
+    _join_employees(service, now)
+    _seed_direct_chats(factory, now)
+    _receive(service, "m1", "user-0", "/大话骰子", now)
+    _receive(service, "m2", "user-1", "/加入", now)
+    _receive(service, "m3", "user-2", "/加入", now)
+    _receive(service, "m4", "user-0", "/开始", now)
+    _flush_all_outbound(repository, now)
+
+    with factory() as session:
+        wild_face = session.scalar(select(LiarDiceRoundRecord.wild_face))
+    expected = wild_note(wild_face, False)
+
+    hands = _hand_texts(factory)
+    assert len(hands) == 3
+    assert all("万能点" in text for text in hands)
+    assert all(expected in text for text in hands)
+    assert all("/看骰" in text for text in hands)
+
+    # 群开局公告也带万能点（短版）
+    from dzmm_bot.core.schema import OutboundRecord
+
+    with factory() as session:
+        openings = [
+            row.text
+            for row in session.scalars(
+                select(OutboundRecord).order_by(OutboundRecord.created_at)
+            )
+            if "轮开始" in row.text
+        ]
+    assert len(openings) == 1
+    assert "本轮万能点" in openings[0]
+    assert expected not in openings[0]  # 短版：不带“有人叫过它之后失效”的解释
+
+    # 主动 /看骰 与发骰私聊用同一份文案
+    _receive(
+        service,
+        "look",
+        "user-0",
+        "/看骰",
+        now,
+        source_type="direct",
+        chatroom_id="dm-user-0",
+    )
+    assert expected in _latest_reply(factory)
+
+
+def test_liar_dice_wild_point_invalidation_is_shown_in_look_dice():
+    """叫过万能点后该点失效：/看骰 必须给出失效提示（同一份文案来源）。"""
+    from dzmm_bot.core.liar_dice import wild_note
+    from dzmm_bot.core.schema import LiarDiceRoundRecord
+
+    service, repository, factory = _service(liar_dice_random=Random(11))
+    now = datetime(2026, 10, 2, 16, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=group-main", now
+    )
+    _join_employees(service, now)
+    _seed_direct_chats(factory, now)
+    _to_round_end(service, repository, factory, now)
+
+    _receive(service, "m7", "user-0", "/继续", now)
+    _flush_all_outbound(repository, now)
+    with factory() as session:
+        wild_face = session.scalar(
+            select(LiarDiceRoundRecord.wild_face).order_by(
+                LiarDiceRoundRecord.sequence.desc()
+            )
+        )
+    game = _dice_game(repository)
+    seats = _seat_map(factory)
+    first = seats[game.current_seat]
+    _receive(service, "m8", first, f"3个{wild_face}", now)
+
+    _receive(
+        service,
+        "look",
+        "user-0",
+        "/看骰",
+        now,
+        source_type="direct",
+        chatroom_id="dm-user-0",
+    )
+    assert wild_note(wild_face, True) in _latest_reply(factory)

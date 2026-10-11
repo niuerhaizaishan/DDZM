@@ -158,6 +158,7 @@ from .liar_dice import (
     judge_open,
     roll_dice,
     roll_wild,
+    wild_note,
 )
 from .shop_cards import item_by_key
 from .shop_cards import (
@@ -13930,8 +13931,10 @@ class CoreRepository(ShopManagementMixin, HonorsMixin):
             if room is None:
                 raise RuntimeError("大话骰子私聊会话在发牌阶段消失")
             outbound = self.enqueue_system_outbound(
-                f"【大话骰子】你的骰子（第 {round_number} 轮）："
-                f"{dice_str(player.dice or [])}。私聊发送 /看骰 可再次查看。",
+                f"【大话骰子】第 {round_number} 轮你的骰子："
+                f"{dice_str(player.dice or [])}"
+                f"\n{wild_note(wild, False)}"
+                "\n私聊发 /看骰 可随时重看。",
                 destination_chatroom_id=room,
                 delivery_kind="liar_dice_hand",
             )
@@ -13980,7 +13983,7 @@ class CoreRepository(ShopManagementMixin, HonorsMixin):
             raise RuntimeError("大话骰子首叫玩家不存在")
         wild = round_record.wild_face
         lines = [f"【大话骰子】第 {game.round_number} 轮开始（{len(players)} 人）"]
-        lines.append(f"🃏 本轮万能点：{dice_str([wild])}（可顶任何点数）")
+        lines.append(wild_note(wild, round_record.wild_invalidated, verbose=False))
         lines.extend(
             f"{player.seat_number}号 {user.display_name}"
             for player, user in players
@@ -14480,12 +14483,10 @@ class CoreRepository(ShopManagementMixin, HonorsMixin):
                     session, game, "status_round_end"
                 )
             round_record = self._liar_dice_current_round(session, game.id)
-            wild_note = ""
+            wild_note_text = ""
             if round_record is not None:
-                wild_note = (
-                    f"⚠️ 万能点 🎲{round_record.wild_face} 已被叫过，不再生效"
-                    if round_record.wild_invalidated
-                    else f"🃏 本轮万能点：{dice_str([round_record.wild_face])}（可顶任何点数）"
+                wild_note_text = wild_note(
+                    round_record.wild_face, round_record.wild_invalidated
                 )
             lines = [f"【大话骰子】第 {game.round_number} 轮（{len(players)} 人）"]
             lines.append(
@@ -14507,8 +14508,8 @@ class CoreRepository(ShopManagementMixin, HonorsMixin):
             )
             if turn_user is not None:
                 lines.append(f"轮到：{turn_user.display_name}")
-            if wild_note:
-                lines.append(wild_note)
+            if wild_note_text:
+                lines.append(wild_note_text)
             return self._liar_dice_result_locked(
                 session, game, "status", public_message="\n".join(lines)
             )
@@ -14543,17 +14544,14 @@ class CoreRepository(ShopManagementMixin, HonorsMixin):
                 return LiarDiceResult("no_hands")
             player, game = row
             round_record = self._liar_dice_current_round(session, game.id)
-            wild_note = (
+            note = (
                 ""
                 if round_record is None
-                else (
-                    f"本轮万能点 🎲{round_record.wild_face}"
-                    + ("（已失效，只算自身）" if round_record.wild_invalidated else "（可顶任何点数）")
-                )
+                else wild_note(round_record.wild_face, round_record.wild_invalidated)
             )
             message = (
                 f"【大话骰子】第 {game.round_number} 轮你的骰子：{dice_str(player.dice or [])}"
-                + (f"\n{wild_note}" if wild_note else "")
+                + (f"\n{note}" if note else "")
             )
             return LiarDiceResult("shown", game_id=game.id, private_message=message)
 
