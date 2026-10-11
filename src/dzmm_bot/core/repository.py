@@ -1673,6 +1673,7 @@ class LiarDiceResult:
     private_message: str | None = None
     statistics: LiarDiceStatistics | None = None
     min_players: int = 2
+    game_state: str | None = None
 
 
 @dataclass(frozen=True)
@@ -13874,7 +13875,10 @@ class CoreRepository(ShopManagementMixin, HonorsMixin):
             statistics=statistics,
             public_message=public_message,
             private_message=private_message,
-            min_players=self._liar_dice_settings_row(session, PRIMARY_GROUP_CHAT_ID).min_players,
+            min_players=self._liar_dice_settings_row(
+                session, PRIMARY_GROUP_CHAT_ID
+            ).min_players,
+            game_state=game.state,
         )
 
     def _liar_dice_deal_round(
@@ -13910,7 +13914,7 @@ class CoreRepository(ShopManagementMixin, HonorsMixin):
         game.round_end_deadline = None
         game.dealing_deadline = now + timedelta(
             seconds=self._liar_dice_settings_row(
-                session, game.group_chat_id
+                session, PRIMARY_GROUP_CHAT_ID
             ).deal_timeout_seconds
         )
         for player, user in players:
@@ -14030,7 +14034,7 @@ class CoreRepository(ShopManagementMixin, HonorsMixin):
                     signup_deadline=now
                     + timedelta(
                         minutes=self._liar_dice_settings_row(
-                            session, group_chat_id
+                            session, PRIMARY_GROUP_CHAT_ID
                         ).signup_timeout_minutes
                     ),
                     created_at=now,
@@ -14360,7 +14364,7 @@ class CoreRepository(ShopManagementMixin, HonorsMixin):
                 game.dealing_deadline = None
                 game.round_end_deadline = now + timedelta(
                     minutes=self._liar_dice_settings_row(
-                        session, game.group_chat_id
+                        session, PRIMARY_GROUP_CHAT_ID
                     ).continue_timeout_minutes
                 )
                 lines = ["🎲 开牌！全场骰子："]
@@ -14685,14 +14689,9 @@ class CoreRepository(ShopManagementMixin, HonorsMixin):
             session.flush()
         return row
 
-    def get_liar_dice_settings(
-        self, group_chat_id: UUID | None = None
-    ) -> LiarDiceSettings:
+    def get_liar_dice_settings(self) -> LiarDiceSettings:
         with self._session() as session:
-            row = self._liar_dice_settings_row(
-                session,
-                PRIMARY_GROUP_CHAT_ID if group_chat_id is None else group_chat_id,
-            )
+            row = self._liar_dice_settings_row(session, PRIMARY_GROUP_CHAT_ID)
             return _liar_dice_settings(row)
 
     def set_liar_dice_settings(
@@ -16678,7 +16677,7 @@ class CoreRepository(ShopManagementMixin, HonorsMixin):
         messages: list[str],
     ) -> list[str]:
         """发牌兜底：私聊骰子迟迟未确认送达时，别让局永远卡在 dealing（群里一句话都没有）。"""
-        settings = self._liar_dice_settings_row(session, game.group_chat_id)
+        settings = self._liar_dice_settings_row(session, PRIMARY_GROUP_CHAT_ID)
         if game.dealing_deadline is None:
             # 兼容部署前留下的历史局：首次巡检只补写 deadline，不倒计时，避免上线瞬间被批量取消
             game.dealing_deadline = now + timedelta(seconds=settings.deal_timeout_seconds)
@@ -16699,7 +16698,7 @@ class CoreRepository(ShopManagementMixin, HonorsMixin):
         messages: list[str],
     ) -> list[str]:
         """轮间兜底：本轮结束后长时间没人 /继续 时自动收尾并公告（历史行为是静默挂着）。"""
-        settings = self._liar_dice_settings_row(session, game.group_chat_id)
+        settings = self._liar_dice_settings_row(session, PRIMARY_GROUP_CHAT_ID)
         if game.round_end_deadline is None:
             # 同上：历史局首次只补 deadline
             game.round_end_deadline = now + timedelta(
@@ -16733,7 +16732,7 @@ class CoreRepository(ShopManagementMixin, HonorsMixin):
                         )
                         messages.append(
                             "【大话骰子】报名 "
-                            f"{self._liar_dice_settings_row(session, game.group_chat_id).signup_timeout_minutes}"
+                            f"{self._liar_dice_settings_row(session, PRIMARY_GROUP_CHAT_ID).signup_timeout_minutes}"
                             " 分钟内没人 /开始，本局已自动取消。"
                         )
                     return messages
@@ -16790,7 +16789,7 @@ class CoreRepository(ShopManagementMixin, HonorsMixin):
                     game.dealing_deadline = None
                     game.round_end_deadline = now + timedelta(
                         minutes=self._liar_dice_settings_row(
-                            session, game.group_chat_id
+                            session, PRIMARY_GROUP_CHAT_ID
                         ).continue_timeout_minutes
                     )
                     game.timeout_streak = 0

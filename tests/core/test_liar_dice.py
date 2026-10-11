@@ -561,3 +561,72 @@ def test_liar_dice_dealing_timeout_cancels_the_game():
         "⚠️【大话骰子】骰子私聊没送达，本局已取消，可重新发 /大话骰子 开新局。"
     ]
     assert _dice_game(repository) is None
+
+
+def _outbound_count(factory) -> int:
+    from dzmm_bot.core.schema import OutboundRecord
+
+    with factory() as session:
+        return len(session.scalars(select(OutboundRecord)).all())
+
+
+def _to_round_end(service, repository, factory, now):
+    _receive(service, "m1", "user-0", "/大话骰子", now)
+    _receive(service, "m2", "user-1", "/加入", now)
+    _receive(service, "m3", "user-2", "/加入", now)
+    _receive(service, "m4", "user-0", "/开始", now)
+    _flush_all_outbound(repository, now)
+    seats = _seat_map(factory)
+    _receive(service, "m5", seats[1], "3个3", now)
+    _receive(service, "m6", seats[2], "/开骰", now)
+    return seats
+
+
+def test_liar_dice_participant_call_after_round_end_gets_an_explanation():
+    """本轮结束后参与者继续叫数：要告诉他为什么没生效（历史行为是完全静默）。"""
+    service, repository, factory = _service(liar_dice_random=Random(11))
+    now = datetime(2026, 10, 2, 16, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=group-main", now
+    )
+    _join_employees(service, now)
+    _seed_direct_chats(factory, now)
+    seats = _to_round_end(service, repository, factory, now)
+    assert _dice_game(repository).state == "round_end"
+
+    before = _outbound_count(factory)
+    _receive(service, "m7", seats[1], "3个4", now)
+    assert _outbound_count(factory) == before + 1
+    assert "本轮已作废或已结束" in _latest_reply(factory)
+    assert "/继续" in _latest_reply(factory)
+
+
+def test_liar_dice_outsider_call_stays_silent():
+    """非本局参与者打「N个X」：保持静默，不把群聊里的普通数字当指令回。"""
+    service, repository, factory = _service(liar_dice_random=Random(11))
+    now = datetime(2026, 10, 2, 16, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=group-main", now
+    )
+    _join_employees(service, now)
+    _receive(service, "join-9", "user-9", "/入职 丁", now)
+    _seed_direct_chats(factory, now)
+    _to_round_end(service, repository, factory, now)
+
+    before = _outbound_count(factory)
+    _receive(service, "m7", "user-9", "3个4", now)
+    assert _outbound_count(factory) == before
+
+
+def test_liar_dice_call_without_any_game_stays_silent():
+    service, repository, factory = _service(liar_dice_random=Random(11))
+    now = datetime(2026, 10, 2, 16, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=group-main", now
+    )
+    _join_employees(service, now)
+    _seed_direct_chats(factory, now)
+
+    before = _outbound_count(factory)
+    _receive(service, "m1", "user-0", "3个4", now)
+    assert _outbound_count(factory) == before

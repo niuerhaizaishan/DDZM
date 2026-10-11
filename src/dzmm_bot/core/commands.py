@@ -1832,7 +1832,7 @@ class GroupCommandHandler:
         }
         if result.status in messages:
             return messages[result.status]
-        settings = self._repository.get_liar_dice_settings(group_chat_id)
+        settings = self._repository.get_liar_dice_settings()
         return (
             "【大话骰子】报名已开启！想玩的发 /加入（每人 5 骰、每轮随机万能点；"
             f"需要先和机器人私聊过），至少 {result.min_players} 人后发起者发 /开始 摇骰开局。"
@@ -1891,8 +1891,22 @@ class GroupCommandHandler:
         result = self._repository.liar_dice_call(
             message.sender_platform_id, call, received_at, group.id
         )
-        if result.status in {"no_game", "wrong_state", "not_joined"}:
+        if result.status in {"no_game", "not_joined"}:
+            # 本群没有大话骰子局 / 发送者还没入职：保持静默，否则群里任何人打「3个5」都会被搭话
             return None
+        if result.status == "wrong_state":
+            # 本局确实存在，但当前不在叫牌阶段（报名中 / 发牌中 / 本轮已结束或已作废）
+            sender_in_game = any(
+                player.platform_id == message.sender_platform_id
+                for player in result.players
+            )
+            if not sender_in_game:
+                return None
+            if result.game_state == "signup":
+                return "还在报名中，等发起者发 /开始 摇骰开局～"
+            if result.game_state == "dealing":
+                return "骰子还在私聊发放中，稍等一下再叫～"
+            return "本轮已作废或已结束，发 /继续 开下一轮，或 /结束游戏 收尾。"
         if result.status == "called":
             return result.public_message
         if result.status == "invalid_raise":
