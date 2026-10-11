@@ -425,3 +425,139 @@ def test_liar_dice_look_dice_is_direct_only():
         chatroom_id="dm-user-0",
     )
     assert "你的骰子" in _latest_reply(factory)
+
+
+def test_liar_dice_signup_deadline_follows_settings():
+    """报名时限必须来自设置（历史上硬编码 10 分钟），后台改了要跟着变。"""
+    service, repository, factory = _service(liar_dice_random=Random(3))
+    now = datetime(2026, 10, 2, 16, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=group-main", now
+    )
+    _join_employees(service, now)
+    _seed_direct_chats(factory, now)
+    repository.set_liar_dice_settings(turn_seconds=120, signup_timeout_minutes=7)
+    _receive(service, "m1", "user-0", "/大话骰子", now)
+    game = _dice_game(repository)
+    assert game is not None
+    assert game.signup_deadline == now + timedelta(minutes=7)
+    assert repository.get_liar_dice_settings().signup_timeout_minutes == 7
+
+
+def test_liar_dice_signup_timeout_notice_states_the_deadline():
+    service, repository, factory = _service(liar_dice_random=Random(3))
+    now = datetime(2026, 10, 2, 16, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=group-main", now
+    )
+    _join_employees(service, now)
+    _seed_direct_chats(factory, now)
+    _receive(service, "m1", "user-0", "/大话骰子", now)
+    group_chat_id = _dice_game(repository).group_chat_id
+    messages = repository.run_liar_dice_jobs(now + timedelta(minutes=6), group_chat_id)
+    assert messages == ["【大话骰子】报名 5 分钟内没人 /开始，本局已自动取消。"]
+    assert _dice_game(repository) is None
+
+
+def test_liar_dice_round_end_expires_with_notice():
+    """本轮结束后长时间没人 /继续：必须自动收尾并公告（历史行为是静默挂着）。"""
+    service, repository, factory = _service(liar_dice_random=Random(11))
+    now = datetime(2026, 10, 2, 16, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=group-main", now
+    )
+    _join_employees(service, now)
+    _seed_direct_chats(factory, now)
+    _receive(service, "m1", "user-0", "/大话骰子", now)
+    _receive(service, "m2", "user-1", "/加入", now)
+    _receive(service, "m3", "user-2", "/加入", now)
+    _receive(service, "m4", "user-0", "/开始", now)
+    _flush_all_outbound(repository, now)
+    group_chat_id = _dice_game(repository).group_chat_id
+    seat1, seat2 = _seat_map(factory)[1], _seat_map(factory)[2]
+    _receive(service, "m5", seat1, "3个3", now)
+    _receive(service, "m6", seat2, "/开骰", now)
+    game = _dice_game(repository)
+    assert game.state == "round_end"
+    assert game.round_end_deadline == now + timedelta(minutes=5)
+
+    assert repository.run_liar_dice_jobs(now + timedelta(minutes=4), group_chat_id) == []
+    messages = repository.run_liar_dice_jobs(
+        now + timedelta(minutes=5), group_chat_id
+    )
+    assert len(messages) == 1
+    assert "本轮结束后 5 分钟没人 /继续，本局已自动结束" in messages[0]
+    assert _dice_game(repository) is None
+    with factory() as session:
+        from dzmm_bot.core.schema import LiarDiceGameRecord
+
+        finished = session.scalar(select(LiarDiceGameRecord))
+        assert finished.state == "completed"
+        assert finished.finish_reason == "continue_expired"
+        assert finished.active_key is None
+
+
+def test_liar_dice_legacy_round_end_game_is_not_killed_on_first_tick():
+    """部署前留下的历史局（无 deadline）：首次巡检只补写 deadline，不得当场结束。"""
+    service, repository, factory = _service(liar_dice_random=Random(11))
+    now = datetime(2026, 10, 2, 16, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=group-main", now
+    )
+    _join_employees(service, now)
+    _seed_direct_chats(factory, now)
+    _receive(service, "m1", "user-0", "/大话骰子", now)
+    _receive(service, "m2", "user-1", "/加入", now)
+    _receive(service, "m3", "user-2", "/加入", now)
+    _receive(service, "m4", "user-0", "/开始", now)
+    _flush_all_outbound(repository, now)
+    group_chat_id = _dice_game(repository).group_chat_id
+    seat1, seat2 = _seat_map(factory)[1], _seat_map(factory)[2]
+    _receive(service, "m5", seat1, "3个3", now)
+    _receive(service, "m6", seat2, "/开骰", now)
+
+    from dzmm_bot.core.schema import LiarDiceGameRecord
+
+    with factory.begin() as session:
+        legacy = session.scalar(select(LiarDiceGameRecord))
+        legacy.round_end_deadline = None
+
+    far_later = now + timedelta(hours=6)
+    assert repository.run_liar_dice_jobs(far_later, group_chat_id) == []
+    game = _dice_game(repository)
+    assert game is not None and game.round_end_deadline == far_later + timedelta(minutes=5)
+    assert repository.run_liar_dice_jobs(
+        far_later + timedelta(minutes=4), group_chat_id
+    ) == []
+    assert len(
+        repository.run_liar_dice_jobs(far_later + timedelta(minutes=5), group_chat_id)
+    ) == 1
+    assert _dice_game(repository) is None
+
+
+def test_liar_dice_dealing_timeout_cancels_the_game():
+    """私聊骰子迟迟未确认送达：不能让局永远卡在 dealing（群里此前一句话都没有）。"""
+    service, repository, factory = _service(liar_dice_random=Random(11))
+    now = datetime(2026, 10, 2, 16, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=group-main", now
+    )
+    _join_employees(service, now)
+    _seed_direct_chats(factory, now)
+    _receive(service, "m1", "user-0", "/大话骰子", now)
+    _receive(service, "m2", "user-1", "/加入", now)
+    _receive(service, "m3", "user-2", "/加入", now)
+    _receive(service, "m4", "user-0", "/开始", now)
+    game = _dice_game(repository)
+    assert game.state == "dealing"
+    assert game.dealing_deadline == now + timedelta(seconds=180)
+    group_chat_id = game.group_chat_id
+
+    assert repository.run_liar_dice_jobs(now + timedelta(seconds=120), group_chat_id) == []
+    messages = repository.run_liar_dice_jobs(
+        now + timedelta(seconds=180), group_chat_id
+    )
+    assert messages == [
+        "⚠️【大话骰子】骰子私聊没送达，本局已取消，可重新发 /大话骰子 开新局。"
+    ]
+    assert _dice_game(repository) is None

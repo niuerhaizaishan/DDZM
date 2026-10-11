@@ -1038,6 +1038,15 @@ class LiarDiceSettingsRecord(Base):
     turn_seconds: Mapped[int] = mapped_column(Integer, default=120, nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     min_players: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
+    signup_timeout_minutes: Mapped[int] = mapped_column(
+        Integer, default=5, nullable=False
+    )
+    continue_timeout_minutes: Mapped[int] = mapped_column(
+        Integer, default=5, nullable=False
+    )
+    deal_timeout_seconds: Mapped[int] = mapped_column(
+        Integer, default=180, nullable=False
+    )
 
 
 class LiarDiceGameRecord(Base):
@@ -1071,6 +1080,8 @@ class LiarDiceGameRecord(Base):
     turn_deadline: Mapped[datetime | None] = mapped_column(BeijingDateTime)
     timeout_streak: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     signup_deadline: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    round_end_deadline: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    dealing_deadline: Mapped[datetime | None] = mapped_column(BeijingDateTime)
     created_at: Mapped[datetime] = mapped_column(
         BeijingDateTime, default=beijing_now, nullable=False
     )

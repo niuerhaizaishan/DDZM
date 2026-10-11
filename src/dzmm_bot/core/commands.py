@@ -1832,9 +1832,12 @@ class GroupCommandHandler:
         }
         if result.status in messages:
             return messages[result.status]
+        settings = self._repository.get_liar_dice_settings(group_chat_id)
         return (
             "【大话骰子】报名已开启！想玩的发 /加入（每人 5 骰、每轮随机万能点；"
             f"需要先和机器人私聊过），至少 {result.min_players} 人后发起者发 /开始 摇骰开局。"
+            f"\n⏳ 报名 {settings.signup_timeout_minutes} 分钟内没人 /开始将自动取消；"
+            f"每回合 {settings.turn_seconds} 秒，超时自动跳到最后。"
         )
 
     def _liar_dice_join(self, message, received_at, group_chat_id):
