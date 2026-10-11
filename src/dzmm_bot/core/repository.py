@@ -11919,6 +11919,38 @@ class CoreRepository(ShopManagementMixin, HonorsMixin):
                 return active[0]
             group_chat_id = PRIMARY_GROUP_CHAT_ID
         del now
+        active = self._active_gameplays_in_group(platform_id, group_chat_id)
+        return self._gameplay_summary_from_active(active)
+
+    def active_gameplay_conflicts(
+        self,
+        platform_id: str,
+        now: datetime,
+        group_chat_id: UUID | None = None,
+    ) -> tuple[ActiveGameplaySummary, ...]:
+        """当前同时活跃的玩法清单，用于冲突自救提示（只读，不改任何对局状态）。"""
+        del now
+        if group_chat_id is not None:
+            return tuple(self._active_gameplays_in_group(platform_id, group_chat_id))
+        items: list[ActiveGameplaySummary] = []
+        for group in self.list_group_chats():
+            items.extend(self._active_gameplays_in_group(platform_id, group.id))
+        return tuple(items)
+
+    @staticmethod
+    def _gameplay_summary_from_active(
+        active: list[ActiveGameplaySummary],
+    ) -> ActiveGameplaySummary:
+        if not active:
+            return ActiveGameplaySummary(None)
+        if len(active) > 1:
+            return ActiveGameplaySummary("conflict", state="conflict")
+        return active[0]
+
+    def _active_gameplays_in_group(
+        self, platform_id: str, group_chat_id: UUID
+    ) -> list[ActiveGameplaySummary]:
+        """单群内全部活跃玩法（0/1/N 个）。active_gameplay_summary 与冲突自救提示共用。"""
         with self._session() as session:
             active: list[ActiveGameplaySummary] = []
 
@@ -12668,11 +12700,7 @@ class CoreRepository(ShopManagementMixin, HonorsMixin):
                     )
                 )
 
-            if not active:
-                return ActiveGameplaySummary(None)
-            if len(active) > 1:
-                return ActiveGameplaySummary("conflict", state="conflict")
-            return active[0]
+            return active
 
     def current_gameplay_admin_summary(
         self,

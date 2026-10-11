@@ -22,7 +22,7 @@ from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from dzmm_bot.core.group_games import GROUP_GAME_TYPES
@@ -32,6 +32,7 @@ from dzmm_bot.core.schema import (
     HideAndSeekGameRecord,
     KingGameRecord,
     LiarDiceGameRecord,
+    LiarDicePlayerRecord,
     MemoryAssessmentGameRecord,
     MemoryGuildMatchRecord,
     NeverHaveIEverGameRecord,
@@ -345,3 +346,106 @@ def test_memory_assessment_blocks_liar_dice():
     assert result.status == "multiplayer_active"
     with factory() as session:
         assert session.query(LiarDiceGameRecord).count() == 0
+
+
+def _service(repository):
+    from dzmm_bot.core.commands import GroupCommandHandler
+    from dzmm_bot.core.service import CoreService
+
+    return CoreService(repository, GroupCommandHandler(repository))
+
+
+def _say(service, factory, message_id, platform_id, content, now, **kwargs) -> str:
+    from dzmm_bot.core.schema import OutboundRecord
+    from dzmm_bot.runtime.contracts import InboundMessage
+
+    kwargs.setdefault("chatroom_id", "group-main")
+    service.receive_inbound(
+        InboundMessage(message_id, platform_id, content, now, **kwargs)
+    )
+    with factory() as session:
+        latest = session.scalar(
+            select(OutboundRecord).order_by(OutboundRecord.created_at.desc())
+        )
+        if latest is None:
+            return ""
+        if latest.inbound_message_id is None:
+            return latest.text
+        return "\n".join(
+            session.scalars(
+                select(OutboundRecord.text)
+                .where(OutboundRecord.inbound_message_id == latest.inbound_message_id)
+                .order_by(OutboundRecord.reply_index)
+            )
+        )
+
+
+def _seed_conflict(session, now: datetime) -> None:
+    """造出历史 bug 的现场：大话骰子（本人在局）+ 记忆考核 同时活跃。"""
+    host_id = session.scalar(
+        select(UserRecord.id).where(UserRecord.platform_id == HOST_PLATFORM_ID)
+    )
+    dice = LiarDiceGameRecord(
+        group_chat_id=GROUP_ID,
+        active_key="global",
+        host_user_id=host_id,
+        state="calling",
+        round_number=1,
+        current_seat=1,
+    )
+    session.add(dice)
+    session.flush()
+    session.add(
+        LiarDicePlayerRecord(
+            game_id=dice.id,
+            user_id=host_id,
+            state="active",
+            seat_number=1,
+            joined_at=now,
+        )
+    )
+    session.add(
+        MemoryAssessmentGameRecord(
+            group_chat_id=GROUP_ID,
+            active_key="global",
+            mode="single",
+            state="answering",
+            play_date=now.date(),
+        )
+    )
+
+
+def test_conflict_reply_lists_each_running_game_and_how_to_end_it():
+    """冲突不再只回「请联系管理员」：要列出各局 + 各自收尾指令，用户能自己解开。"""
+    repository, factory, now = _build()
+    service = _service(repository)
+    with factory.begin() as session:
+        _seed_conflict(session, now)
+
+    reply = _say(service, factory, "m-current-game", HOST_PLATFORM_ID, "/当前游戏", now)
+    assert "检测到 2 局同时进行" in reply
+    assert "大话骰子" in reply
+    assert "记忆考核" in reply
+    assert "第 1 轮" in reply
+    assert "/结束游戏" in reply
+    assert "请先给其中一局收尾，另一局会继续。" in reply
+
+    continued = _say(
+        service,
+        factory,
+        "m-continue",
+        HOST_PLATFORM_ID,
+        "/继续",
+        now + timedelta(seconds=1),
+    )
+    assert "检测到 2 局同时进行" in continued
+
+    left = _say(
+        service,
+        factory,
+        "m-leave",
+        HOST_PLATFORM_ID,
+        "/退出",
+        now + timedelta(seconds=2),
+    )
+    assert "检测到 2 局同时进行" in left

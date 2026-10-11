@@ -51,6 +51,30 @@ from .service import CommandReply
 
 
 _BEIJING = ZoneInfo("Asia/Shanghai")
+
+# 冲突自救提示用：玩法中文名（群玩法名取自 GROUP_GAME_LABELS，另补摘要里的记忆考核系列与随机事件）
+_GAMEPLAY_LABELS = {
+    **GROUP_GAME_LABELS,
+    "memory_single": "记忆考核",
+    "memory_duel": "记忆考核对战",
+    "memory_guild": "记忆考核公会赛",
+    "random_event": "随机事件",
+}
+_GAMEPLAY_STATE_LABELS = {
+    "signup": "报名中",
+    "dealing": "发牌中",
+    "calling": "叫牌中",
+    "round_end": "本轮已结束，待继续",
+    "round_complete": "本轮已结束，待继续",
+    "answering": "作答中",
+    "awaiting_reveal": "等国王公开",
+    "waiting": "等待中",
+    "performing": "演出中",
+    "tipping": "打赏中",
+    "in_progress": "进行中",
+}
+# 冲突自救时优先展示的“收尾”指令：用户要先把一局结束掉，别被 N个X 之类的常规指令挤掉
+_GAMEPLAY_WRAP_UP_COMMANDS = ("/结束游戏", "/收手", "/投降", "/退出")
 _COMMANDS = {
     "/事件投票", "/事件投票情况",
     "/我的称号", "/佩戴称号", "/荣誉榜", "/荣誉历史",
@@ -622,7 +646,9 @@ class GroupCommandHandler:
                     message.sender_platform_id, content, received_at, group_chat_id
                 )
             if summary.game_type == "conflict":
-                return self._reply("/当前游戏", "conflict", received_at)
+                return self._gameplay_conflict_reply(
+                    message.sender_platform_id, received_at, group_chat_id
+                )
             return self._reply("/跳过", "no_current_game", received_at)
         if command == "/甩锅游戏":
             return self._blame_start(
@@ -723,7 +749,9 @@ class GroupCommandHandler:
             if summary.game_type == "truth_trade":
                 return self._truth_trade_end(message, received_at, group_chat_id)
             if summary.game_type == "conflict":
-                return self._reply("/当前游戏", "conflict", received_at)
+                return self._gameplay_conflict_reply(
+                    message.sender_platform_id, received_at, group_chat_id
+                )
             return self._reply("/结束游戏", "no_current_game", received_at)
         if command == "/打卡":
             return self._check_in(message.sender_platform_id, received_at, group_chat_id)
@@ -849,7 +877,9 @@ class GroupCommandHandler:
             if summary.game_type == "truth_trade":
                 return self._truth_trade_join(message, received_at, group_chat_id)
             if summary.game_type == "conflict":
-                return self._reply("/当前游戏", "conflict", received_at)
+                return self._gameplay_conflict_reply(
+                    message.sender_platform_id, received_at, group_chat_id
+                )
             return self._event_join(
                 message.sender_platform_id, content, received_at, group_chat_id
             )
@@ -899,7 +929,9 @@ class GroupCommandHandler:
             if summary.game_type == "truth_trade":
                 return self._truth_trade_leave(message, received_at, group_chat_id)
             if summary.game_type == "conflict":
-                return self._reply("/当前游戏", "conflict", received_at)
+                return self._gameplay_conflict_reply(
+                    message.sender_platform_id, received_at, group_chat_id
+                )
             return self._event_leave(
                 message.sender_platform_id, received_at, group_chat_id
             )
@@ -934,7 +966,9 @@ class GroupCommandHandler:
             if summary.game_type == "truth_trade":
                 return self._truth_trade_continue(message, received_at, group_chat_id)
             if summary.game_type == "conflict":
-                return self._reply("/当前游戏", "conflict", received_at)
+                return self._gameplay_conflict_reply(
+                    message.sender_platform_id, received_at, group_chat_id
+                )
             return self._memory_assessment_continue(
                 message.sender_platform_id, received_at, group_chat_id
             )
@@ -1304,6 +1338,41 @@ class GroupCommandHandler:
             return "空包"
         return f"{amount} {self._repository.get_game_settings().currency_name}"
 
+    def _gameplay_conflict_reply(
+        self, platform_id: str, received_at, group_chat_id=None
+    ) -> str:
+        """同群多局并存时列出各局与各自的收尾指令，让人能自己解开。
+
+        历史文案只会说「检测到多个活动游戏，请联系管理员处理」，用户无从下手
+        （而管理端的强制结束入口过去也不发公告）。这里改为只读地列出当前活跃玩法，
+        不改动任何对局状态；列不出内容时回落到原模板。
+        """
+        conflicts = self._repository.active_gameplay_conflicts(
+            platform_id, received_at, group_chat_id
+        )
+        if not conflicts:
+            return self._reply("/当前游戏", "conflict", received_at)
+        marks = "①②③④⑤⑥⑦⑧⑨"
+        lines = [f"【当前游戏】检测到 {len(conflicts)} 局同时进行："]
+        for index, item in enumerate(conflicts[:5]):
+            label = _GAMEPLAY_LABELS.get(item.game_type or "", "当前玩法")
+            details: list[str] = []
+            if item.round_number:
+                details.append(f"第 {item.round_number} 轮")
+            state_label = _GAMEPLAY_STATE_LABELS.get(item.state or "")
+            if state_label:
+                details.append(state_label)
+            suffix = f"（{'，'.join(details)}）" if details else ""
+            commands = list(item.available_commands)
+            wrap_up = [c for c in _GAMEPLAY_WRAP_UP_COMMANDS if c in commands]
+            shown = (wrap_up + [c for c in commands if c not in wrap_up])[:3]
+            action = f"发 {' 或 '.join(shown)}" if shown else "需由本局参与者操作"
+            lines.append(f"{marks[index]} {label}{suffix} — {action}")
+        if len(conflicts) > 5:
+            lines.append(f"……以及另外 {len(conflicts) - 5} 局")
+        lines.append("请先给其中一局收尾，另一局会继续。")
+        return "\n".join(lines)
+
     def _current_game(self, platform_id: str, received_at, group_chat_id=None) -> str:
         summary = self._repository.active_gameplay_summary(
             platform_id, received_at, group_chat_id
@@ -1311,21 +1380,10 @@ class GroupCommandHandler:
         if summary.game_type is None:
             return self._reply("/当前游戏", "none", received_at)
         if summary.game_type == "conflict":
-            return self._reply("/当前游戏", "conflict", received_at)
-        game_name = {
-            "king_game": "国王游戏",
-            "liar_dice": "大话骰子",
-            "never_have_i_ever": "我有你没有",
-            "texas_holdem": "德州扑克",
-            "number_bomb": "蹦蹦数字炸弹",
-            "blame_bomb": "甩锅游戏",
-            "undercover": "谁是卧底",
-            "memory_duel": "记忆考核对战",
-            "memory_single": "记忆考核",
-            "memory_guild": "记忆考核公会赛",
-            "random_event": "随机事件",
-            "truth_trade": "真心换真心",
-        }[summary.game_type]
+            return self._gameplay_conflict_reply(
+                platform_id, received_at, group_chat_id
+            )
+        game_name = _GAMEPLAY_LABELS[summary.game_type]
         if (
             summary.game_type == "number_bomb"
             and summary.mode == "points_tournament"
