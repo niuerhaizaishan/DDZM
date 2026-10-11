@@ -3492,9 +3492,12 @@ class CoreRepository(ShopManagementMixin, HonorsMixin):
 
     @classmethod
     def _group_has_active_gameplay(
-        cls, session: Session, group_id: UUID
+        cls, session: Session, group_id: UUID, *, include_performance: bool = True
     ) -> bool:
         if cls._group_has_active_group_game(session, group_id):
+            return True
+        if include_performance and cls._group_has_active_performance(session, group_id):
+            # 公演调度器自身要用这道门，必须显式 include_performance=False，否则公演会挡住自己
             return True
         random_event = select(RandomEventRecord.id).where(
             RandomEventRecord.group_chat_id == group_id,
@@ -8635,7 +8638,9 @@ class CoreRepository(ShopManagementMixin, HonorsMixin):
                         reservation.state = "waiting"
                         continue
                     if self._group_has_active_gameplay(
-                        session, reservation.group_chat_id
+                        session,
+                        reservation.group_chat_id,
+                        include_performance=False,
                     ):
                         reservation.state = "waiting"
                         continue
@@ -20277,6 +20282,44 @@ class CoreRepository(ShopManagementMixin, HonorsMixin):
                             else (
                                 PerformanceReservationRecord.group_chat_id
                                 == group_chat_id,
+                            )
+                        ),
+                    )
+                )
+            )
+            or session.scalar(
+                select(
+                    exists().where(
+                        RedPacketRecord.active_key.is_not(None),
+                        *(
+                            ()
+                            if group_chat_id is None
+                            else (RedPacketRecord.group_chat_id == group_chat_id,)
+                        ),
+                    )
+                )
+            )
+            or session.scalar(
+                select(
+                    exists().where(
+                        LiarDiceGameRecord.active_key.is_not(None),
+                        *(
+                            ()
+                            if group_chat_id is None
+                            else (LiarDiceGameRecord.group_chat_id == group_chat_id,)
+                        ),
+                    )
+                )
+            )
+            or session.scalar(
+                select(
+                    exists().where(
+                        TruthTradeGameRecord.active_key.is_not(None),
+                        *(
+                            ()
+                            if group_chat_id is None
+                            else (
+                                TruthTradeGameRecord.group_chat_id == group_chat_id,
                             )
                         ),
                     )
