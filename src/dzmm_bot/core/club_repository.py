@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import and_, func, or_, select
 
+from .bot_accounts import is_bot_platform_id
 from .club_card_games import PLAYER_LIMITS
 from .schema import (
     BalanceTransactionRecord,
@@ -755,7 +756,7 @@ class ClubRepositoryMixin:
         player: ClubPlayerRecord,
         now: datetime,
     ) -> dict[str, bool]:
-        if player.user_id is None:
+        if player.user_id is None or is_bot_platform_id(player.platform_id):
             return {key: False for key in TASK_REWARDS}
         user_id = player.user_id
         today = now.astimezone(BEIJING).date()
@@ -833,7 +834,7 @@ class ClubRepositoryMixin:
         with self.transaction():
             with self._session() as session:
                 player = self._club_player(session, platform_id, now, lock=True)
-                if player.user_id is None:
+                if player.user_id is None or is_bot_platform_id(platform_id):
                     raise ValueError("领取任务奖励需要先入职")
                 user = session.get(UserRecord, player.user_id, with_for_update=True)
                 today = now.astimezone(BEIJING).date()

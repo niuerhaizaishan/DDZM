@@ -54,6 +54,7 @@ from .ai_knowledge import (
 )
 
 from .ai_mentions import normalize_ai_mention
+from .bot_accounts import BOT_PLATFORM_IDS, is_bot_platform_id
 from .chinese_input import canonicalize_command_name
 from .game_statistics import (
     other_game_users, record_game_participations, resolved_game_users, truth_trade_game_users,
@@ -1537,7 +1538,7 @@ _CHOP_BOSS_WORDS = ("老板", "董事长", "总裁", "总经理", "人事", "hr"
 _CHOP_BOT_ACCOUNT_NAMES = frozenset({"不问天", "总监事【测试】"})
 # Bot 的平台 ID（bot 未入职，回复它的消息按 platform_id 查不到用户；
 # 该账号在 inbound_messages 里有统计播报记录）。
-_CHOP_BOT_PLATFORM_IDS = frozenset({"acb22871-3895-4e7d-83e5-14b5ca421561"})
+_CHOP_BOT_PLATFORM_IDS = BOT_PLATFORM_IDS
 
 
 def _classify_chop_target(name: str) -> str | None:
@@ -15680,6 +15681,7 @@ class CoreRepository(ClubRepositoryMixin, ClubCardRepositoryMixin, MahjongReposi
                 .where(
                     EstrusChopRecord.created_at >= day_start,
                     EstrusChopRecord.created_at < day_start + timedelta(days=1),
+                    UserRecord.platform_id.not_in(BOT_PLATFORM_IDS),
                 )
                 .group_by(UserRecord.id, UserRecord.display_name)
                 .order_by(func.count().desc(), UserRecord.id)
@@ -27541,7 +27543,8 @@ class CoreRepository(ClubRepositoryMixin, ClubCardRepositoryMixin, MahjongReposi
                     return RandomEventVoteResult("vacant")
                 user_id = session.scalar(
                     select(UserRecord.id).where(
-                        UserRecord.platform_id == platform_id
+                        UserRecord.platform_id == platform_id,
+                        UserRecord.platform_id.not_in(BOT_PLATFORM_IDS),
                     )
                 )
                 if user_id is None:
@@ -28120,7 +28123,10 @@ class CoreRepository(ClubRepositoryMixin, ClubCardRepositoryMixin, MahjongReposi
                     UserRecord,
                     UserRecord.id == RandomEventPollVoteRecord.user_id,
                 )
-                .where(RandomEventPollVoteRecord.poll_id == poll.id)
+                .where(
+                    RandomEventPollVoteRecord.poll_id == poll.id,
+                    UserRecord.platform_id.not_in(BOT_PLATFORM_IDS),
+                )
                 .order_by(UserRecord.employee_number)
             ).all()
             by_candidate: dict[UUID, list[str]] = {}
@@ -28263,8 +28269,14 @@ class CoreRepository(ClubRepositoryMixin, ClubCardRepositoryMixin, MahjongReposi
                         [
                             vote.candidate_id
                             for vote in session.scalars(
-                                select(RandomEventPollVoteRecord).where(
-                                    RandomEventPollVoteRecord.poll_id == poll.id
+                                select(RandomEventPollVoteRecord)
+                                .join(
+                                    UserRecord,
+                                    UserRecord.id == RandomEventPollVoteRecord.user_id,
+                                )
+                                .where(
+                                    RandomEventPollVoteRecord.poll_id == poll.id,
+                                    UserRecord.platform_id.not_in(BOT_PLATFORM_IDS),
                                 )
                             )
                         ],
@@ -28968,8 +28980,11 @@ class CoreRepository(ClubRepositoryMixin, ClubCardRepositoryMixin, MahjongReposi
         )
         votes = list(
             session.scalars(
-                select(RandomEventPollVoteRecord).where(
-                    RandomEventPollVoteRecord.poll_id == poll.id
+                select(RandomEventPollVoteRecord)
+                .join(UserRecord, UserRecord.id == RandomEventPollVoteRecord.user_id)
+                .where(
+                    RandomEventPollVoteRecord.poll_id == poll.id,
+                    UserRecord.platform_id.not_in(BOT_PLATFORM_IDS),
                 )
             )
         )
@@ -29417,7 +29432,7 @@ class CoreRepository(ClubRepositoryMixin, ClubCardRepositoryMixin, MahjongReposi
     def record_activity(
         self, platform_id: str, received_at: datetime, content: str
     ) -> None:
-        if content.lstrip().startswith("/"):
+        if is_bot_platform_id(platform_id) or content.lstrip().startswith("/"):
             return
         character_count = len("".join(content.split()))
         if not character_count:
@@ -29458,6 +29473,8 @@ class CoreRepository(ClubRepositoryMixin, ClubCardRepositoryMixin, MahjongReposi
     def personal_activity(
         self, platform_id: str, now: datetime
     ) -> PersonalActivity | None:
+        if is_bot_platform_id(platform_id):
+            return PersonalActivity(level=0, reward=0)
         with self._session() as session:
             user = session.scalar(
                 select(UserRecord).where(UserRecord.platform_id == platform_id)
@@ -31057,7 +31074,10 @@ class CoreRepository(ClubRepositoryMixin, ClubCardRepositoryMixin, MahjongReposi
             users = {
                 user.platform_id: user
                 for user in session.scalars(
-                    select(UserRecord).where(UserRecord.joined_at < end)
+                    select(UserRecord).where(
+                        UserRecord.joined_at < end,
+                        UserRecord.platform_id.not_in(BOT_PLATFORM_IDS),
+                    )
                 )
             }
             activity_totals: dict[UUID, int] = {}
@@ -31108,7 +31128,10 @@ class CoreRepository(ClubRepositoryMixin, ClubCardRepositoryMixin, MahjongReposi
                 )
                 .join(UserRecord, UserRecord.id == DailyCheckinRecord.user_id)
                 .outerjoin(RankRecord, RankRecord.id == UserRecord.rank_id)
-                .where(DailyCheckinRecord.checkin_date == now.date())
+                .where(
+                    DailyCheckinRecord.checkin_date == now.date(),
+                    UserRecord.platform_id.not_in(BOT_PLATFORM_IDS),
+                )
             ):
                 income_recorded = session.scalar(
                     select(BalanceTransactionRecord.id).where(
@@ -31141,8 +31164,11 @@ class CoreRepository(ClubRepositoryMixin, ClubCardRepositoryMixin, MahjongReposi
             )
             activities = list(
                 session.scalars(
-                    select(DailyActivityRecord).where(
+                    select(DailyActivityRecord)
+                    .join(UserRecord, UserRecord.id == DailyActivityRecord.user_id)
+                    .where(
                         DailyActivityRecord.activity_date < now.date(),
+                        UserRecord.platform_id.not_in(BOT_PLATFORM_IDS),
                         ~already_settled,
                     )
                 )
@@ -31198,9 +31224,11 @@ class CoreRepository(ClubRepositoryMixin, ClubCardRepositoryMixin, MahjongReposi
         with self._session() as session:
             complete_user_ids = session.scalars(
                 select(DailyCheckinRecord.user_id)
+                .join(UserRecord, UserRecord.id == DailyCheckinRecord.user_id)
                 .where(
                     DailyCheckinRecord.checkin_date >= week_start,
                     DailyCheckinRecord.checkin_date < week_end,
+                    UserRecord.platform_id.not_in(BOT_PLATFORM_IDS),
                 )
                 .group_by(DailyCheckinRecord.user_id)
                 .having(func.count(DailyCheckinRecord.id) == 7)
@@ -31353,6 +31381,7 @@ class CoreRepository(ClubRepositoryMixin, ClubCardRepositoryMixin, MahjongReposi
                     BalanceTransactionRecord.amount > 0,
                     BalanceTransactionRecord.occurred_at >= start,
                     BalanceTransactionRecord.occurred_at < end,
+                    UserRecord.platform_id.not_in(BOT_PLATFORM_IDS),
                 )
                 .group_by(UserRecord.id, UserRecord.display_name)
                 .order_by(income.desc(), UserRecord.id)
@@ -32175,6 +32204,7 @@ class CoreRepository(ClubRepositoryMixin, ClubCardRepositoryMixin, MahjongReposi
             )
             .join(UserRecord, UserRecord.department_id == DepartmentRecord.id)
             .outerjoin(RankRecord, UserRecord.rank_id == RankRecord.id)
+            .where(UserRecord.platform_id.not_in(BOT_PLATFORM_IDS))
             .group_by(
                 DepartmentRecord.id,
                 DepartmentRecord.name,
@@ -32221,7 +32251,10 @@ class CoreRepository(ClubRepositoryMixin, ClubCardRepositoryMixin, MahjongReposi
                     UserRecord.employee_number,
                 )
                 .join(RankRecord, UserRecord.rank_id == RankRecord.id)
-                .where(UserRecord.department_id.in_(department_ids))
+                .where(
+                    UserRecord.department_id.in_(department_ids),
+                    UserRecord.platform_id.not_in(BOT_PLATFORM_IDS),
+                )
                 .order_by(
                     UserRecord.department_id,
                     RankRecord.sort_order.desc(),
@@ -33071,6 +33104,8 @@ class CoreRepository(ClubRepositoryMixin, ClubCardRepositoryMixin, MahjongReposi
         *,
         group_chat_id: UUID | None = None,
     ) -> bool:
+        if is_bot_platform_id(user.platform_id):
+            return False
         with self.transaction():
             with self._session() as session:
                 employee = session.get(UserRecord, user.id)

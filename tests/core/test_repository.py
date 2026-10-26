@@ -14,6 +14,7 @@ from sqlalchemy import create_engine, event, exists, func, inspect, select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
 
+from dzmm_bot.core.bot_accounts import BOT_PLATFORM_IDS
 from dzmm_bot.core.schema import (
     AIActivityEventRecord,
     BEIJING,
@@ -10814,6 +10815,70 @@ def test_activity_counts_joined_non_command_text_without_whitespace(repository, 
     repository.record_activity("u1", now, "甲乙丙丁戊己庚")
 
     assert repository.personal_activity("u1", now).level == 1
+
+
+def test_bot_account_does_not_accrue_daily_activity_or_checkin_rewards(
+    repository, session_factory, now
+):
+    from dzmm_bot.core.schema import DailyActivityRecord, DailyCheckinRecord
+
+    platform_id = next(iter(BOT_PLATFORM_IDS))
+    user, _ = repository.create_user(platform_id, "统计机器人", now, 0)
+
+    repository.record_activity(platform_id, now, "一二三四五六七八九十")
+
+    assert repository.personal_activity(platform_id, now).level == 0
+    assert repository.check_in(user, now, 10) is False
+    assert repository.find_user(platform_id).balance == 0
+    with session_factory() as session:
+        assert session.scalar(
+            select(func.count()).select_from(DailyActivityRecord)
+        ) == 0
+        assert session.scalar(
+            select(func.count()).select_from(DailyCheckinRecord)
+        ) == 0
+
+    tasks = repository.club_tasks(platform_id, now)
+    assert not any(task["eligible"] for task in tasks)
+    with pytest.raises(ValueError, match="需要先入职"):
+        repository.claim_club_task(platform_id, "employment", now)
+
+
+def test_bot_account_is_excluded_from_daily_rankings_and_headcounts(
+    repository, session_factory, now
+):
+    from dzmm_bot.core.schema import EstrusChopRecord
+
+    platform_id = next(iter(BOT_PLATFORM_IDS))
+    bot, _ = repository.create_user(platform_id, "统计机器人", now, 0)
+    human, _ = repository.create_user("human", "真人员工", now, 0)
+    repository.record_balance_change(bot.id, 20, "test", now)
+    repository.record_balance_change(human.id, 10, "test", now)
+    with session_factory.begin() as session:
+        session.add_all(
+            EstrusChopRecord(
+                group_chat_id=PRIMARY_GROUP_CHAT_ID,
+                chopper_user_id=user.id,
+                target_user_id=user.id,
+                heat_gain=5,
+                coins=0,
+                climax_triggered=False,
+                created_at=now,
+            )
+            for user in (bot, human)
+        )
+    with session_factory() as session:
+        income = repository._income_rankings(session, now)
+
+    assert income == [("真人员工", 10)]
+    assert repository.estrus_popularity_rankings(PRIMARY_GROUP_CHAT_ID, now) == [
+        {
+            "display_name": "真人员工",
+            "today_chopped": 1,
+            "total_chopped": 1,
+        }
+    ]
+    assert repository.get_user_department_headcount("human").total_count == 1
 
 
 def test_user_page_returns_newest_records_and_total(repository, now):
