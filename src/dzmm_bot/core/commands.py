@@ -2820,13 +2820,18 @@ class GroupCommandHandler:
             user = self._repository.get_user_profile(platform_id).user
             history = self._repository.honor_history(now, user_id=user.id)
             lines = ["【荣誉历史】（最近 20 项）"]
-            lines.extend(f"{item['week_start']}｜{item['name']}" for item in history["items"])
+            for item in history["items"]:
+                if item["expires_at"] is None:
+                    status = "已撤回" if item["revoked_at"] else "永久"
+                    lines.append(f"{item['valid_from'][:10]}｜{item['name']}｜{status}")
+                else:
+                    lines.append(f"{item['week_start']}｜{item['name']}")
             return "\n".join(lines) if history["items"] else "你还没有获得过荣誉称号。"
         lines = ["【我的称号】", f"当前佩戴：{personal['equipped'] or '未佩戴'}"]
         for item in personal["items"]:
-            expires_at = item["expires_at"][:16].replace("T", " ")
+            validity = "永久" if item["expires_at"] is None else f"有效至 {item['expires_at'][:16].replace('T', ' ')}"
             lines.append(
-                f"{item['number']}. {item['name']}｜历史获得 {item['total_wins']} 次｜有效至 {expires_at}"
+                f"{item['number']}. {item['name']}｜历史获得 {item['total_wins']} 次｜{validity}"
             )
         if not personal["items"]:
             lines.append("当前没有可佩戴称号。")

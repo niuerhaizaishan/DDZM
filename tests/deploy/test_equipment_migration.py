@@ -96,7 +96,7 @@ def test_upgrade_enables_saved_birthday_switches_and_preserves_other_settings(tm
     engine.dispose()
 
 
-def test_upstream_head_can_upgrade_to_workstation_merge(tmp_path, monkeypatch):
+def test_upstream_head_can_upgrade_to_workstation_and_permanent_honors(tmp_path, monkeypatch):
     database_url = f"sqlite+pysqlite:///{tmp_path / 'upstream.db'}"
     monkeypatch.setenv("DZMM_DATABASE_URL", database_url)
     engine = create_engine(database_url)
@@ -105,12 +105,15 @@ def test_upstream_head_can_upgrade_to_workstation_merge(tmp_path, monkeypatch):
         Table(name, metadata, Column("id", Uuid, primary_key=True))
     metadata.create_all(engine)
     config = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
+    command.stamp(config, "20261005_95")
+    command.upgrade(config, "20261005_99")
     command.stamp(config, "20261021_126")
     command.upgrade(config, "head")
     with engine.connect() as connection:
         assert connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all() == [
-            "20261109_merge_workstation"
+            "20261109_merge_permanent_honors"
         ]
         assert connection.scalar(text("SELECT count(*) FROM equipment_items")) == 10
         assert connection.scalar(text("SELECT count(*) FROM workstation_admin_operations")) == 0
+        assert connection.scalar(text("SELECT count(*) FROM honor_seasons")) == 0
     engine.dispose()

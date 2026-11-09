@@ -239,6 +239,10 @@ from .honors import (
     HonorConfigRequest,
     HonorConflict,
     HonorCorrectionRequest,
+    HonorGrantRequest,
+    HonorRevokeRequest,
+    HonorSeasonIssueRequest,
+    HonorSeasonPreviewInput,
     HonorSettleRequest,
 )
 from .commands import GroupCommandHandler, is_reserved_command_name
@@ -1790,8 +1794,29 @@ def create_app(
     @app.get("/internal/game/honors/history")
     def honor_history(_: Annotated[None, Depends(authorize)], user_id: UUID | None = None,
                       title_key: str | None = None, week_start: date | None = None,
+                      source: Literal["weekly", "season", "manual"] | None = None,
                       page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100)) -> dict:
-        return repository.honor_history(clock(), user_id, title_key, week_start, page, page_size)
+        return repository.honor_history(clock(), user_id, title_key, week_start, page, page_size, source)
+
+    @app.get("/internal/game/honors/employees")
+    def honor_employee_search(_: Annotated[None, Depends(authorize)], query: str = Query(min_length=1, max_length=64)) -> dict:
+        return repository.find_honor_employees(query)
+
+    @app.post("/internal/game/honors/permanent/grant")
+    def honor_grant(request: HonorGrantRequest, _: Annotated[None, Depends(authorize)]) -> dict:
+        return honor_call(lambda: repository.grant_permanent_honor(request, request.actor, clock()))
+
+    @app.post("/internal/game/honors/permanent/{award_id}/revoke")
+    def honor_revoke(award_id: UUID, request: HonorRevokeRequest, _: Annotated[None, Depends(authorize)]) -> dict:
+        return honor_call(lambda: repository.revoke_permanent_honor(award_id, request.reason, request.actor, clock()))
+
+    @app.post("/internal/game/honors/seasons/s1/preview")
+    def honor_season_preview(request: HonorSeasonPreviewInput, _: Annotated[None, Depends(authorize)]) -> dict:
+        return honor_call(lambda: repository.preview_s1_honors(request.roster, clock()))
+
+    @app.post("/internal/game/honors/seasons/s1/issue")
+    def honor_season_issue(request: HonorSeasonIssueRequest, _: Annotated[None, Depends(authorize)]) -> dict:
+        return honor_call(lambda: repository.issue_s1_honors(request.roster, request.preview_digest, request.actor, clock()))
 
     @app.get("/internal/game/users/{platform_id}/honors")
     def employee_honors(platform_id: str, _: Annotated[None, Depends(authorize)]) -> dict:

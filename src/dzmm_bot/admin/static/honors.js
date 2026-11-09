@@ -50,6 +50,7 @@ function renderHonorConfiguration(config, groups) {
     <div class="panel-heading honor-intro"><div><h2>称号配置</h2><p class="muted">北京时间周一至周日统计。三项签到称号达标者均获得，分别有效 7、30、100 天；其他称号每项最多一人、有效一周。可获得多个、佩戴一个；排名同分随机抽签。</p>
     <p class="honor-version">本周评选：${config.current.enabled ? "已开启" : "关闭"}；编辑版本 ${config.version}，生效统计周 ${escapeHtml(config.effective_week)}。</p>
     <p class="muted honor-config-note">保存修改从下个统计周生效。签到与投稿按公司记录统计；其他称号按所选群统计。游戏按有效整局计数，德州扑克按周累计净额排名，AI 互动只计成功完成的请求。门槛：签到为天数、活跃为等级、其他为次数或金额；咸鱼取最高允许等级。</p></div></div>
+    ${renderPermanentHonorTools(editable)}
     <form id="honor-config-form"><fieldset${disabled}><div class="event-input-grid">
       <label class="honor-check"><input id="honor-enabled" type="checkbox"${values.enabled ? " checked" : ""}>开启周荣誉评选</label>
       <label class="honor-check"><input id="honor-announce" type="checkbox"${values.announce ? " checked" : ""}>开启荣誉公告（结算后一次、周一定时一次）</label>
@@ -59,7 +60,9 @@ function renderHonorConfiguration(config, groups) {
     <button class="primary" type="submit">保存，下个统计周生效</button></fieldset></form>
     <section class="panel"><h2>周期预览与补结算</h2><div class="command-actions"><label>统计周周一<input id="honor-week" type="date" value="${escapeHtml(initialWeek)}"></label><button id="honor-preview-button" class="secondary" type="button">预览</button><button id="honor-settle-button" class="primary" type="button" disabled>确认结算</button><button id="honor-backfill-button" class="secondary" type="button"${disabled}>补结算全部缺失周期</button></div><div id="honor-preview-results" aria-live="polite"></div></section>
     <section class="panel"><h2>结算与纠错</h2><div id="honor-periods"></div><nav id="honor-period-pagination" class="pagination"></nav><div id="honor-corrections"></div></section>
-    <section class="panel"><h2>荣誉历史</h2><form id="honor-history-filters" class="event-input-grid"><label>员工 ID（可从员工档案复制）<input id="honor-history-user" placeholder="留空查全部"></label><label>称号<select id="honor-history-title"><option value="">全部</option>${values.rules.map((rule) => `<option value="${escapeHtml(rule.key)}">${escapeHtml(rule.name)}</option>`).join("")}</select></label><label>统计周周一<input id="honor-history-week" type="date"></label><button class="secondary" type="submit">查询</button></form><div id="honor-history"></div><nav id="honor-history-pagination" class="pagination"></nav></section>`;
+    <section class="panel"><h2>荣誉历史</h2><form id="honor-history-filters" class="event-input-grid"><label>员工 ID（可从员工档案复制）<input id="honor-history-user" placeholder="留空查全部"></label><label>来源<select id="honor-history-source"><option value="">全部</option><option value="weekly">周榜</option><option value="season">赛季</option><option value="manual">管理员授予</option></select></label><label>周榜称号<select id="honor-history-title"><option value="">全部</option>${values.rules.map((rule) => `<option value="${escapeHtml(rule.key)}">${escapeHtml(rule.name)}</option>`).join("")}</select></label><label>统计周周一<input id="honor-history-week" type="date"></label><button class="secondary" type="submit">查询</button></form><div id="honor-history"></div><nav id="honor-history-pagination" class="pagination"></nav></section>`;
+  bindPermanentHonorGrant();
+  if (editable) bindSeasonHonors();
   document.querySelector("#honor-config-form").addEventListener("submit", saveHonorConfiguration);
   document.querySelector("#honor-week").addEventListener("change", () => {
     honorPreview = null;
@@ -72,6 +75,164 @@ function renderHonorConfiguration(config, groups) {
   document.querySelector("#honor-history-filters").addEventListener("submit", (event) => {
     event.preventDefault();
     loadHonorHistory(1).catch((error) => setResult(error.message, "error"));
+  });
+}
+
+function renderPermanentHonorTools(canManageSeason) {
+  return `<details class="panel honor-permanent-tools"><summary>授予永久称号</summary>
+    <form id="honor-employee-search" class="command-actions">
+      <label>员工名称或工号<input name="query" maxlength="64" required></label>
+      <button class="secondary" type="submit">查找员工</button>
+    </form>
+    <form id="honor-permanent-grant"><div class="event-input-grid">
+      <label>员工<select name="employee_number" required><option value="">请先查找员工</option></select></label>
+      <label>称号<input name="name" maxlength="64" required></label>
+      <label>授予原因<textarea name="reason" maxlength="300" required></textarea></label>
+    </div><button class="primary" type="submit">确认授予</button></form>
+  </details>${canManageSeason ? `<details class="panel honor-permanent-tools"><summary>S1 赛季永久称号</summary>
+    <p class="muted">以结季时的部门和职位生成称号。请核对预览，整个赛季只发放一次。</p>
+    <form id="honor-season-preview">
+      <label>名单来源<select name="mode"><option value="historical">历史结季名单</option><option value="current">当前组织名单</option></select></label>
+      <label id="honor-season-roster-label">粘贴历史名单，每行填工号、部门、职位，以制表符分隔，不含表头。
+        <textarea name="roster" rows="6" placeholder="0001&#9;核心技术部&#9;部门总监"></textarea>
+      </label>
+      <div class="command-actions"><button class="secondary" type="submit">预览名单</button>
+        <button id="honor-season-issue" class="primary" type="button" disabled>确认批量发放</button></div>
+    </form><div id="honor-season-results" aria-live="polite"></div>
+  </details>` : ""}`;
+}
+
+function bindPermanentHonorGrant() {
+  const search = document.querySelector("#honor-employee-search");
+  const grant = document.querySelector("#honor-permanent-grant");
+  const employees = grant.elements.employee_number;
+  let requestId = 0;
+  const clearEmployees = () => {
+    requestId++;
+    employees.replaceChildren(new Option("请先查找员工", ""));
+  };
+  search.elements.query.addEventListener("input", clearEmployees);
+  search.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    clearEmployees();
+    const currentRequest = requestId;
+    const query = search.elements.query.value.trim();
+    if (!query) return;
+    try {
+      const data = await requestGame(`/api/game/honors/employees?${new URLSearchParams({query})}`);
+      if (!search.isConnected || currentRequest !== requestId) return;
+      const prompt = data.items.length ? "请选择员工" : "未找到员工";
+      employees.replaceChildren(new Option(prompt, ""), ...data.items.map((item) =>
+        new Option(`${formatEmployeeNumber(item.employee_number)} ${item.name}`, item.employee_number)));
+    } catch (error) {
+      setResult(error.message, "error");
+    }
+  });
+  grant.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const fields = new FormData(grant);
+    const name = fields.get("name").trim();
+    const reason = fields.get("reason").trim();
+    if (!name || !reason) return setResult("请填写称号和授予原因", "error");
+    if (!window.confirm(`将永久称号「${name}」授予 ${employees.selectedOptions[0].text}？`)) return;
+    try {
+      await runMutation(event.submitter, "授予中…", async () => {
+        await requestGame("/api/game/honors/permanent/grant", {
+          method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({employee_number: Number(fields.get("employee_number")), name, reason}),
+        });
+        grant.reset();
+        setResult("永久称号已授予");
+        if (grant.isConnected) await loadHonorHistory(1);
+      });
+    } catch (error) {
+      setResult(error.message, "error");
+    }
+  });
+}
+
+function readSeasonRoster(form) {
+  if (form.elements.mode.value === "current") return null;
+  const lines = form.elements.roster.value.split(/\r?\n/);
+  const roster = [];
+  for (const [index, line] of lines.entries()) {
+    if (!line.trim()) continue;
+    const fields = line.split("\t").map((field) => field.trim());
+    if (fields.length !== 3 || !/^#?\d{1,10}$/.test(fields[0])) {
+      throw new Error(`历史名单第 ${index + 1} 行格式有误，请填写工号、部门和职位三列`);
+    }
+    const [number, department, rank] = fields;
+    roster.push({employee_number: Number(number.replace(/^#/, "")), department, rank});
+  }
+  if (!roster.length) throw new Error("请先粘贴历史名单");
+  return roster;
+}
+
+function renderSeasonHonorPreview(report) {
+  if (report.issued) {
+    const batch = report.issued;
+    return `<p>S1 已发放 ${batch.count} 人 · ${escapeHtml(formatHeartbeat(batch.issued_at))} · ${escapeHtml(batch.actor)}</p>`;
+  }
+  const rows = [...report.rows, ...report.skipped].map((row) => `<tr><td>${formatEmployeeNumber(row.employee_number)}</td>
+    <td>${escapeHtml(row.name || "—")}</td><td>${escapeHtml(row.department || "—")}</td><td>${escapeHtml(row.rank || "—")}</td>
+    <td>${escapeHtml(row.title || row.reason)}</td></tr>`).join("");
+  return `<p>可发放 ${report.rows.length} 人 · 跳过 ${report.skipped.length} 人</p>
+    ${rows ? `<div class="table-scroll honor-season-table" role="region" aria-label="S1 名单预览" tabindex="0"><table class="data-table"><thead><tr><th>工号</th><th>员工</th><th>部门</th><th>职位</th><th>称号或跳过原因</th></tr></thead><tbody>${rows}</tbody></table></div>` : ""}`;
+}
+
+function bindSeasonHonors() {
+  const form = document.querySelector("#honor-season-preview");
+  const results = document.querySelector("#honor-season-results");
+  const issue = document.querySelector("#honor-season-issue");
+  const rosterLabel = document.querySelector("#honor-season-roster-label");
+  let confirmation = null;
+  let requestId = 0;
+  const invalidate = () => {
+    requestId++;
+    confirmation = null;
+    issue.disabled = true;
+    results.replaceChildren();
+    const historical = form.elements.mode.value === "historical";
+    rosterLabel.hidden = !historical;
+    form.elements.roster.disabled = !historical;
+  };
+  form.addEventListener("input", invalidate);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    invalidate();
+    const currentRequest = requestId;
+    try {
+      const roster = readSeasonRoster(form);
+      const report = await runMutation(event.submitter, "预览中…", () => requestGame("/api/game/honors/seasons/s1/preview", {
+        method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({roster}),
+      }));
+      if (!report || !form.isConnected || currentRequest !== requestId) return;
+      results.innerHTML = renderSeasonHonorPreview(report);
+      if (report.rows?.length) {
+        confirmation = {roster, preview_digest: report.preview_digest, count: report.rows.length, skipped: report.skipped.length};
+        issue.disabled = issue.dataset.busy === "true";
+      }
+    } catch (error) {
+      setResult(error.message, "error");
+    }
+  });
+  issue.addEventListener("click", async () => {
+    if (!confirmation) return;
+    const {roster, preview_digest, count, skipped} = confirmation;
+    if (!window.confirm(`确认向 ${count} 名员工发放 S1 赛季永久称号，跳过 ${skipped} 人？S1 发放完成后将关闭该批次。`)) return;
+    try {
+      const issued = await runMutation(issue, "发放中…", () => requestGame("/api/game/honors/seasons/s1/issue", {
+        method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({roster, preview_digest}),
+      }));
+      if (!issued) return;
+      invalidate();
+      results.innerHTML = renderSeasonHonorPreview({issued});
+      setResult("S1 赛季永久称号已发放");
+      if (form.isConnected) await loadHonorHistory(1);
+    } catch (error) {
+      invalidate();
+      setResult(error.message, "error");
+    }
   });
 }
 
@@ -188,15 +349,61 @@ async function openHonorCorrections(periodId) {
 }
 
 async function loadHonorHistory(page = honorHistoryPage) {
+  const history = document.querySelector("#honor-history");
   const params = new URLSearchParams({page: String(page), page_size: "20"});
-  for (const [field, selector] of [["user_id", "#honor-history-user"], ["title_key", "#honor-history-title"], ["week_start", "#honor-history-week"]]) {
+  for (const [field, selector] of [["user_id", "#honor-history-user"], ["title_key", "#honor-history-title"],
+    ["week_start", "#honor-history-week"], ["source", "#honor-history-source"]]) {
     const value = document.querySelector(selector).value.trim();
     if (value) params.set(field, value);
   }
   const data = await requestGame(`/api/game/honors/history?${params}`);
+  if (!history.isConnected) return;
   honorHistoryPage = data.page;
-  document.querySelector("#honor-history").innerHTML = data.items.map((item) => `<article class="data-row"><div><b>${escapeHtml(item.winner_name)} · ${escapeHtml(item.name)}</b><small>统计周 ${escapeHtml(item.week_start)} · 成绩 ${item.score} · ${item.active ? "当前有效" : "历史荣誉"}</small><small>员工 ID：${escapeHtml(item.user_id)}</small></div></article>`).join("") || '<p class="muted">没有符合条件的获奖记录。</p>';
+  const canRevoke = identity?.role === "super_admin";
+  history.innerHTML = data.items.map((item) => `<article class="data-row"><div>
+    <b>${escapeHtml(item.winner_name)} · ${escapeHtml(item.name)}</b>
+    <small>${escapeHtml(honorHistoryContext(item))}</small>
+    <small>员工 ID：${escapeHtml(item.user_id || "—")}</small>
+    ${canRevoke && item.source !== "weekly" && item.active ? `<details><summary>撤回</summary>
+      <form data-honor-revoke="${escapeHtml(item.id)}"><label>撤回原因<textarea name="reason" maxlength="300" required></textarea></label>
+      <button class="secondary" type="submit">确认撤回</button></form></details>` : ""}
+  </div></article>`).join("") || '<p class="muted">没有符合条件的获奖记录。</p>';
+  for (const form of history.querySelectorAll("form[data-honor-revoke]")) {
+    form.addEventListener("submit", revokePermanentHonor);
+  }
   renderPagination(document.querySelector("#honor-history-pagination"), data, "条荣誉", (target) => loadHonorHistory(target).catch((error) => setResult(error.message, "error")));
+}
+
+function honorHistoryContext(item) {
+  if (item.source === "weekly") {
+    return `统计周 ${item.week_start} · 成绩 ${item.score} · ${item.active ? "当前有效" : "历史荣誉"}`;
+  }
+  const details = item.source_details || {};
+  const source = item.source === "season" ? `${item.season_code} 赛季` : "管理员授予";
+  const context = [source, item.revoked_at ? "已撤回" : "永久", `授予于 ${formatHeartbeat(item.valid_from)}`];
+  if (details.actor) context.push(`授予人 ${details.actor}`);
+  if (details.reason) context.push(`授予原因 ${details.reason}`);
+  if (item.revoked_at) context.push(`撤回于 ${formatHeartbeat(item.revoked_at)}`, `撤回人 ${details.revoked_by}`, `撤回原因 ${details.revoke_reason}`);
+  return context.join(" · ");
+}
+
+async function revokePermanentHonor(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const reason = form.elements.reason.value.trim();
+  if (!reason) return setResult("请填写撤回原因", "error");
+  if (!window.confirm("确认撤回该永久称号？正在佩戴的称号将同步卸下。")) return;
+  try {
+    await runMutation(event.submitter, "撤回中…", async () => {
+      await requestGame(`/api/game/honors/permanent/${form.dataset.honorRevoke}/revoke`, {
+        method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({reason}),
+      });
+      setResult("永久称号已撤回");
+      if (form.isConnected) await loadHonorHistory();
+    });
+  } catch (error) {
+    setResult(error.message, "error");
+  }
 }
 
 async function loadEmployeeHonors(platformId) {
@@ -204,10 +411,10 @@ async function loadEmployeeHonors(platformId) {
   const data = await requestGame(`/api/game/users/${encodeURIComponent(platformId)}/honors`);
   if (employeeProfileModal.dataset.platformId !== platformId || requestId !== employeeHonorRequestId) return;
   document.querySelector("#employee-profile-modal-title").textContent = `编辑档案：${data.name}${data.equipped ? `【荣誉称号：${data.equipped}】` : ""}`;
-  document.querySelector("#employee-honors-summary").textContent = `当前佩戴：${data.equipped || "未佩戴"}；历史累计获得 ${Object.values(data.history_counts).reduce((total, count) => total + count, 0)} 次；员工 ID：${data.user_id}。当前可佩戴：${data.items.map((item) => `${item.name}（累计 ${item.total_wins} 次）`).join("、") || "无"}`;
+  document.querySelector("#employee-honors-summary").textContent = `当前佩戴：${data.equipped || "未佩戴"}；历史累计获得 ${Object.values(data.history_counts).reduce((total, count) => total + count, 0)} 次；员工 ID：${data.user_id}。当前可佩戴：${data.items.map((item) => item.expires_at ? `${item.name}（累计 ${item.total_wins} 次）` : `${item.name}（永久）`).join("、") || "无"}`;
   const history = await requestGame(`/api/game/honors/history?user_id=${encodeURIComponent(data.user_id)}&page_size=20`);
   if (employeeProfileModal.dataset.platformId !== platformId || requestId !== employeeHonorRequestId) return;
-  document.querySelector("#employee-honors-history").innerHTML = '<h3>最近 20 条荣誉</h3>' + (history.items.map((item) => `<p>${escapeHtml(item.week_start)}｜${escapeHtml(item.name)}｜${item.active ? "当前有效" : "历史荣誉"}</p>`).join("") || '<p class="muted">暂无获奖记录。</p>');
+  document.querySelector("#employee-honors-history").innerHTML = '<h3>最近 20 条荣誉</h3>' + (history.items.map((item) => `<p>${escapeHtml(item.name)}｜${escapeHtml(honorHistoryContext(item))}</p>`).join("") || '<p class="muted">暂无获奖记录。</p>');
 }
 
 document.querySelector("#employee-honors-button").addEventListener("click", () => {

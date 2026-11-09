@@ -11,7 +11,7 @@ from sqlalchemy.pool import StaticPool
 
 from dzmm_bot.core.app import create_app
 from dzmm_bot.core.commands import GroupCommandHandler
-from dzmm_bot.core.honors import HonorConflict, midnight, week_of
+from dzmm_bot.core.honors import HonorConflict, HonorGrantInput, midnight, week_of
 from dzmm_bot.core.repository import CoreRepository
 from dzmm_bot.core.schema import (
     AIRequestRecord, AuditEventRecord, Base, DailyCheckinRecord, DarkMarketListingRecord,
@@ -563,6 +563,35 @@ def test_changed_preview_and_unfinished_week_cannot_settle(context):
         repository.settle_honors(WEEK, "admin", midnight(WEEK))
     assert repository.honor_periods()["total"] == 0
     assert not repository.preview_honors(WEEK, midnight(WEEK))["can_settle"]
+
+
+def test_permanent_honor_chat_commands_outlast_weekly_awards(context):
+    repository, factory = context
+    configure(repository)
+    chop(repository, factory, "male-1")
+    repository.settle_honors(WEEK, "admin", SETTLED)
+    with factory() as session:
+        number = session.scalar(select(UserRecord.employee_number).where(UserRecord.platform_id == "male-1"))
+    award = repository.grant_permanent_honor(HonorGrantInput(
+        employee_number=number, name="年度热心同事", reason="协助新人入职",
+    ), "admin", SETTLED)
+    handler = GroupCommandHandler(repository)
+    later = SETTLED + timedelta(days=365)
+
+    def command(text, now=SETTLED):
+        return handler.handle(InboundMessage(str(uuid4()), "male-1", text, now,
+                                             source_type="direct", chatroom_id="dm"))
+
+    titles = command("/我的称号")
+    assert "1. 公司最靓的仔｜历史获得 1 次｜有效至" in titles
+    assert "2. 年度热心同事｜历史获得 1 次｜永久" in titles
+    assert "已佩戴" in command("/佩戴称号 2")
+    repository.run_honor_jobs(later)
+    assert command("/我", later).startswith("糯糯【荣誉称号：年度热心同事】")
+    assert "年度热心同事｜永久" in command("/荣誉历史", later)
+    repository.revoke_permanent_honor(UUID(award["id"]), "本人申请", "admin", later)
+    assert "年度热心同事" not in command("/我", later)
+    assert "年度热心同事｜已撤回" in command("/荣誉历史", later)
 
 
 @pytest.mark.parametrize("wear_command", ["/佩戴称号", "/装备称号", "/编辑称号"])

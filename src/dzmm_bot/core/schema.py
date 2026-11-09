@@ -2611,21 +2611,46 @@ class HonorPeriodRecord(Base):
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
 
+class HonorSeasonRecord(Base):
+    __tablename__ = "honor_seasons"
+
+    code: Mapped[str] = mapped_column(String(8), primary_key=True)
+    issued_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    issued_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    preview_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    issued_count: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
 class HonorAwardRecord(Base):
     __tablename__ = "honor_awards"
-    __table_args__ = (UniqueConstraint("period_id", "title_key", "user_id", name="uq_honor_awards_period_title_user"),)
+    __table_args__ = (
+        UniqueConstraint("period_id", "title_key", "user_id", name="uq_honor_awards_period_title_user"),
+        UniqueConstraint("season_code", "user_id", name="uq_honor_awards_season_user"),
+        CheckConstraint(
+            "(source = 'weekly' AND period_id IS NOT NULL AND expires_at IS NOT NULL "
+            "AND season_code IS NULL AND revoked_at IS NULL) OR "
+            "(source IN ('season', 'manual') AND period_id IS NULL AND expires_at IS NULL "
+            "AND user_id IS NOT NULL AND ((source = 'season' AND season_code IS NOT NULL) "
+            "OR (source = 'manual' AND season_code IS NULL)))",
+            name="ck_honor_award_source",
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
-    period_id: Mapped[UUID] = mapped_column(ForeignKey("honor_periods.id"), nullable=False)
+    period_id: Mapped[UUID | None] = mapped_column(ForeignKey("honor_periods.id"))
     title_key: Mapped[str] = mapped_column(String(64), nullable=False)
     title_name: Mapped[str] = mapped_column(String(64), nullable=False)
     user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"), index=True)
     winner_name: Mapped[str | None] = mapped_column(String(64))
     score: Mapped[int | None] = mapped_column(Integer)
     valid_from: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False, index=True)
+    expires_at: Mapped[datetime | None] = mapped_column(BeijingDateTime, index=True)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False)
     public_score: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    source: Mapped[str] = mapped_column(String(12), default="weekly", server_default="weekly", nullable=False)
+    season_code: Mapped[str | None] = mapped_column(ForeignKey("honor_seasons.code", name="fk_honor_awards_season"))
+    source_details: Mapped[dict | None] = mapped_column(JSON)
+    revoked_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
 
 
 class HonorWearRecord(Base):

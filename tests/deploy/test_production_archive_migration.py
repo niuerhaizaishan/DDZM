@@ -32,7 +32,7 @@ def test_equivalent_revision_preserves_existing_values(revision, other, directio
 
 def test_archive_remains_in_the_single_production_chain():
     scripts = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert scripts.get_heads() == ["20261109_merge_workstation"]
+    assert scripts.get_heads() == ["20261109_merge_permanent_honors"]
     assert scripts.get_revision("20261021_126").down_revision == "20261020_125"
     assert scripts.get_revision("20261020_mr_archive").down_revision == (
         "20261020_124", "20261020_108"

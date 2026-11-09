@@ -12,7 +12,10 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def test_unified_club_is_joined_to_the_workstation_migration_chain():
     scripts = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert scripts.get_heads() == ["20261109_merge_workstation"]
+    assert scripts.get_heads() == ["20261109_merge_permanent_honors"]
+    assert scripts.get_revision("20261109_merge_permanent_honors").down_revision == (
+        "20261109_merge_workstation", "20261109_111_permanent_honors",
+    )
     assert scripts.get_revision("20261109_merge_workstation").down_revision == (
         "20261021_126", "20261107_111",
     )
