@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
+import os
 
 import httpx
 import pytest
@@ -1983,7 +1984,7 @@ def test_admin_dashboard_serves_its_login_and_style_assets(client):
     assert refined_stylesheet.status_code == 200
     assert refined_stylesheet.headers["content-type"].startswith("text/css")
     assert refined_stylesheet.headers["cache-control"] == "no-store"
-    assert refined_stylesheet.text == Path("src/dzmm_bot/admin/static/admin-refined.css").read_text(encoding="utf-8")
+    assert refined_stylesheet.text.replace("\r\n", "\n") == Path("src/dzmm_bot/admin/static/admin-refined.css").read_text(encoding="utf-8")
 
 
 def test_admin_exposes_mistrealm_channel_moderation(client, headers):
@@ -2003,7 +2004,7 @@ def test_admin_exposes_mistrealm_channel_moderation(client, headers):
 
 def test_admin_uses_a_grouped_desktop_console_shell(client):
     page = client.get("/").text
-    stylesheet = Path("src/dzmm_bot/admin/static/admin.css").read_text()
+    stylesheet = Path("src/dzmm_bot/admin/static/admin.css").read_text(encoding="utf-8")
 
     assert 'id="page-breadcrumb"' in page
     assert 'id="page-context"' in page
@@ -2017,7 +2018,7 @@ def test_admin_uses_a_grouped_desktop_console_shell(client):
 
 
 def test_admin_script_maps_navigation_views_to_console_page_context():
-    script = Path("src/dzmm_bot/admin/static/admin.js").read_text()
+    script = Path("src/dzmm_bot/admin/static/admin.js").read_text(encoding="utf-8")
 
     assert "const pageContext" in script
     assert "function setPageContext(view)" in script
@@ -2026,7 +2027,7 @@ def test_admin_script_maps_navigation_views_to_console_page_context():
 
 
 def test_admin_styles_define_console_data_and_modal_patterns():
-    stylesheet = Path("src/dzmm_bot/admin/static/admin.css").read_text()
+    stylesheet = Path("src/dzmm_bot/admin/static/admin.css").read_text(encoding="utf-8")
 
     assert ".page-context" in stylesheet
     assert ".data-list > .data-row" in stylesheet
@@ -2770,8 +2771,9 @@ def test_admin_uploads_and_clears_employee_profile_image(
     saved_path = Path(core.last_profile_upload["temp_path"])
     assert saved_path.parent == upload_dir
     assert saved_path.read_bytes() == b"\x89PNG\r\n\x1a\nimage-data"
-    assert upload_dir.stat().st_mode & 0o777 == 0o700
-    assert saved_path.stat().st_mode & 0o777 == 0o600
+    if os.name != "nt":  # Windows does not expose POSIX chmod bits.
+        assert upload_dir.stat().st_mode & 0o777 == 0o700
+        assert saved_path.stat().st_mode & 0o777 == 0o600
 
 
 @pytest.mark.parametrize(
@@ -3695,7 +3697,7 @@ def test_random_event_submission_admin_controls_are_rendered(client):
 
 def test_random_event_history_controls_are_rendered(client):
     page = client.get("/").text
-    script = Path("src/dzmm_bot/admin/static/admin.js").read_text()
+    script = Path("src/dzmm_bot/admin/static/admin.js").read_text(encoding="utf-8")
 
     assert 'data-management-tab="history"' in page
     assert 'id="random-event-history-list"' in page
@@ -3788,7 +3790,7 @@ def test_random_event_scene_modal_uses_split_copy_fields(client):
 
 def test_random_event_settings_modal_exposes_command_permissions(client):
     page = client.get("/").text
-    script = Path("src/dzmm_bot/admin/static/admin.js").read_text()
+    script = Path("src/dzmm_bot/admin/static/admin.js").read_text(encoding="utf-8")
 
     assert 'id="random-event-blocked-message"' in page
     assert 'id="random-event-tipping-duration"' in page
@@ -3802,7 +3804,7 @@ def test_random_event_settings_modal_exposes_command_permissions(client):
 
 def test_admin_exposes_hide_and_seek_configuration_surface(client):
     page = client.get("/").text
-    script = Path("src/dzmm_bot/admin/static/admin.js").read_text()
+    script = Path("src/dzmm_bot/admin/static/admin.js").read_text(encoding="utf-8")
 
     assert 'data-view="hide-and-seek"' in page
     assert 'id="hide-and-seek-view"' in page
@@ -3813,7 +3815,7 @@ def test_admin_exposes_hide_and_seek_configuration_surface(client):
 
 def test_admin_exposes_memory_assessment_configuration_surface(client):
     page = client.get("/").text
-    script = Path("src/dzmm_bot/admin/static/admin.js").read_text()
+    script = Path("src/dzmm_bot/admin/static/admin.js").read_text(encoding="utf-8")
 
     assert 'data-view="memory-assessment"' in page
     assert 'id="memory-assessment-settings-modal"' in page
@@ -3823,7 +3825,7 @@ def test_admin_exposes_memory_assessment_configuration_surface(client):
 
 def test_admin_exposes_undercover_configuration_surface(client):
     page = client.get("/").text
-    script = Path("src/dzmm_bot/admin/static/admin.js").read_text()
+    script = Path("src/dzmm_bot/admin/static/admin.js").read_text(encoding="utf-8")
 
     assert 'data-view="undercover"' in page
     assert 'id="undercover-view"' in page
@@ -3868,7 +3870,7 @@ def test_admin_serves_and_saves_ai_assistant_settings(client, headers, core):
 
 def test_admin_exposes_ai_assistant_configuration_surface(client):
     page = client.get("/").text
-    script = Path("src/dzmm_bot/admin/static/admin.js").read_text()
+    script = Path("src/dzmm_bot/admin/static/admin.js").read_text(encoding="utf-8")
 
     assert 'data-view="ai-assistant"' in page
     assert 'id="ai-assistant-settings-modal"' in page
@@ -3900,14 +3902,14 @@ def test_admin_index_disables_browser_cache(client):
 
 def test_admin_uses_standard_toast_notifications(client):
     page = client.get("/").text
-    script = Path("src/dzmm_bot/admin/static/admin.js").read_text()
+    script = Path("src/dzmm_bot/admin/static/admin.js").read_text(encoding="utf-8")
 
     assert 'id="notification-region"' in page
     assert "showNotification" in script
 
 
 def test_status_refresh_does_not_show_a_success_notification():
-    script = Path("src/dzmm_bot/admin/static/admin.js").read_text()
+    script = Path("src/dzmm_bot/admin/static/admin.js").read_text(encoding="utf-8")
     refresh = script.split("async function refresh()", 1)[1].split(
         "async function submitAction", 1
     )[0]
@@ -3917,7 +3919,7 @@ def test_status_refresh_does_not_show_a_success_notification():
 
 def test_random_event_details_modal_keeps_header_visible_and_scrolls_entries(client):
     page = client.get("/").text
-    stylesheet = Path("src/dzmm_bot/admin/static/admin.css").read_text()
+    stylesheet = Path("src/dzmm_bot/admin/static/admin.css").read_text(encoding="utf-8")
 
     assert 'class="template-modal-card event-details-modal-card"' in page
     assert ".event-details-modal-card" in stylesheet
@@ -3927,7 +3929,7 @@ def test_random_event_details_modal_keeps_header_visible_and_scrolls_entries(cli
 
 def test_random_event_rules_modal_uses_internal_scroll_for_long_settings(client):
     page = client.get("/").text
-    stylesheet = Path("src/dzmm_bot/admin/static/admin.css").read_text()
+    stylesheet = Path("src/dzmm_bot/admin/static/admin.css").read_text(encoding="utf-8")
 
     assert 'class="template-modal-card random-event-settings-modal-card"' in page
     assert ".random-event-settings-modal-card" in stylesheet
@@ -3936,21 +3938,21 @@ def test_random_event_rules_modal_uses_internal_scroll_for_long_settings(client)
 
 
 def test_random_event_scene_script_submits_openings_list():
-    script = Path("src/dzmm_bot/admin/static/admin.js").read_text()
+    script = Path("src/dzmm_bot/admin/static/admin.js").read_text(encoding="utf-8")
 
     assert "signup_text: signupText" in script
     assert "openings" in script
 
 
 def test_random_event_scene_script_renders_role_variable_buttons():
-    script = Path("src/dzmm_bot/admin/static/admin.js").read_text()
+    script = Path("src/dzmm_bot/admin/static/admin.js").read_text(encoding="utf-8")
 
     assert "renderRandomEventSceneOpeningVariables" in script
     assert "data-random-event-role-variable" in script
 
 
 def test_random_event_script_offers_template_and_today_actions():
-    script = Path("src/dzmm_bot/admin/static/admin.js").read_text()
+    script = Path("src/dzmm_bot/admin/static/admin.js").read_text(encoding="utf-8")
 
     assert "data-random-event-name" in script
     assert "data-trigger-random-event" in script
@@ -3958,13 +3960,13 @@ def test_random_event_script_offers_template_and_today_actions():
 
 
 def test_admin_account_list_bypasses_browser_cache():
-    script = Path("src/dzmm_bot/admin/static/admin.js").read_text()
+    script = Path("src/dzmm_bot/admin/static/admin.js").read_text(encoding="utf-8")
 
     assert 'requestGame("/api/admins", {cache: "no-store"})' in script
 
 
 def test_admin_styles_define_unified_management_components():
-    stylesheet = Path("src/dzmm_bot/admin/static/admin.css").read_text()
+    stylesheet = Path("src/dzmm_bot/admin/static/admin.css").read_text(encoding="utf-8")
 
     for selector in (
         ".management-tabs",
@@ -3992,7 +3994,7 @@ def test_admin_groups_management_content_into_tabs_and_bounded_lists(client):
 
 
 def test_admin_script_supports_tabs_and_configurable_page_sizes():
-    script = Path("src/dzmm_bot/admin/static/admin.js").read_text()
+    script = Path("src/dzmm_bot/admin/static/admin.js").read_text(encoding="utf-8")
 
     assert "function initializeManagementTabs()" in script
     assert "function renderPageSizeControl(" in script
@@ -4001,20 +4003,20 @@ def test_admin_script_supports_tabs_and_configurable_page_sizes():
 
 
 def test_admin_script_supports_management_filters_and_status_badges():
-    script = Path("src/dzmm_bot/admin/static/admin.js").read_text()
+    script = Path("src/dzmm_bot/admin/static/admin.js").read_text(encoding="utf-8")
 
     assert "function initializeListFilters()" in script
     assert "function statusBadge(" in script
-    assert 'data-list-filter="commands"' in Path("src/dzmm_bot/admin/templates/index.html").read_text()
-    assert 'data-list-filter="employees"' in Path("src/dzmm_bot/admin/templates/index.html").read_text()
-    assert 'data-list-filter="random-event-scenes"' in Path("src/dzmm_bot/admin/templates/index.html").read_text()
-    assert 'data-list-page-size="shop"' in Path("src/dzmm_bot/admin/templates/index.html").read_text()
-    assert 'data-list-page-size="ranks"' in Path("src/dzmm_bot/admin/templates/index.html").read_text()
+    assert 'data-list-filter="commands"' in Path("src/dzmm_bot/admin/templates/index.html").read_text(encoding="utf-8")
+    assert 'data-list-filter="employees"' in Path("src/dzmm_bot/admin/templates/index.html").read_text(encoding="utf-8")
+    assert 'data-list-filter="random-event-scenes"' in Path("src/dzmm_bot/admin/templates/index.html").read_text(encoding="utf-8")
+    assert 'data-list-page-size="shop"' in Path("src/dzmm_bot/admin/templates/index.html").read_text(encoding="utf-8")
+    assert 'data-list-page-size="ranks"' in Path("src/dzmm_bot/admin/templates/index.html").read_text(encoding="utf-8")
 
 
 def test_admin_employee_ui_supports_platform_nickname_refresh():
-    page = Path("src/dzmm_bot/admin/templates/index.html").read_text()
-    script = Path("src/dzmm_bot/admin/static/admin.js").read_text()
+    page = Path("src/dzmm_bot/admin/templates/index.html").read_text(encoding="utf-8")
+    script = Path("src/dzmm_bot/admin/static/admin.js").read_text(encoding="utf-8")
 
     assert 'id="refresh-platform-nicknames"' in page
     assert "employee.platform_nickname" in script
@@ -4406,8 +4408,8 @@ def test_admin_rejects_invalid_red_packet_settings(client, headers, payload):
 
 def test_red_packet_settings_surface_has_controls_and_api_contract():
     root = Path(__file__).resolve().parents[2]
-    page = (root / "src/dzmm_bot/admin/templates/index.html").read_text()
-    script = (root / "src/dzmm_bot/admin/static/admin.js").read_text()
+    page = (root / "src/dzmm_bot/admin/templates/index.html").read_text(encoding="utf-8")
+    script = (root / "src/dzmm_bot/admin/static/admin.js").read_text(encoding="utf-8")
 
     assert "随机运气红包" in page
     assert 'id="red-packet-settings-card"' in page
@@ -4425,8 +4427,8 @@ def test_red_packet_settings_surface_has_controls_and_api_contract():
 
 def test_number_bomb_settings_surface_has_new_controls_and_gameplay_card():
     root = Path(__file__).resolve().parents[2]
-    page = (root / "src/dzmm_bot/admin/templates/index.html").read_text()
-    script = (root / "src/dzmm_bot/admin/static/admin.js").read_text()
+    page = (root / "src/dzmm_bot/admin/templates/index.html").read_text(encoding="utf-8")
+    script = (root / "src/dzmm_bot/admin/static/admin.js").read_text(encoding="utf-8")
 
     assert 'id="number-bomb-settings-card"' in page
     assert 'id="edit-number-bomb-settings"' in page
@@ -4445,8 +4447,8 @@ def test_number_bomb_settings_surface_has_new_controls_and_gameplay_card():
 
 def test_texas_holdem_admin_surface_has_settings_and_public_table_state():
     root = Path(__file__).resolve().parents[2]
-    page = (root / "src/dzmm_bot/admin/templates/index.html").read_text()
-    script = (root / "src/dzmm_bot/admin/static/admin.js").read_text()
+    page = (root / "src/dzmm_bot/admin/templates/index.html").read_text(encoding="utf-8")
+    script = (root / "src/dzmm_bot/admin/static/admin.js").read_text(encoding="utf-8")
 
     assert 'data-view="texas-holdem"' in page
     assert 'id="texas-holdem-settings-card"' in page
@@ -4463,8 +4465,8 @@ def test_texas_holdem_admin_surface_has_settings_and_public_table_state():
 
 def test_memory_guild_admin_surface_has_current_history_and_force_end_controls():
     root = Path(__file__).resolve().parents[2]
-    page = (root / "src/dzmm_bot/admin/templates/index.html").read_text()
-    script = (root / "src/dzmm_bot/admin/static/admin.js").read_text()
+    page = (root / "src/dzmm_bot/admin/templates/index.html").read_text(encoding="utf-8")
+    script = (root / "src/dzmm_bot/admin/static/admin.js").read_text(encoding="utf-8")
 
     assert 'data-management-tab="guild-current"' in page
     assert 'data-management-tab="guild-history"' in page
@@ -4478,7 +4480,7 @@ def test_memory_guild_admin_surface_has_current_history_and_force_end_controls()
 
 def test_number_bomb_admin_surface_shows_tournament_progress_points_and_retirement():
     root = Path(__file__).resolve().parents[2]
-    script = (root / "src/dzmm_bot/admin/static/admin.js").read_text()
+    script = (root / "src/dzmm_bot/admin/static/admin.js").read_text(encoding="utf-8")
 
     assert 'item.mode === "points_tournament"' in script
     assert "participant.total_points" in script

@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1536 1024" role="img" aria-label="护眼台灯装备图层">
+  <defs>
+    <linearGradient id="shade" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#f7d58a"/>
+      <stop offset="1" stop-color="#b66a3d"/>
+    </linearGradient>
+    <linearGradient id="metal" x1="0" x2="1">
+      <stop offset="0" stop-color="#263a40"/>
+      <stop offset=".52" stop-color="#8aa5a1"/>
+      <stop offset="1" stop-color="#1c2c32"/>
+    </linearGradient>
+    <radialGradient id="glow">
+      <stop offset="0" stop-color="#ffe7a7" stop-opacity=".78"/>
+      <stop offset="1" stop-color="#ffd171" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="softGlow" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+    <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
+      <feDropShadow dx="0" dy="12" stdDeviation="12" flood-color="#111c21" flood-opacity=".5"/>
+    </filter>
+  </defs>
+  <ellipse cx="340" cy="650" rx="190" ry="90" fill="url(#glow)" filter="url(#softGlow)"/>
+  <g filter="url(#shadow)">
+    <ellipse cx="340" cy="650" rx="78" ry="14" fill="#1c2d32" opacity=".8"/>
+    <path d="M340 643 C354 584 372 536 424 486" fill="none" stroke="url(#metal)" stroke-width="13" stroke-linecap="round"/>
+    <path d="M424 488 C462 473 502 476 536 494 L508 529 C477 516 446 517 416 528 Z" fill="url(#shade)"/>
+    <path d="M426 510 C451 500 480 502 511 516" fill="none" stroke="#ffe7a7" stroke-width="8" stroke-linecap="round"/>
+    <circle cx="420" cy="488" r="15" fill="#a8c5bd"/>
+  </g>
+</svg>

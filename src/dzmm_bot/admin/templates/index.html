@@ -65,6 +65,7 @@
                   <p class="nav-group-label">游戏运营</p>
                   <button id="nav-events" class="nav-item" data-view="events" type="button">随机事件</button>
                   <button id="nav-hide-and-seek" class="nav-item" data-view="hide-and-seek" type="button">躲猫猫</button>
+<button id="nav-workstation" class="nav-item" data-view="workstation" type="button">工位管理</button>
 <button id="nav-birthday" class="nav-item" data-view="birthday" type="button">生日祝福</button>
                   <button id="nav-memory-assessment" class="nav-item" data-view="memory-assessment" type="button">记忆考核</button>
                   <button id="nav-undercover" class="nav-item" data-view="undercover" type="button">谁是卧底</button>
@@ -257,6 +258,7 @@
                 <section class="management-pane" data-management-pane="rules" hidden><div class="panel-heading"><div><h2>随机事件规则</h2><p class="muted">每日按固定时刻生成计划，场景与事件模板仍会随机选择；同一时间仅会进行一场事件。</p></div><button id="edit-random-event-settings" class="primary" type="button">编辑规则</button></div><div id="random-event-settings-card" class="settings-card" aria-live="polite"></div></section>
               </section>
 
+<section id="workstation-view" class="dashboard-view panel" hidden><div id="workstation-admin-panel"></div></section>
 <section id="birthday-view" class="dashboard-view panel" hidden><div id="birthday-panel"></div></section>
               <section id="department-allowance-view" class="dashboard-view panel" hidden><div id="department-allowance-panel"></div></section>
               <section id="liar-dice-view" class="dashboard-view panel" hidden><div id="liar-dice-panel"></div><div class="panel-heading"><div><h3>当前对局</h3><p class="muted">按群展示公开状态、参与者、回合和叫骰信息。</p></div></div><div id="liar-dice-session-card" class="game-session-list" aria-live="polite"></div></section>
@@ -821,5 +823,6 @@
     <script src="/static/admin_urls.js"></script>
     <script src="/static/admin.js"></script>
     <script src="/static/honors.js"></script>
+    <script src="/static/workstation-admin.js"></script>
   </body>
 </html>

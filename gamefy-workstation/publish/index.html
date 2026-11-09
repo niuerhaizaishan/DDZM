@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>工位大厅 · 摸鱼公司</title>
+  <link rel="stylesheet" href="./style.css">
+  <link rel="stylesheet" href="./game.css">
+  <script src="./config.js" defer></script>
+  <script src="./art.js" defer></script>
+  <script src="./game.js" defer></script>
+  <script src="./workstation.js" defer></script>
+</head>
+<body>
+  <main>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">摸鱼公司 / 工位养成</p>
+        <h1 id="workstation-title">工位大厅</h1>
+        <p id="employee-number" class="employee-number" hidden></p>
+        <p class="intro">把每天坐的地方，慢慢变成喜欢的样子。</p>
+      </div>
+      <div class="toolbar" aria-label="工位导航">
+        <button id="lobby-button" type="button" class="secondary" hidden>返回大厅</button>
+        <button id="find-colleague" type="button" class="secondary" aria-expanded="false" aria-controls="lobby-search">找同事</button>
+        <button id="my-workstation" type="button">我的工位</button>
+        <button id="refresh" type="button" class="secondary">刷新</button>
+      </div>
+    </header>
+    <p id="connection-state" class="muted" role="status">正在准备工位…</p>
+    <p id="preview-controls" hidden>
+      <label for="preview-equipment">预览装备：</label>
+      <select id="preview-equipment">
+        <option value="empty">初始工位 · 全套 1-1</option>
+        <option value="starter">进阶工位 · 全套 3-1</option>
+        <option value="all">高级工位 · 全套 5-2</option>
+      </select>
+    </p>
+    <p id="status" class="status" role="status" aria-live="polite">正在加载工位…</p>
+    <noscript><p>查看工位需要启用浏览器 JavaScript。</p></noscript>
+    <section id="workstation-lobby" hidden aria-label="工位大厅">
+      <form id="lobby-search" hidden class="lobby-search" role="search">
+        <label for="lobby-query">找一位同事</label>
+        <input id="lobby-query" type="search" maxlength="64" placeholder="输入名字或工号，如 #0001">
+        <button type="submit">查找</button>
+        <button id="clear-search" type="button" class="secondary">查看全部</button>
+      </form>
+      <p id="lobby-summary" class="muted" role="status"></p>
+      <div id="lobby-list" class="lobby-grid"></div>
+      <nav class="lobby-pagination" aria-label="工位列表分页">
+        <button id="previous-page" type="button" class="secondary">上一页</button>
+        <span id="lobby-page"></span>
+        <button id="next-page" type="button" class="secondary">下一页</button>
+      </nav>
+    </section>
+    <div id="workstation-content" class="layout" hidden>
+      <section class="scene-panel" aria-label="工位实景">
+        <div class="panel-heading"><h2>工位实景</h2></div>
+        <div id="scene" class="scene" role="img" aria-label="工位装备组合"></div>
+        <div class="media-actions">
+          <div id="share-panel" hidden role="group" aria-label="发送工位图片">
+            <button id="share-image" type="button" disabled>发送到群</button>
+            <select id="share-group" aria-label="选择发送的群聊"></select>
+          </div>
+          <button id="download-image" type="button" class="secondary">下载图片</button>
+        </div>
+        <p id="share-status" class="muted media-status" role="status" aria-live="polite"></p>
+        <p class="scene-note">画面按当前装备等级展示，升级或装卸后刷新查看。</p>
+      </section>
+      <section id="growth-panel" class="growth-panel" aria-labelledby="growth-title">
+        <div class="panel-heading"><h2 id="growth-title">我的养成</h2><button id="help-button" type="button" class="secondary help-button" aria-label="查看群聊指令" aria-haspopup="dialog">?</button></div>
+        <div class="growth-overview">
+          <dl>
+            <div><dt>已装备</dt><dd id="equipped-count">—</dd></div>
+            <div><dt>预计日收入</dt><dd id="income">—</dd></div>
+          </dl>
+          <p id="settlement-note" class="muted">正在同步结算状态…</p>
+          <ul id="equipment-list" aria-label="已装备物品"></ul>
+          <p id="empty" class="muted" hidden>回群里发送 /帮助 工位，查看升级方式。</p>
+        </div>
+        <div id="growth-controls" hidden>
+          <p id="growth-summary" class="growth-summary" role="status"></p>
+          <div id="growth-devices" class="growth-devices"></div>
+        </div>
+      </section>
+    </div>
+    <dialog id="help-dialog" aria-labelledby="help-title">
+      <div class="panel-heading"><h2 id="help-title">群聊指令</h2><button id="close-help" type="button" class="secondary">关闭</button></div>
+      <pre id="help-text">总监事指令簿：
+【工位与设备】
+/我的工位：查看当前工位并进入小游戏
+/工位背包：查看已拥有的环境和设备
+/工位收益表：查看各等级收益和升级费用
+/升级 电脑：将指定设备升级一档
+/升级 环境：四件设备升齐当前环境升级款后，升级下一环境；升级受职级限制
+/装备 鼠标 2-1：装备已拥有的指定档位设备
+/装备 环境 2：免费切换已拥有环境
+可用名称：环境、电脑、显示器、键盘、鼠标；设备每环境两档。
+设备整数等级1至10依次对应1-1、1-2至5-2。</pre>
+    </dialog>
+
+    <footer id="page-note"></footer>
+    <dialog id="download-dialog" aria-labelledby="download-title">
+      <div class="panel-heading"><h2 id="download-title">保存工位图片</h2><button id="close-download" type="button" class="secondary">关闭</button></div>
+      <p id="download-status" class="muted" role="status"></p>
+      <img id="download-preview" alt="合成后的完整工位图片" hidden>
+      <a id="download-file" class="download-link" hidden>下载 PNG 图片</a>
+    </dialog>
+  </main>
+</body>
+</html>

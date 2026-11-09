@@ -1,0 +1,6 @@
+{
+  "canvas": { "width": 1536, "height": 1024 },
+  "layers": [
+    { "id": "eye-care-lamp", "name": "护眼台灯", "asset": "./assets/layers/eye-care-lamp.svg", "zIndex": 10, "defaultEquipped": true }
+  ]
+}

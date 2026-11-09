@@ -1,0 +1,868 @@
+{
+  "required_count": 172,
+  "bytes": 110448231,
+  "missing": [],
+  "unreferenced": [],
+  "files": [
+    {
+      "name": "chair-layer.png",
+      "bytes": 308246,
+      "sha256": "4956c7291e46a542cd8287d50f39bfff294e013642b1ebb4a6225926d3e70d57"
+    },
+    {
+      "name": "core-base.png",
+      "bytes": 2509790,
+      "sha256": "df5a00daa03581451a52a9034a0759be472c9f6956fbb1ba206fa19004fb13ed"
+    },
+    {
+      "name": "desk-lamp-layer.png",
+      "bytes": 31180,
+      "sha256": "cc18db23faab47a1496e9657d4c8f92672e2488f596874792de04f0acf78f489"
+    },
+    {
+      "name": "growth-c2c53cf60b15-chair-lv01.png",
+      "bytes": 819098,
+      "sha256": "c8400b1075db77edbec81518f5b7e452428904cdf95dafa1714689c4182ecb19"
+    },
+    {
+      "name": "growth-c2c53cf60b15-chair-lv02.png",
+      "bytes": 684217,
+      "sha256": "b451a431c519e44cfdec50b162110c215fba91f07f0e424e984f8f892689d25b"
+    },
+    {
+      "name": "growth-c2c53cf60b15-chair-lv03.png",
+      "bytes": 742496,
+      "sha256": "6a459eb1c3d8312fe33770b70d99e8882f6578ecfbe2124b6c261f0a92971be6"
+    },
+    {
+      "name": "growth-c2c53cf60b15-chair-lv04.png",
+      "bytes": 786509,
+      "sha256": "79322d7af1e2a747c04cbd0c066ba95713e1464c829a42d0289ef70b36215a67"
+    },
+    {
+      "name": "growth-c2c53cf60b15-chair-lv05.png",
+      "bytes": 1120189,
+      "sha256": "90a85f676ea42b7e200750eb06752616eb527ae55c5996db6d38e98180ab0338"
+    },
+    {
+      "name": "growth-c2c53cf60b15-chair-lv06.png",
+      "bytes": 1037800,
+      "sha256": "ddea5ca4cf8441b4013793db5aad4d712e1bb96fdd015e2d43d583f3f58eadf6"
+    },
+    {
+      "name": "growth-c2c53cf60b15-chair-lv07.png",
+      "bytes": 1077776,
+      "sha256": "d3bc4b2042aabc5e54a791cdd15d9e1599d05fcc263f18cfc09d67b6557fe129"
+    },
+    {
+      "name": "growth-c2c53cf60b15-chair-lv08.png",
+      "bytes": 1165639,
+      "sha256": "ce23069c48508a16a4925427be8fad16a6da442bcdb7cde2909d4dad3d89f55b"
+    },
+    {
+      "name": "growth-c2c53cf60b15-chair-lv09.png",
+      "bytes": 1308865,
+      "sha256": "3cfe2fcaf20ed4128ec711f480ce80740fe8b2b9c683ec38d1a289068f11b3e0"
+    },
+    {
+      "name": "growth-c2c53cf60b15-chair-lv10.png",
+      "bytes": 1379903,
+      "sha256": "5f2d97e2b455611587184e48517aca15a5565d5b766b9509610a354eab87c8f4"
+    },
+    {
+      "name": "growth-c2c53cf60b15-computer-lv01.png",
+      "bytes": 207475,
+      "sha256": "333fa265df268fc6c9269ecd33faf1f78ed9fa0838d29c7e341a99b4451168fe"
+    },
+    {
+      "name": "growth-c2c53cf60b15-computer-lv02.png",
+      "bytes": 96570,
+      "sha256": "90a2a3d246145fca725eb9f56393c2b1beeafeca02fa0adea71f07645cc1868f"
+    },
+    {
+      "name": "growth-c2c53cf60b15-computer-lv03.png",
+      "bytes": 112219,
+      "sha256": "2ed41f76a6f40d37c65598983160f7686539ca1d083d3c343e307864ba0ef05c"
+    },
+    {
+      "name": "growth-c2c53cf60b15-computer-lv04.png",
+      "bytes": 121208,
+      "sha256": "b26b75d803b39fe97b6de0a231398de7abcbb6d68f7fc8f44eab8057f5b061bd"
+    },
+    {
+      "name": "growth-c2c53cf60b15-computer-lv05.png",
+      "bytes": 193541,
+      "sha256": "3f845c9d5e2f65be3f9a442c425b4799569348ec7daf1136a7af7bd518a7a8cb"
+    },
+    {
+      "name": "growth-c2c53cf60b15-computer-lv06.png",
+      "bytes": 184443,
+      "sha256": "f8b41e3028ca43a90a7b6c22e5c2a0b34082dd73a8bd70b96f26ae1c6e944ff1"
+    },
+    {
+      "name": "growth-c2c53cf60b15-computer-lv07.png",
+      "bytes": 209574,
+      "sha256": "5c7c7a608972e53a097e754b70614d681dc5c67f20964ddca88d88d165d3ac35"
+    },
+    {
+      "name": "growth-c2c53cf60b15-computer-lv08.png",
+      "bytes": 220588,
+      "sha256": "e0185acb1bd58fd77546360a90dcfe263ec164fd5921fcdd8251fbd59e2970dd"
+    },
+    {
+      "name": "growth-c2c53cf60b15-computer-lv09.png",
+      "bytes": 225990,
+      "sha256": "bd2cb9e43e1454591e6d3152c2ad108e439932ec4c092692640c4b612ae3836b"
+    },
+    {
+      "name": "growth-c2c53cf60b15-computer-lv10.png",
+      "bytes": 226005,
+      "sha256": "e7f999274deef595191241acbdf68d2b9f01d8d981f38c391c4a2c48f80f3836"
+    },
+    {
+      "name": "growth-c2c53cf60b15-desk-lv01.png",
+      "bytes": 1142771,
+      "sha256": "d0de80c23d16b90923a9ae9b8992e324f6c32ec6f15644cd015285dcd403bd51"
+    },
+    {
+      "name": "growth-c2c53cf60b15-desk-lv02.png",
+      "bytes": 1102743,
+      "sha256": "a3cf6ac522b11d3232ce1a7a11ff75c01854b6271a360167a8104903efb2f3f7"
+    },
+    {
+      "name": "growth-c2c53cf60b15-desk-lv03.png",
+      "bytes": 1246094,
+      "sha256": "dc28c6aa7a7cb90629df3b8de083f8b9cb11d9b2fe2f03613328e4180fb822ed"
+    },
+    {
+      "name": "growth-c2c53cf60b15-desk-lv04.png",
+      "bytes": 1295479,
+      "sha256": "b40c5ee1132a754daf75ff8f72be0927c712d04ca80df05bc62e38bacbc53ce8"
+    },
+    {
+      "name": "growth-c2c53cf60b15-desk-lv05.png",
+      "bytes": 1474655,
+      "sha256": "4ee5e45fc08ef72258a22cc88deb1b32413e09a8564977a7617ef8833e719626"
+    },
+    {
+      "name": "growth-c2c53cf60b15-desk-lv06.png",
+      "bytes": 1573553,
+      "sha256": "dca8b96fa3da13f00df10ceb29702605f05d66754c6d0e5374633fc71c4e126f"
+    },
+    {
+      "name": "growth-c2c53cf60b15-desk-lv07.png",
+      "bytes": 1717044,
+      "sha256": "e6263e8639d61199c5d0eb185d6874aab0c0aad6f6f05ed036144dd2b83fc6b7"
+    },
+    {
+      "name": "growth-c2c53cf60b15-desk-lv08.png",
+      "bytes": 1739828,
+      "sha256": "b0fc21fdd6ff93b639d760d7da72fc7b31004f4a97a94e75244bcc90cdd65860"
+    },
+    {
+      "name": "growth-c2c53cf60b15-desk-lv09.png",
+      "bytes": 1853477,
+      "sha256": "c27c7a68389afec3e93c629164824d7c63f637c5129ea363adb3999097fff6b8"
+    },
+    {
+      "name": "growth-c2c53cf60b15-desk-lv10.png",
+      "bytes": 1879457,
+      "sha256": "71efd764382f5e21ccc8ece84c7ac6d36023ad8b1c9f981dfe36f424e5613418"
+    },
+    {
+      "name": "growth-c2c53cf60b15-floor-lv01.png",
+      "bytes": 2191297,
+      "sha256": "1d41354c17f9d69e313140878644bb26abd042032ae855315320fee00bfa123a"
+    },
+    {
+      "name": "growth-c2c53cf60b15-floor-lv02.png",
+      "bytes": 1672425,
+      "sha256": "24c146cc0a2c4661ae2742de0012b25feedaefb7c2fed86d800a5dbc676fe159"
+    },
+    {
+      "name": "growth-c2c53cf60b15-floor-lv03.png",
+      "bytes": 2356300,
+      "sha256": "562ecf98bde0c1f5298cab3bcf8a900dd96c22eb953cd306ed2c44ef8fd69df6"
+    },
+    {
+      "name": "growth-c2c53cf60b15-floor-lv04.png",
+      "bytes": 2364943,
+      "sha256": "8ef54b0f516da49e3ba8c004adad92f2a54f108d2bfabfb93a870138ef52ff94"
+    },
+    {
+      "name": "growth-c2c53cf60b15-floor-lv05.png",
+      "bytes": 1984884,
+      "sha256": "4fce0472002cbc0b61632e846cf4a5af299739e88ae819fb5d20f2be535a31a2"
+    },
+    {
+      "name": "growth-c2c53cf60b15-floor-lv06.png",
+      "bytes": 2114231,
+      "sha256": "c894e2f6d9de75301b6326e1fe3a579551e9c995895a4e822ebed46598580732"
+    },
+    {
+      "name": "growth-c2c53cf60b15-floor-lv07.png",
+      "bytes": 2090259,
+      "sha256": "bc4296e2cd9b180889405e5d03c5ae1d621918a12f9949f45f18ba7d6c9eb5dc"
+    },
+    {
+      "name": "growth-c2c53cf60b15-floor-lv08.png",
+      "bytes": 2255043,
+      "sha256": "913b947f6b3dab3ec48a7ab7ad66ae6c27c1043111cd6f674338c2cdc0ec0285"
+    },
+    {
+      "name": "growth-c2c53cf60b15-floor-lv09.png",
+      "bytes": 2375899,
+      "sha256": "5dcb05210be0ffe73b14256a72f4d9c551cc3d472c785d755386a316735df889"
+    },
+    {
+      "name": "growth-c2c53cf60b15-floor-lv10.png",
+      "bytes": 2244593,
+      "sha256": "256b29f354fe031b9e0123ebc498b85692453399499eca05b80f3e0eb6b2c454"
+    },
+    {
+      "name": "growth-c2c53cf60b15-keyboard-lv01.png",
+      "bytes": 141710,
+      "sha256": "22a601b8555ec5540fcbd910c46d404a2e125977255ae0ed64b0b1378cff9024"
+    },
+    {
+      "name": "growth-c2c53cf60b15-keyboard-lv02.png",
+      "bytes": 148105,
+      "sha256": "1ef52f86219e0b01c553b87d0fbcd761447fc5d82253cd2e15969e1c1f235177"
+    },
+    {
+      "name": "growth-c2c53cf60b15-keyboard-lv03.png",
+      "bytes": 134258,
+      "sha256": "59dbb6dc30819941675a20c7a88b99c00ead56318de64f02408d70600214b890"
+    },
+    {
+      "name": "growth-c2c53cf60b15-keyboard-lv04.png",
+      "bytes": 133152,
+      "sha256": "2dcfe2e7d418edbaf4742f84922a02057678e41391d05034776c75dd134b79b3"
+    },
+    {
+      "name": "growth-c2c53cf60b15-keyboard-lv05.png",
+      "bytes": 291557,
+      "sha256": "004b5aed9d86bcb3005cb72717021db9f5b7d3e043246983b1132a409edba6e6"
+    },
+    {
+      "name": "growth-c2c53cf60b15-keyboard-lv06.png",
+      "bytes": 301967,
+      "sha256": "f805a2fd4ba0295f17bb5f6c2820a618f8792cfe81cc9a1c9717009c7ebe0cbd"
+    },
+    {
+      "name": "growth-c2c53cf60b15-keyboard-lv07.png",
+      "bytes": 261652,
+      "sha256": "7bcbb873854e97b5ed2fee96e5603c2618026229c8648e339bed4f95318099ca"
+    },
+    {
+      "name": "growth-c2c53cf60b15-keyboard-lv08.png",
+      "bytes": 288882,
+      "sha256": "60ef0de2dc8244a22351eae7a10f8106087fdd6ad38cf008c0940a99dedd24e5"
+    },
+    {
+      "name": "growth-c2c53cf60b15-keyboard-lv09.png",
+      "bytes": 307939,
+      "sha256": "62ba7581d2e161a052d169f966109515bfcbf6038d76a9098851e538b3d6150e"
+    },
+    {
+      "name": "growth-c2c53cf60b15-keyboard-lv10.png",
+      "bytes": 388879,
+      "sha256": "c8684d9d4d190ef3fd4daafc737ba232a0139f78352a913efae5a871427ccdb7"
+    },
+    {
+      "name": "growth-c2c53cf60b15-location-lv01.png",
+      "bytes": 2080961,
+      "sha256": "57e70349e2491e152b3b8a794e87004334f74d3cd63f084df7f1e9e2fc38d90c"
+    },
+    {
+      "name": "growth-c2c53cf60b15-location-lv02.png",
+      "bytes": 2145920,
+      "sha256": "6c7214e52b93ae15d61be08560d72be6c54f6d7411d98bf8cfc25c2452780d98"
+    },
+    {
+      "name": "growth-c2c53cf60b15-location-lv03.png",
+      "bytes": 2404947,
+      "sha256": "012ae743a6e17c42ca20a3050de50ec5f688e3b0942194811cd7d3993d2207b7"
+    },
+    {
+      "name": "growth-c2c53cf60b15-location-lv04.png",
+      "bytes": 2093080,
+      "sha256": "77605b799816c64440a22895b28f15b197bad0062a25c728307c03605e7b67cc"
+    },
+    {
+      "name": "growth-c2c53cf60b15-location-lv05.png",
+      "bytes": 2276604,
+      "sha256": "521a9c26747e4dd723a09caa0775fc7238097ac22f1f0db4784ac85b036d3622"
+    },
+    {
+      "name": "growth-c2c53cf60b15-location-lv06.png",
+      "bytes": 2232414,
+      "sha256": "568d7237a3c2bed441ff8aa4f0ff3bd097547c53b89a8f56d9e3360dce3b36e4"
+    },
+    {
+      "name": "growth-c2c53cf60b15-location-lv07.png",
+      "bytes": 2170030,
+      "sha256": "f9e22a5f25973461b9a548b97f6d3bd947975d58fabb18366bb7989c9c97e09f"
+    },
+    {
+      "name": "growth-c2c53cf60b15-location-lv08.png",
+      "bytes": 2108617,
+      "sha256": "254fca452027b81bf2aa02d1fe394a008d87f335c2f5214a020d5d6d3c74e7ba"
+    },
+    {
+      "name": "growth-c2c53cf60b15-location-lv09.png",
+      "bytes": 2162153,
+      "sha256": "af5bc9c24d189c051ca1d44833ce9a7f92dfa98f12402d42b32f0c7d6b87df8c"
+    },
+    {
+      "name": "growth-c2c53cf60b15-location-lv10.png",
+      "bytes": 2235598,
+      "sha256": "18150117c82ab39d560045a5a4b8cdd63d8a5669ab2a1b779383847199a82253"
+    },
+    {
+      "name": "growth-c2c53cf60b15-monitor-lv01.png",
+      "bytes": 391300,
+      "sha256": "b31be95071701d0b06528eda1249ad8ac3a2da999eccab81a75f9913747e96bd"
+    },
+    {
+      "name": "growth-c2c53cf60b15-monitor-lv02.png",
+      "bytes": 601513,
+      "sha256": "aad628194334b8abc6388a7d95b1f5f291927272babbf7a0f175b7db69c102ee"
+    },
+    {
+      "name": "growth-c2c53cf60b15-monitor-lv03.png",
+      "bytes": 627257,
+      "sha256": "da870e443a125644c691bc2b9e68172216ef82b1e6e1c07ab37ed0fd9f3be3bf"
+    },
+    {
+      "name": "growth-c2c53cf60b15-monitor-lv04.png",
+      "bytes": 644611,
+      "sha256": "58c80053e041ea27340b6705789c85d4595fe8a6007b1381104c751574e2d61a"
+    },
+    {
+      "name": "growth-c2c53cf60b15-monitor-lv05.png",
+      "bytes": 848728,
+      "sha256": "027021147c1d325b52074bafa2a2c7c3d9b10baaac3b1123c08864e44daee237"
+    },
+    {
+      "name": "growth-c2c53cf60b15-monitor-lv06.png",
+      "bytes": 963908,
+      "sha256": "d960889b8b14c06884cf023c0cecb554870a3d13e09b402ccd27f5bf91a940c2"
+    },
+    {
+      "name": "growth-c2c53cf60b15-monitor-lv07.png",
+      "bytes": 1058671,
+      "sha256": "85aa12aa49d9b23d8cf5a4ea9e259279a50c0b5c68f97dc88b22d35283710d9d"
+    },
+    {
+      "name": "growth-c2c53cf60b15-monitor-lv08.png",
+      "bytes": 1185681,
+      "sha256": "8f768d2ec46787660fef3726566f18e7ca43b08f59685a4ea1ff0e39d9ce493d"
+    },
+    {
+      "name": "growth-c2c53cf60b15-monitor-lv09.png",
+      "bytes": 1197632,
+      "sha256": "356c3075e8d495da20a5c8d797560889deec4ab1f4eabd9d486eb30fc3e875c1"
+    },
+    {
+      "name": "growth-c2c53cf60b15-monitor-lv10.png",
+      "bytes": 1358343,
+      "sha256": "1c880ee5144feff71f39209218dea7d89f8a60a5e9f8a21a50df3aa766dec623"
+    },
+    {
+      "name": "growth-c2c53cf60b15-mouse-lv01.png",
+      "bytes": 48928,
+      "sha256": "58f8ed4408e18746eb788734ba70c43011bf7cf0335f0228ef1ed80d5814668d"
+    },
+    {
+      "name": "growth-c2c53cf60b15-mouse-lv02.png",
+      "bytes": 45147,
+      "sha256": "806ba041ad726da856329053397b553670d65bea0c1e3d47c253b1e35032df79"
+    },
+    {
+      "name": "growth-c2c53cf60b15-mouse-lv03.png",
+      "bytes": 46531,
+      "sha256": "e3fd5011a56dcf05289d7759f3b6b4c9e3f6993029a6e72f5a53068bf7c26658"
+    },
+    {
+      "name": "growth-c2c53cf60b15-mouse-lv04.png",
+      "bytes": 56696,
+      "sha256": "c9c1a2597f2dba8cace564216f4df8782bd8ba1732c3087aa34adde120ac82e1"
+    },
+    {
+      "name": "growth-c2c53cf60b15-mouse-lv05.png",
+      "bytes": 67716,
+      "sha256": "ccf42ddd4507e372c8605b0d60e69ad8453c2014bf3287cd489b77da7a37fb7d"
+    },
+    {
+      "name": "growth-c2c53cf60b15-mouse-lv06.png",
+      "bytes": 73780,
+      "sha256": "5e216da47d1ac4208da6d7dd8a9e573bdaf529d4c8d60060a381916d9fd861c2"
+    },
+    {
+      "name": "growth-c2c53cf60b15-mouse-lv07.png",
+      "bytes": 78444,
+      "sha256": "d18a464f8954049ad7c32d1bf13578fb67f3b74bd3ab3dc89d5c42f3da6e0d75"
+    },
+    {
+      "name": "growth-c2c53cf60b15-mouse-lv08.png",
+      "bytes": 89910,
+      "sha256": "6a5d642ca52aec39caec25f1144230763c8286177cf07a843a8ca7ace5d0a70b"
+    },
+    {
+      "name": "growth-c2c53cf60b15-mouse-lv09.png",
+      "bytes": 86096,
+      "sha256": "9a46200316dcae26feb06fc7194eedeb74bc913df1ab4273322e742900d5f6f2"
+    },
+    {
+      "name": "growth-c2c53cf60b15-mouse-lv10.png",
+      "bytes": 78626,
+      "sha256": "c81870cd4841794e0eb98454fb72f061b84d57f4d4183bc63a81bf8bb179cc7f"
+    },
+    {
+      "name": "growth-c2c53cf60b15-plant-lv01.png",
+      "bytes": 391460,
+      "sha256": "055d151ae061f89841fe8d8c4f0127018832ebb41c69c921dc66b0b79d9d1531"
+    },
+    {
+      "name": "growth-c2c53cf60b15-plant-lv02.png",
+      "bytes": 376848,
+      "sha256": "81bdfb198bec4e20af49e56b3de3e7875f7510f3e9f1c644e4ee50e339161b01"
+    },
+    {
+      "name": "growth-c2c53cf60b15-plant-lv03.png",
+      "bytes": 483837,
+      "sha256": "7a9766a50c09cbf68d13eead0d1fb3d9919f363957a3148e439a9148c20eb570"
+    },
+    {
+      "name": "growth-c2c53cf60b15-plant-lv04.png",
+      "bytes": 639954,
+      "sha256": "7b1a1ef0382d3f7ae9cec8d8d06205c3d05e91052dbc7c90e6fedd2e4f081707"
+    },
+    {
+      "name": "growth-c2c53cf60b15-plant-lv05.png",
+      "bytes": 974018,
+      "sha256": "f99b00f87d92bb8543db428db3f33815c432cce23d6d0897341232054d5c3a32"
+    },
+    {
+      "name": "growth-c2c53cf60b15-plant-lv06.png",
+      "bytes": 905768,
+      "sha256": "9ee5a1bdc8a2f1ba18fd24c11ffd3962bd4c96d07117e67bbf8adcef9a9d46ae"
+    },
+    {
+      "name": "growth-c2c53cf60b15-plant-lv07.png",
+      "bytes": 1174960,
+      "sha256": "0cd3163a101af6850a77fea3fcbbb6ca5e1a2cd2df240fdfe0cc0d2ba1782246"
+    },
+    {
+      "name": "growth-c2c53cf60b15-plant-lv08.png",
+      "bytes": 1110590,
+      "sha256": "1b52bf31bee74f7a235ca72c3be8b80f284d80bf0d57c0ff42330e77efc0da4f"
+    },
+    {
+      "name": "growth-c2c53cf60b15-plant-lv09.png",
+      "bytes": 1420305,
+      "sha256": "bf26a48d3b65337d4e78b6ad0319fcff0f1eac5c48f20d8464b7391e5c8cca3f"
+    },
+    {
+      "name": "growth-c2c53cf60b15-plant-lv10.png",
+      "bytes": 1276388,
+      "sha256": "dde982db56394b14aa53c4561fa0230b0023dab80190d0ba2b473e5c7ae963de"
+    },
+    {
+      "name": "handheld-layer.png",
+      "bytes": 26641,
+      "sha256": "b1be02b4a62fd50540b3b921ba14fce6ce0744895be43ca96b2b1c96143f9694"
+    },
+    {
+      "name": "keyboard-layer.png",
+      "bytes": 44748,
+      "sha256": "1e511e29f5f17cc82ca7b6bcdc78b1108015560ef93f7b357b613adbe58c6d47"
+    },
+    {
+      "name": "monitor-left-layer.png",
+      "bytes": 96187,
+      "sha256": "67b5c72bec77dad90ef1a57e94ea5e9c68a6848f0c0d39c95825fdde67585458"
+    },
+    {
+      "name": "monitor-main-layer.png",
+      "bytes": 201771,
+      "sha256": "de4b76864d5db33a5928159db9bd0de3939407c6db6474674699517776516625"
+    },
+    {
+      "name": "monitor-right-layer.png",
+      "bytes": 100012,
+      "sha256": "0466ea234f63e618dcfcfc3c69cda26bd4b74ee528854d1908f6887587f95f48"
+    },
+    {
+      "name": "mouse-layer.png",
+      "bytes": 12633,
+      "sha256": "9fbf3913f6b3d177b65d0785756fbdebaffa6904cc1ca7f80b830cd8018a15e1"
+    },
+    {
+      "name": "pc-layer.png",
+      "bytes": 103110,
+      "sha256": "50d74dec2d387aa601cb489e1b00f49e924e362465964184d15de421d3b5f1f3"
+    },
+    {
+      "name": "screen-light-layer.png",
+      "bytes": 13203,
+      "sha256": "4157eb414c07e67c41f827fcd181b062efcd73d5e203208eb6ea2146940a3243"
+    },
+    {
+      "name": "stage1-56666d9d5919-computer-upgraded.png",
+      "bytes": 51836,
+      "sha256": "56666d9d59199beb528177da637cb61a917ef874a37bc8008294577c44a4354d"
+    },
+    {
+      "name": "stage1-d5963c576818-base.png",
+      "bytes": 2212154,
+      "sha256": "dab2c54b4246b70ced3016312a81aedeb62624cd2502662a119ce5b70d729183"
+    },
+    {
+      "name": "stage1-d5963c576818-computer-basic.png",
+      "bytes": 36094,
+      "sha256": "1da25ba84c5cbbd2541108a7255e013c2342b6dd9a997297da44fd690dae4b2c"
+    },
+    {
+      "name": "stage1-d5963c576818-desk-mat.png",
+      "bytes": 91875,
+      "sha256": "e152f9d3a3368390d2c33431623a841bc90b8b7682d5e1cb0123eaf3f6cd48f0"
+    },
+    {
+      "name": "stage1-d5963c576818-headphones.png",
+      "bytes": 43459,
+      "sha256": "6659277383455f8d4c3cb1608a8d8348a3228211c154b6290b34881c74ca5087"
+    },
+    {
+      "name": "stage1-d5963c576818-keyboard-basic.png",
+      "bytes": 34902,
+      "sha256": "4cf50f7241e8b098c69d176db480e0f6aee5d67b46875e248afa33be7f1dcec5"
+    },
+    {
+      "name": "stage1-d5963c576818-keyboard-upgraded.png",
+      "bytes": 49244,
+      "sha256": "c10b342f5a6b2101e327ad8d6296b4655305de89bbb3142a0eaaf46b7f7418f8"
+    },
+    {
+      "name": "stage1-d5963c576818-monitor-basic.png",
+      "bytes": 78644,
+      "sha256": "025834c7105db6d04848beffff5c200509007d37ccd157ce4abca407c2f51e11"
+    },
+    {
+      "name": "stage1-d5963c576818-monitor-upgraded.png",
+      "bytes": 92503,
+      "sha256": "b62ea5340d43cb8bc3db487f50c5a1644c89beaa499228846d06192de529133b"
+    },
+    {
+      "name": "stage1-d5963c576818-mouse-basic.png",
+      "bytes": 10827,
+      "sha256": "53cd2a640178c46a5cbb008a3404fbb0f2b33e1c63e4bd61185c20b78b9f3f71"
+    },
+    {
+      "name": "stage1-d5963c576818-mouse-upgraded.png",
+      "bytes": 12519,
+      "sha256": "fca9e3e904886180f59e06fa342f91b28dac466f9358822193231173804a9c7e"
+    },
+    {
+      "name": "stage2-6f29dcec561c-mouse-upgraded.png",
+      "bytes": 10918,
+      "sha256": "6f29dcec561ca5f8e413aa879e120686061bff43514bc3edbbfde5887966c9d1"
+    },
+    {
+      "name": "stage2-a5e9a39d21e5-base.png",
+      "bytes": 2245694,
+      "sha256": "ca7b03b7464ab6125d24d8fa091266a6c26669ece49b1599a2d767355ebb697c"
+    },
+    {
+      "name": "stage2-a5e9a39d21e5-computer-basic.png",
+      "bytes": 61913,
+      "sha256": "a2fd15c92071181f7aa947a7009ab2b5c9c108a588cae286409c542ad18b0e13"
+    },
+    {
+      "name": "stage2-a5e9a39d21e5-computer-upgraded.png",
+      "bytes": 47863,
+      "sha256": "34510dfe82658f6ad922ace603100cf8b4784988454114a955da16f08fabead6"
+    },
+    {
+      "name": "stage2-a5e9a39d21e5-desk-mat.png",
+      "bytes": 68252,
+      "sha256": "114915ee42e9424879734e344b035da46441162f05db67435d3ba9291e6e6a8b"
+    },
+    {
+      "name": "stage2-a5e9a39d21e5-headphones.png",
+      "bytes": 37549,
+      "sha256": "37e0e6cdf11ad9164d80e727d9995f14e2691d6d8433663da67ab3537789773d"
+    },
+    {
+      "name": "stage2-a5e9a39d21e5-keyboard-basic.png",
+      "bytes": 35982,
+      "sha256": "e57df5b7181095111ef06aa31f758d536f09cb5ae7525e697b3bf22bbf1eb436"
+    },
+    {
+      "name": "stage2-a5e9a39d21e5-keyboard-upgraded.png",
+      "bytes": 45829,
+      "sha256": "807703250b261863688f8ccb34977065580dbd78ee81503335c6bd0167c1acfc"
+    },
+    {
+      "name": "stage2-a5e9a39d21e5-monitor-basic.png",
+      "bytes": 104530,
+      "sha256": "5e1194a87281b3c0565535ad588dbb810651037b16e4a693d10cef7dde05a55d"
+    },
+    {
+      "name": "stage2-a5e9a39d21e5-monitor-upgraded.png",
+      "bytes": 117840,
+      "sha256": "781c20968ba0d80325b74890f7e6624940dd18f4f4e12ccbe1f107896e224c32"
+    },
+    {
+      "name": "stage2-a5e9a39d21e5-mouse-basic.png",
+      "bytes": 10820,
+      "sha256": "50504faf7bda9897713fdc75e22b6dce3159928666085f7f1bf91e091886f677"
+    },
+    {
+      "name": "stage2-b7eeb1240681-speakers.png",
+      "bytes": 15069,
+      "sha256": "b7eeb12406819c1ed39dec2fcc95309f412166f6f59efe5dd3b5a1903122c86c"
+    },
+    {
+      "name": "stage2-bf39393849e7-desk-clock.png",
+      "bytes": 12905,
+      "sha256": "bf39393849e700e2ae16dc7ccf0684b00539ea2bd45df57ff6278e15e2fd92e6"
+    },
+    {
+      "name": "stage3-3e663f0e192d-base.png",
+      "bytes": 2477556,
+      "sha256": "71d2bb94eb661ef3c8aefaf4ed40bda4607c9343151d1be1b8fd5ad14b93a61c"
+    },
+    {
+      "name": "stage3-3e663f0e192d-computer-basic.png",
+      "bytes": 70109,
+      "sha256": "7eee2e3195bf3513440971dbd16cfa4d19847d5c2a1e424d3d59faa09aa82889"
+    },
+    {
+      "name": "stage3-3e663f0e192d-computer-upgraded.png",
+      "bytes": 80808,
+      "sha256": "ed60f35996801f31b796dc8e02019a5972fc84038efa988f2cb1d2f97b46ce39"
+    },
+    {
+      "name": "stage3-3e663f0e192d-desk-mat.png",
+      "bytes": 62562,
+      "sha256": "c811e4adb7b732d2c4ec2b359befda94253f8689eeb089eb519beff6ae7dfa3d"
+    },
+    {
+      "name": "stage3-3e663f0e192d-headphones.png",
+      "bytes": 40742,
+      "sha256": "ed503d440706cba4f829dcea3c3c17de5a6e543f8d7ab032caee950260e38f8d"
+    },
+    {
+      "name": "stage3-3e663f0e192d-keyboard-basic.png",
+      "bytes": 40247,
+      "sha256": "c1d7a8fea36c73c4be2df11cd42ac891949daa26831f34c894a5e1801b5d825c"
+    },
+    {
+      "name": "stage3-3e663f0e192d-keyboard-upgraded.png",
+      "bytes": 44749,
+      "sha256": "bbac58559f1abe2f3a0d77f60ddc731cf96deaaa7ee5e7e0f8356f1716545173"
+    },
+    {
+      "name": "stage3-3e663f0e192d-microphone.png",
+      "bytes": 19670,
+      "sha256": "e2a8036fa8c7541a768f66e3c374c751a878685f4a3c0a7ba6615f071908a9e3"
+    },
+    {
+      "name": "stage3-3e663f0e192d-monitor-basic.png",
+      "bytes": 107451,
+      "sha256": "75e15f8173a92ac773158b3ab706aa7296d5ae1a101d54c24c926b8686ad6eee"
+    },
+    {
+      "name": "stage3-3e663f0e192d-monitor-upgraded.png",
+      "bytes": 122916,
+      "sha256": "f1bb80c5a50d0ae92bf4bf89e1473b38f285545665b186b4ad579728a54c9ce1"
+    },
+    {
+      "name": "stage3-3e663f0e192d-mouse-basic.png",
+      "bytes": 11681,
+      "sha256": "9b27fca9670052c5c9df5f98646cc486baa45e496baa28c8f8d89b01bec8ab7b"
+    },
+    {
+      "name": "stage3-3e663f0e192d-mouse-upgraded.png",
+      "bytes": 13149,
+      "sha256": "f114655ba17800f03f26ac6adafbb30fac733ef32e58ec131825fd0f7b489bbe"
+    },
+    {
+      "name": "stage3-3e663f0e192d-pen-display.png",
+      "bytes": 15315,
+      "sha256": "efe1369ca9d11786957ef52e777670fc8f55a35f2a726d1aa84fc0e4d07ab666"
+    },
+    {
+      "name": "stage3-87c7eda9b63c-speakers.png",
+      "bytes": 19152,
+      "sha256": "87c7eda9b63ce8f3c7e1a7c88ae7d011ffee24abb6d2507e57bb03504fcf150b"
+    },
+    {
+      "name": "stage4-2c269be0b55f-console.png",
+      "bytes": 11131,
+      "sha256": "2c269be0b55f393600bc572ead3f0fc24f32d59e7db226b741cc069523b1a27e"
+    },
+    {
+      "name": "stage4-6b7e39c6a3bc-monitor-upgraded.png",
+      "bytes": 175778,
+      "sha256": "6b7e39c6a3bcd491d77406fc17d71ae53f1e81cd7e5f37f25615cde0ffa30321"
+    },
+    {
+      "name": "stage4-8b799fdfa45c-base.png",
+      "bytes": 2620968,
+      "sha256": "631ef1ff8f4ca6e9de84024ae7257d4c8e3bd563232826fd242c28332fa42b6b"
+    },
+    {
+      "name": "stage4-8b799fdfa45c-computer-basic.png",
+      "bytes": 72732,
+      "sha256": "b50c89234d92e97cb81e8eddc6322236dc6c9f8e0db03c71d0b25541292518ff"
+    },
+    {
+      "name": "stage4-8b799fdfa45c-computer-upgraded.png",
+      "bytes": 78472,
+      "sha256": "d0704433520c0efa65bb5fad56acb20ae7a49fc7e9416a7584ef7d1ace03bc8e"
+    },
+    {
+      "name": "stage4-8b799fdfa45c-desk-mat.png",
+      "bytes": 103140,
+      "sha256": "736a9c1b08f4e665d1ac9b77b97d31c4e58a4882ca02a10d635bd30b467a2146"
+    },
+    {
+      "name": "stage4-8b799fdfa45c-keyboard-basic.png",
+      "bytes": 50642,
+      "sha256": "70c511162fbfe11c1d02db116cc4ce15559ade5e070cc8c2ec16fd6217d5b646"
+    },
+    {
+      "name": "stage4-8b799fdfa45c-keyboard-upgraded.png",
+      "bytes": 64465,
+      "sha256": "602a813ad64e46b3d842d0ef919db0f7bb8c5bf9d325c6b1772ddcce427726c2"
+    },
+    {
+      "name": "stage4-8b799fdfa45c-microphone.png",
+      "bytes": 51526,
+      "sha256": "d9f4a84f4ec60004b4e7f64ac424b8e63ea893f4426888fe204085ac057c4daa"
+    },
+    {
+      "name": "stage4-8b799fdfa45c-monitor-basic.png",
+      "bytes": 161901,
+      "sha256": "5d843ccc2fa0b38445681869ca12548d594e36f3bfa322d20c895e3331dafb5f"
+    },
+    {
+      "name": "stage4-8b799fdfa45c-mouse-basic.png",
+      "bytes": 13546,
+      "sha256": "15ace4efcd395b32b06f028b28fb67345c49a26caa8cc46bd9539640df093a74"
+    },
+    {
+      "name": "stage4-8b799fdfa45c-mouse-upgraded.png",
+      "bytes": 13316,
+      "sha256": "a499f52acce8948c685b9cac6b7d52683844287cb28784f7d7ad72fce191482a"
+    },
+    {
+      "name": "stage4-8b799fdfa45c-pen-display.png",
+      "bytes": 14867,
+      "sha256": "5776b34d3133b3383700583f16abf2b42f0a3d62d50666d0739cb7d897ae28d9"
+    },
+    {
+      "name": "stage4-b8b25bcd45ca-speakers.png",
+      "bytes": 15988,
+      "sha256": "b8b25bcd45ca183450db057e28051d60ba004a74cb804583b5eefc1520096472"
+    },
+    {
+      "name": "stage4-c4ff3bed8689-headphones.png",
+      "bytes": 47764,
+      "sha256": "c4ff3bed86897e1a37d590516b485b093d9428eb1a31b3dec77282274a2104cd"
+    },
+    {
+      "name": "stage5-0987cc6c8d51-pen-display.png",
+      "bytes": 43428,
+      "sha256": "0987cc6c8d514b17ec71da54a76c5096e2d9a287761892363b73f2b8d2d8f3d8"
+    },
+    {
+      "name": "stage5-28beacd05fac-base.png",
+      "bytes": 2605214,
+      "sha256": "242339eb45099915c102491ce2f5ad1bb691c1e943a16dfb98764ee73d06ca3f"
+    },
+    {
+      "name": "stage5-28beacd05fac-desk-mat.png",
+      "bytes": 75115,
+      "sha256": "82b901331d8df9cf27ab48e546f871f92240e5b9d7815f90cefd7ffc438bd58b"
+    },
+    {
+      "name": "stage5-28beacd05fac-handheld.png",
+      "bytes": 30249,
+      "sha256": "aa5c3c257b2b228c1b1214cc3c9bf39cfc6975cc2e14affcf99a5dce76f9fe9c"
+    },
+    {
+      "name": "stage5-28beacd05fac-headphones.png",
+      "bytes": 41678,
+      "sha256": "ffe1891926be79b55658c96da5e84462703a89f8d6b65b1b515160f70fea1cd7"
+    },
+    {
+      "name": "stage5-28beacd05fac-microphone.png",
+      "bytes": 53558,
+      "sha256": "b0ab6d0b295b7750af990819a674231f34f692721d6484512d6fc69cf6cafa8f"
+    },
+    {
+      "name": "stage5-28beacd05fac-mouse-basic.png",
+      "bytes": 13387,
+      "sha256": "268c4c453ca7a700a8ae309d83b5da29fcdd22568c3faded492c8f2befb96298"
+    },
+    {
+      "name": "stage5-4436f5910760-speakers.png",
+      "bytes": 17503,
+      "sha256": "4436f59107608675d5843eb9ec4e6c442a09e391d9301397bf8555ec9b9dd0ac"
+    },
+    {
+      "name": "stage5-54060b7cb1b4-console.png",
+      "bytes": 17473,
+      "sha256": "54060b7cb1b40156e3da2f86f6dc591eabc57ec94dce5fb38b0f82656597b14d"
+    },
+    {
+      "name": "stage5-555e266a1e7d-computer-basic.png",
+      "bytes": 89779,
+      "sha256": "555e266a1e7d2f5262d89b2b33a3537661a5f99e0892ef997907f8414f438d11"
+    },
+    {
+      "name": "stage5-633e23bdcf6a-lightbar-basic.png",
+      "bytes": 12371,
+      "sha256": "633e23bdcf6ad8b0359edb76e8537b0e65edb642dad266afbaa57814d429ce3e"
+    },
+    {
+      "name": "stage5-661b3bcf9e0d-keyboard-upgraded.png",
+      "bytes": 58117,
+      "sha256": "661b3bcf9e0d1ee2ecfed7fae81c2805813283ed02a39f2473b6ab478e273098"
+    },
+    {
+      "name": "stage5-7a819dea6109-monitor-basic.png",
+      "bytes": 141363,
+      "sha256": "7a819dea6109b6a14076548abe004c8fd31dd930489ed42d712644c152a78ecf"
+    },
+    {
+      "name": "stage5-8953a2895c03-monitor-upgraded.png",
+      "bytes": 261349,
+      "sha256": "8953a2895c035d55f8a82327271abafbe0e96f9393e288713fa4309a665c8151"
+    },
+    {
+      "name": "stage5-b812a571e8d3-computer-upgraded.png",
+      "bytes": 101270,
+      "sha256": "b812a571e8d304f7e23f0144301ea0f5d5ab65a703ad870594812be167f4f45d"
+    },
+    {
+      "name": "stage5-d17f6df5d398-keyboard-basic.png",
+      "bytes": 53783,
+      "sha256": "d17f6df5d3986c2dab7973e5b0514ab482ffc09c33a4f2a9ae4986d974e6a88a"
+    },
+    {
+      "name": "stage5-eee9d1bc937c-lightbar.png",
+      "bytes": 12266,
+      "sha256": "eee9d1bc937c7d24086dc185cb5a0e03aa79c25ba602bf6ead9bdf82a117112d"
+    },
+    {
+      "name": "stage5-f54656cc14a4-mouse-upgraded.png",
+      "bytes": 14092,
+      "sha256": "f54656cc14a40c8e95a3e539e4dc06973949389f40ca54c7a1896e0b1a222d5a"
+    }
+  ]
+}

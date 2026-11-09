@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 from alembic.config import Config
@@ -9,9 +10,12 @@ from alembic.script import ScriptDirectory
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_unified_club_is_the_only_migration_head():
+def test_unified_club_is_joined_to_the_workstation_migration_chain():
     scripts = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert scripts.get_heads() == ["20261021_126"]
+    assert scripts.get_heads() == ["20261109_merge_workstation"]
+    assert scripts.get_revision("20261109_merge_workstation").down_revision == (
+        "20261021_126", "20261107_111",
+    )
     assert scripts.get_revision("20261021_126").down_revision == "20261020_125"
 
 
@@ -22,7 +26,9 @@ def test_unified_club_generates_postgresql_upgrade_sql():
     }
     result = subprocess.run(
         [
-            str(ROOT / ".venv/bin/alembic"),
+            sys.executable,
+            "-m",
+            "alembic",
             "upgrade",
             "20261020_125:20261021_126",
             "--sql",

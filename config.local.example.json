@@ -1,0 +1,6 @@
+{
+  "workstation": {
+    "apiBaseUrl": "https://workstation.example.com",
+    "cardId": null
+  }
+}

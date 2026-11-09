@@ -11,6 +11,13 @@ rsync -a --delete --delete-excluded \
   --exclude .env \
   --exclude .venv \
   --exclude .worktrees \
+  --exclude output \
+  --exclude outputs \
+  --exclude config.local.json \
+  --exclude browser_profile \
+  --exclude .gamefy \
+  --exclude .pytest_cache \
+  --exclude node_modules \
   --exclude __pycache__ \
   --exclude '*.pyc' \
   --exclude .DS_Store \

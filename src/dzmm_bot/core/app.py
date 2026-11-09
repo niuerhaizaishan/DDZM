@@ -265,6 +265,9 @@ from .doudizhu_api import doudizhu_router
 from .drawguess_api import drawguess_router
 from .mistrealm_api import mistrealm_router
 from .club_api import club_router
+from .workstation import WorkstationLinks
+from .gamefy import install_gamefy_routes
+from .workstation_admin import install_workstation_admin_routes
 
 
 def create_server(repository: CoreRepository, settings: Settings) -> Server:
@@ -291,6 +294,9 @@ def create_server(repository: CoreRepository, settings: Settings) -> Server:
             club_game_url=settings.club_game_url,
             club_public_api_url=settings.club_public_api_url,
             club_chatroom_id=settings.club_chatroom_id,
+            workstation_public_url=settings.workstation_public_url,
+            workstation_game_url=settings.workstation_game_url,
+            gamefy_game_id=settings.gamefy_game_id,
         ),
         host="127.0.0.1",
         port=settings.core_api_port,
@@ -336,6 +342,9 @@ def create_app_from_environment() -> FastAPI:
         club_game_url=settings.club_game_url,
         club_public_api_url=settings.club_public_api_url,
         club_chatroom_id=settings.club_chatroom_id,
+        workstation_public_url=settings.workstation_public_url,
+        workstation_game_url=settings.workstation_game_url,
+        gamefy_game_id=settings.gamefy_game_id,
     )
 
 
@@ -394,8 +403,12 @@ def create_app(
     club_game_url: str | None = None,
     club_public_api_url: str | None = None,
     club_chatroom_id: str | None = None,
+    workstation_public_url: str | None = None,
+    workstation_game_url: str | None = None,
+    gamefy_game_id: str | None = None,
 ) -> FastAPI:
     app = FastAPI()
+    workstation_links = WorkstationLinks(core_token, workstation_public_url, game_url=workstation_game_url)
     if chess_game_id or doudizhu_game_id or drawguess_game_id or mistrealm_enabled or club_game_id:
         app.add_middleware(
             CORSMiddleware, allow_origins=["*"], allow_methods=["GET", "POST"],
@@ -444,7 +457,7 @@ def create_app(
     service = CoreService(
         repository,
         GroupCommandHandler(
-            repository, chess_game_id=chess_game_id,
+            repository, workstation_links=workstation_links, chess_game_id=chess_game_id,
             chess_game_url=chess_game_url, chess_public_api_url=chess_public_api_url,
             chess_test_chatroom_id=chess_test_chatroom_id,
             doudizhu_game_id=doudizhu_game_id, doudizhu_game_url=doudizhu_game_url,
@@ -460,6 +473,20 @@ def create_app(
     def authorize(x_core_token: Annotated[str | None, Header()] = None) -> None:
         if x_core_token is None or not compare_digest(x_core_token, core_token):
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "unauthorized")
+
+    install_gamefy_routes(app, repository, authorize, gamefy_game_id)
+    install_workstation_admin_routes(app, repository, authorize, clock)
+
+    @app.get("/internal/workstations/{token}")
+    def get_workstation(token: str, _: Annotated[None, Depends(authorize)]):
+        user_id = workstation_links.user_id_for(token)
+        workstation = None if user_id is None else repository.get_workstation(user_id)
+        if workstation is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "工位链接无效或已失效，请在群里重新发送 /我的工位。")
+        return JSONResponse(
+            {**workstation, "currency_name": repository.get_game_settings().currency_name},
+            headers={"Cache-Control": "no-store"},
+        )
 
     @app.post("/internal/inbound", response_model=InboundResponse)
     def receive_inbound(

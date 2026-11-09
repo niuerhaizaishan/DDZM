@@ -49,6 +49,8 @@ from .shop_excel import (
     error_report as shop_error_report, export_workbook as export_shop_workbook,
     parse_workbook as parse_shop_workbook,
 )
+from .workstation import install_workstation_routes
+from .workstation_management import install_workstation_management
 from dzmm_bot.core.honors import HonorConfigInput, HonorSettleInput, HonorCorrectionInput
 
 
@@ -116,6 +118,7 @@ def create_app(
     if not admin_token:
         raise ValueError("admin_token must be nonempty")
     app = FastAPI()
+    install_workstation_routes(app, core)
     app.add_middleware(ShopExcelUploadLimitMiddleware)
     console = console_client or NoVNCClient()
     connect_websocket = websocket_connector or NoVNCWebSocketConnector()
@@ -241,6 +244,14 @@ def create_app(
         return idempotent_response(
             identity, idempotency_key, versioned_operation, scope=scope
         )
+
+    install_workstation_management(app, core, repository, authorize, require_super_admin,
+                                  idempotent_response, versioned_configuration_response, forward_integration)
+
+    @app.get("/static/workstation-admin.js")
+    def workstation_admin_script() -> FileResponse:
+        return FileResponse(_ROOT / "static" / "workstation-admin.js", media_type="text/javascript",
+                            headers={"Cache-Control": "no-store"})
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> FileResponse:

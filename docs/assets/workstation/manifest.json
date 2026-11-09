@@ -1,0 +1,191 @@
+{
+  "canvas": {
+    "width": 1536,
+    "height": 1024
+  },
+  "base": "./assets/workstation/core-base.png",
+  "reference": "./assets/workstation-scene.png",
+  "scope": "仅拆分 10 件核心装备，桌面上的其他物品保留原样",
+  "layers": [
+    {
+      "id": "monitor-main",
+      "name": "主显示器",
+      "asset": "./assets/workstation/layers/monitor-main-layer.png",
+      "thumbnail": "./assets/workstation/layers/monitor-main.png",
+      "bounds": [
+        414,
+        309,
+        846,
+        526
+      ],
+      "zIndex": 20,
+      "defaultEquipped": false,
+      "price": 36,
+      "dailyIncome": 2,
+      "effect": "工位收入 +2 币/日",
+      "method": "从原图可见区域按轮廓提取，保留原有透视与像素"
+    },
+    {
+      "id": "monitor-left",
+      "name": "左侧竖屏",
+      "asset": "./assets/workstation/layers/monitor-left-layer.png",
+      "thumbnail": "./assets/workstation/layers/monitor-left.png",
+      "bounds": [
+        238,
+        305,
+        419,
+        552
+      ],
+      "zIndex": 10,
+      "defaultEquipped": false,
+      "price": 28,
+      "dailyIncome": 1,
+      "effect": "工位收入 +1 币/日",
+      "method": "从原图可见区域按轮廓提取，保留原有透视与像素"
+    },
+    {
+      "id": "monitor-right",
+      "name": "右侧竖屏",
+      "asset": "./assets/workstation/layers/monitor-right-layer.png",
+      "thumbnail": "./assets/workstation/layers/monitor-right.png",
+      "bounds": [
+        842,
+        262,
+        1010,
+        523
+      ],
+      "zIndex": 10,
+      "defaultEquipped": false,
+      "price": 28,
+      "dailyIncome": 1,
+      "effect": "工位收入 +1 币/日",
+      "method": "从原图可见区域按轮廓提取，保留原有透视与像素"
+    },
+    {
+      "id": "screen-light",
+      "name": "屏幕挂灯",
+      "asset": "./assets/workstation/layers/screen-light-layer.png",
+      "thumbnail": "./assets/workstation/layers/screen-light.png",
+      "bounds": [
+        548,
+        288,
+        751,
+        318
+      ],
+      "zIndex": 30,
+      "defaultEquipped": false,
+      "price": 18,
+      "dailyIncome": 1,
+      "effect": "工位收入 +1 币/日",
+      "method": "从原图可见区域按轮廓提取，保留原有透视与像素"
+    },
+    {
+      "id": "keyboard",
+      "name": "机械键盘",
+      "asset": "./assets/workstation/layers/keyboard-layer.png",
+      "thumbnail": "./assets/workstation/layers/keyboard.png",
+      "bounds": [
+        523,
+        550,
+        745,
+        634
+      ],
+      "zIndex": 40,
+      "defaultEquipped": false,
+      "price": 22,
+      "dailyIncome": 1,
+      "effect": "工位收入 +1 币/日",
+      "method": "从原图可见区域按轮廓提取，保留原有透视与像素"
+    },
+    {
+      "id": "mouse",
+      "name": "桌面鼠标",
+      "asset": "./assets/workstation/layers/mouse-layer.png",
+      "thumbnail": "./assets/workstation/layers/mouse.png",
+      "bounds": [
+        731,
+        549,
+        829,
+        585
+      ],
+      "zIndex": 40,
+      "defaultEquipped": false,
+      "price": 16,
+      "dailyIncome": 1,
+      "effect": "工位收入 +1 币/日",
+      "method": "从原图可见区域按轮廓提取，保留原有透视与像素"
+    },
+    {
+      "id": "desk-lamp",
+      "name": "暖光台灯",
+      "asset": "./assets/workstation/layers/desk-lamp-layer.png",
+      "thumbnail": "./assets/workstation/layers/desk-lamp.png",
+      "bounds": [
+        153,
+        462,
+        281,
+        651
+      ],
+      "zIndex": 40,
+      "defaultEquipped": false,
+      "price": 24,
+      "dailyIncome": 1,
+      "effect": "工位收入 +1 币/日",
+      "method": "从原图可见区域按轮廓提取，保留原有透视与像素"
+    },
+    {
+      "id": "handheld",
+      "name": "桌面掌机",
+      "asset": "./assets/workstation/layers/handheld-layer.png",
+      "thumbnail": "./assets/workstation/layers/handheld.png",
+      "bounds": [
+        1108,
+        468,
+        1245,
+        548
+      ],
+      "zIndex": 40,
+      "defaultEquipped": false,
+      "price": 20,
+      "dailyIncome": 1,
+      "effect": "工位收入 +1 币/日",
+      "method": "从原图可见区域按轮廓提取，保留原有透视与像素"
+    },
+    {
+      "id": "pc",
+      "name": "侧透主机",
+      "asset": "./assets/workstation/layers/pc-layer.png",
+      "thumbnail": "./assets/workstation/layers/pc.png",
+      "bounds": [
+        1257,
+        433,
+        1536,
+        631
+      ],
+      "zIndex": 40,
+      "defaultEquipped": false,
+      "price": 58,
+      "dailyIncome": 3,
+      "effect": "工位收入 +3 币/日",
+      "method": "从原图可见区域按轮廓提取，保留原有透视与像素"
+    },
+    {
+      "id": "chair",
+      "name": "人体工学椅",
+      "asset": "./assets/workstation/layers/chair-layer.png",
+      "thumbnail": "./assets/workstation/layers/chair.png",
+      "bounds": [
+        668,
+        569,
+        1251,
+        1024
+      ],
+      "zIndex": 60,
+      "defaultEquipped": false,
+      "price": 46,
+      "dailyIncome": 2,
+      "effect": "工位收入 +2 币/日",
+      "method": "从原图可见区域按轮廓提取，保留原有透视与像素"
+    }
+  ]
+}
