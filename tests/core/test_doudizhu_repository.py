@@ -87,14 +87,15 @@ def test_ready_leave_and_rematch(ddz):
         state = dict(row.state)
         state.update(phase='finished', result={'winner': 'farmers', 'winners': [1, 2], 'spring': None})
         row.state = state
-    room = act(repo, room, 'host', 'rematch')
-    assert room['phase'] == 'waiting' and not any(p['ready'] for p in room['players'])
-    assert room['round_id'] is None
-    with pytest.raises(ValueError):
-        repo.doudizhu_action(UUID(room['id']), 'host', UUID(old_round), room['version'], uuid4(), 'ready', {}, NOW)
+    room = act(repo, room, 'host', 'ready')
+    assert room['phase'] == 'finished'
+    assert len(room['final_hands']) == 3
     for uid in ('host', 'alice', 'bob'):
-        room = act(repo, room, uid, 'ready')
+        if not next(player for player in room['players'] if player['id'] and player['name'] == uid)['ready']:
+            room = act(repo, room, uid, 'ready')
+    room = act(repo, room, 'host', 'start')
     assert room['round_id'] != old_round
+    assert room['phase'] == 'bidding'
 
 
 def test_request_id_payload_conflict(ddz):
@@ -147,17 +148,12 @@ def test_waiting_expiry_and_leave(ddz):
     assert repo.doudizhu_view(UUID(room['id']), 'host', NOW)['phase'] == 'cancelled'
 
 
-def test_leaving_same_players_rematch_cancels_instead_of_stranding_a_seat(ddz):
+def test_rematch_cannot_bypass_settlement_readiness(ddz):
     from dzmm_bot.core.schema import DoudizhuRoundRecord
     repo, factory, _ = ddz
     room = dealt(ddz)
     with factory.begin() as s:
         row = s.get(DoudizhuRoundRecord, UUID(room['round_id']))
         row.state = {**row.state, 'phase': 'finished', 'result': {'winner': 'farmers', 'winners': [1, 2], 'spring': None}}
-    room = act(repo, room, 'host', 'rematch')
-    room = act(repo, room, 'alice', 'leave')
-    assert room['phase'] == 'cancelled' and room['deadline'] is None
-    assert all(p is not None for p in room['players'])
-    with factory() as s:
-        notices = s.scalars(select(OutboundRecord).where(OutboundRecord.inbound_message_id.is_(None))).all()
-        assert len(notices) == 1 and '/斗地主' in notices[0].text
+    with pytest.raises(ValueError, match='所有玩家准备'):
+        act(repo, room, 'host', 'rematch')

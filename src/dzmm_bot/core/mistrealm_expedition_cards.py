@@ -1,0 +1,80 @@
+"""Expedition-only cards. Never part of the constructed/PvP catalogue."""
+
+FACTIONS = {'bone': '白骨王庭', 'blood': '绯夜血裔', 'arena': '赤砂斗场'}
+
+
+def _card(name, faction, power, rows, text, *, effect=None, amount=0,
+          condition=None, death=None, persistent=False, hero=False, leader=False):
+    return dict(name=name, faction=faction, power=power, rows=rows,
+                type='leader' if leader else 'unit' if rows else 'special', hero=hero, persistent=persistent,
+                copies=1, abilities=[], text=text, note='',
+                effect=effect, amount=amount,
+                condition=condition, death=death)
+
+
+CARDS = {
+    'xb01': _card('碎骨执旗兵', 'bone', 3, [0], '阵亡：其他己方单位各＋1。每张实体每场战斗限一次。', death='rally'),
+    'xb02': _card('墓穴拾骨者', 'bone', 2, [1], '部署：选择己方弃牌区一名普通单位回到手牌。', effect='recover'),
+    'xb03': _card('骨灯引路人', 'bone', 2, [1], '部署：复活一名基础战力不超过2的己方非间谍普通单位，不触发部署。', effect='revive', amount=2),
+    'xb04': _card('残骸守卫', 'bone', 3, [0], '己方弃牌区每有一张单位牌，自身条件战力＋1。', condition='grave'),
+    'xb05': _card('送葬弩手', 'bone', 2, [1], '部署：对一名敌方单位造成2点伤害。', effect='damage', amount=2),
+    'xb06': _card('空棺行者', 'bone', 3, [0, 2], '阵亡：抽1张牌。每张实体每场战斗限一次。', death='draw'),
+    'xb07': _card('骨髓司祭', 'bone', 3, [2], '部署：可牺牲另一名己方普通单位，抽2张牌。', effect='sacrifice_draw', amount=2),
+    'xb08': _card('灵柩推车', 'bone', 4, [2], '部署：另一名己方单位＋2。', effect='boost', amount=2),
+    'xb09': _card('重塑骸骨', 'bone', 0, [], '复活一名基础战力不超过4的己方非间谍普通单位，不触发部署。', effect='revive', amount=4),
+    'xb10': _card('骨灰契约师', 'bone', 2, [2], '部署：可牺牲另一名己方普通单位，抽2张牌。', effect='sacrifice_draw', amount=2),
+    'xb11': _card('墓园旗阵', 'bone', 0, [], '选择己方一排。每当己方单位阵亡，该排剩余单位各＋1；最多触发3次。', persistent=True, effect='death_rally'),
+    'xb12': _card('碎骨唤风者', 'bone', 2, [1], '部署：选择敌方一排，对该排每名单位造成2点伤害。', effect='row_damage', amount=2),
+    'xb13': _card('骨冠王·赫骸', 'bone', 6, [0], '部署：复活一名基础战力不超过4的己方非间谍普通单位，不触发部署。', hero=True, effect='revive', amount=4),
+    'xb14': _card('葬钟侯·弥罗', 'bone', 5, [1], '本场战斗每阵亡过一名己方普通单位，自身条件战力＋1。重复阵亡也计数。', hero=True, condition='fallen'),
+    'xb15': _card('白骨军主·朔', 'bone', 5, [0], '部署：其他己方单位各＋1。', hero=True, effect='rally', amount=1),
+    'xb16': _card('冥河摆渡者', 'bone', 5, [2], '部署：抽2张牌。阵亡：抽1张牌，阵亡效果每张实体每场战斗限一次。', hero=True, effect='draw', amount=2, death='draw'),
+    'xb17': _card('墓门铁卫', 'bone', 4, [0], '同排每有一名其他己方单位，自身条件战力＋1。', condition='allies'),
+    'xb18': _card('遗骨书记', 'bone', 2, [2], '部署：抽1张牌。', effect='draw', amount=1),
+    'xb19': _card('骨庭摄政 归骨', 'bone', 0, [], '整场一次：复活一名基础战力不超过4的己方非间谍普通单位，不触发部署。远征不启用领袖。', leader=True, effect='revive', amount=4),
+    'xb20': _card('葬仪大司祭 祭灯', 'bone', 0, [], '整场一次：抽2张牌。远征不启用领袖。', leader=True, effect='draw', amount=2),
+    'xv01': _card('初拥侍从', 'blood', 2, [0], '部署：选择敌方一名单位吸血2。吸血：造成伤害后，自身增加实际扣除的战力，最多等于目标受击前战力。', effect='drain', amount=2),
+    'xv02': _card('夜巡血猎', 'blood', 3, [1], '敌方场上每有一名带有伤害的单位，自身条件战力＋1。', condition='wounded'),
+    'xv03': _card('血杯侍女', 'blood', 3, [1], '部署：自身受到1点伤害，然后抽2张牌。', effect='blood_draw', amount=2),
+    'xv04': _card('猩红刽手', 'blood', 2, [0], '部署：对一名已有伤害的敌方单位造成3点伤害。', effect='wounded_damage', amount=3),
+    'xv05': _card('暮鸦仆役', 'blood', 3, [1, 2], '部署：移动另一名己方普通单位到另一战列，并使其＋1。', effect='move', amount=1),
+    'xv06': _card('血誓骑士', 'blood', 4, [0], '己方每有一张在场持续术，自身条件战力＋1。', condition='spells'),
+    'xv07': _card('暗宴司仪', 'blood', 3, [2], '部署：可牺牲另一名己方普通单位，自身＋4。', effect='sacrifice_boost', amount=4),
+    'xv08': _card('赤露修女', 'blood', 2, [1], '部署：另一名己方单位＋3。', effect='boost', amount=3),
+    'xv09': _card('血线侵蚀', 'blood', 0, [], '选择敌方一名单位。打出时及之后两次己方出牌结束后，对其造成1点伤害；目标离场后停止。', persistent=True, effect='end_damage', amount=1),
+    'xv10': _card('猩红恩赐', 'blood', 0, [], '选择一名己方单位，使其＋4。', effect='boost', amount=4),
+    'xv11': _card('长夜饥客', 'blood', 2, [0], '部署：对敌方所有已有伤害的单位各造成2点伤害。', effect='wounded_all', amount=2),
+    'xv12': _card('破晓禁仪师', 'blood', 2, [2], '部署：摧毁双方场上任意一张持续术，然后抽1张牌。', effect='destroy_draw'),
+    'xv13': _card('血后·瑟薇娅', 'blood', 6, [0], '部署：选择敌方一名单位吸血3。', hero=True, effect='drain', amount=3),
+    'xv14': _card('夜宴公爵', 'blood', 5, [1], '敌方场上每有一名带有伤害的单位，自身条件战力＋2。', hero=True, condition='wounded2'),
+    'xv15': _card('红月圣女', 'blood', 5, [2], '部署：其他己方单位各＋2。', hero=True, effect='rally', amount=2),
+    'xv16': _card('永夜亲王', 'blood', 6, [0], '部署：对敌方一排所有单位各造成2点伤害。', hero=True, effect='row_damage', amount=2),
+    'xv17': _card('赤月巡卫', 'blood', 3, [0], '部署：选择敌方一名单位吸血1。造成伤害后，自身增加实际扣除的战力。', effect='drain', amount=1),
+    'xv18': _card('绯纱织命者', 'blood', 2, [2], '部署：选择己方一排，该排单位各＋1。', effect='row_boost', amount=1),
+    'xv19': _card('绯夜女伯爵 血宴', 'blood', 0, [], '整场一次：选择敌方一排，对该排所有单位各造成2点伤害。远征不启用领袖。', leader=True, effect='row_damage', amount=2),
+    'xv20': _card('暮钟主教 恩赐', 'blood', 0, [], '整场一次：选择己方一排，该排单位各＋2。远征不启用领袖。', leader=True, effect='row_boost', amount=2),
+    'xa01': _card('孤锋斗士', 'arena', 3, [0], '本排没有其他己方单位时，自身条件战力＋3。', condition='alone'),
+    'xa02': _card('钩网角斗士', 'arena', 3, [1], '部署：移动一名敌方普通单位到其另一战列。', effect='enemy_move'),
+    'xa03': _card('双刃挑战者', 'arena', 4, [0], '部署：可与一名敌方单位互相造成2点伤害。', effect='duel', amount=2),
+    'xa04': _card('赤砂投矛手', 'arena', 2, [1], '部署：对一名敌方单位造成3点伤害。', effect='damage', amount=3),
+    'xa05': _card('盾阵教头', 'arena', 3, [0], '同排每有一名其他己方单位，自身条件战力＋1。', condition='allies'),
+    'xa06': _card('斗场鼓手', 'arena', 2, [2], '部署：选择己方一排，该排单位各＋1。', effect='row_boost', amount=1),
+    'xa07': _card('铁笼押运者', 'arena', 3, [2], '对面同排每有一名普通单位，自身条件战力＋1。', condition='opponents'),
+    'xa08': _card('终场收割者', 'arena', 3, [0, 1], '部署：对一名已有伤害的敌方单位造成3点伤害。', effect='wounded_damage', amount=3),
+    'xa09': _card('沙场号令', 'arena', 0, [], '选择己方一排。打出时及之后两次己方出牌结束后，该排单位各＋1。', persistent=True, effect='end_boost', amount=1),
+    'xa10': _card('生死邀斗', 'arena', 0, [], '选择一名敌方单位，造成4点伤害。', effect='damage', amount=4),
+    'xa11': _card('换位护卫', 'arena', 2, [0, 1], '部署：移动另一名己方普通单位到另一战列，使其＋3。', effect='move', amount=3),
+    'xa12': _card('落闸监守', 'arena', 2, [2], '部署：摧毁双方场上任意一张持续术，然后抽1张牌。', effect='destroy_draw'),
+    'xa13': _card('不败者·阿铎', 'arena', 6, [0], '本排没有其他己方单位时，自身条件战力＋3。', hero=True, condition='alone'),
+    'xa14': _card('千刃女王', 'arena', 5, [1], '部署：对敌方一排所有单位各造成2点伤害。', hero=True, effect='row_damage', amount=2),
+    'xa15': _card('赤砂统帅', 'arena', 5, [2], '部署：选择己方一排，该排单位各＋2。', hero=True, effect='row_boost', amount=2),
+    'xa16': _card('铁笼暴君', 'arena', 6, [0], '部署：可与一名敌方单位互相造成3点伤害。', hero=True, effect='duel', amount=3),
+    'xa17': _card('侧翼追猎者', 'arena', 3, [0, 1], '部署：移动一名敌方普通单位到其另一战列。', effect='enemy_move'),
+    'xa18': _card('沙痕老兵', 'arena', 4, [0], '部署：另一名己方单位＋1。', effect='boost', amount=1),
+    'xa19': _card('沙海督军 奋战', 'arena', 0, [], '整场一次：选择己方一排，该排单位各＋2。远征不启用领袖。', leader=True, effect='row_boost', amount=2),
+    'xa20': _card('竞技执政官 整备', 'arena', 0, [], '整场一次：抽2张牌。远征不启用领袖。', leader=True, effect='draw', amount=2),
+}
+
+for card_id, card in CARDS.items():
+    art_id = card_id + '-unit' if card_id in ('xb10', 'xb12', 'xv11', 'xv12', 'xa11', 'xa12') else card_id
+    card['art'] = f'../assets/expedition/{art_id}.webp'

@@ -1,9 +1,12 @@
 """Pure strength calculation; all conditions are recomputed from the current board."""
 from .mistrealm_v3_cards import CARDS
+from .mistrealm_expedition_cards import CARDS as EXPEDITION_CARDS
+from .mistrealm_expedition_effects import condition as expedition_condition
 
 
 def definition(card):
-    return CARDS[card['card']]
+    d = CARDS[card['card']] if card['card'] in CARDS else EXPEDITION_CARDS[card['card']]
+    return {**d, 'power': d['power'] + card['expedition_upgrade']} if card.get('expedition_upgrade') else d
 
 
 def sealed(state, card):
@@ -22,6 +25,7 @@ def _base_row_details(state, seat, row):
         d = definition(c); cid = c['card']; bonus = melee_aura
         others = [x for x in cards if x['id'] != c['id']]
         if not sealed(state, c):
+            if cid in EXPEDITION_CARDS: bonus += expedition_condition(state,seat,row,c)
             if 'bond' in d['abilities'] and any(x['card'] == cid for x in others): bonus += 2
             if cid in ('c001','c010') and others: bonus += 2
             if cid == 'c003' and not others: bonus += 2

@@ -429,6 +429,37 @@ def test_gateway_classifies_nonconfigured_socket_rooms_as_direct(gateway):
     ]
 
 
+def test_group_room_recovery_joins_only_one_room_per_maintenance_tick(gateway):
+    adapter, socket, _ = gateway
+    adapter.configure_group_rooms(
+        (
+            GroupChatTarget(
+                UUID("00000000-0000-0000-0000-000000000101"),
+                "group-a",
+                "https://www.aikda.com/chat?c=group-a",
+            ),
+            GroupChatTarget(
+                UUID("00000000-0000-0000-0000-000000000102"),
+                "group-b",
+                "https://www.aikda.com/chat?c=group-b",
+            ),
+        )
+    )
+
+    assert adapter.read_new() == []
+    assert [call for call in socket.calls if call[0] == "message:join-room"] == []
+
+    adapter.maintain_recovery()
+    joins = [call for call in socket.calls if call[0] == "message:join-room"]
+    assert len(joins) == 1
+    assert joins[0][2] == 2
+
+    adapter.maintain_recovery()
+    joins = [call for call in socket.calls if call[0] == "message:join-room"]
+    assert len(joins) == 2
+    assert {call[1]["chatroomId"] for call in joins} == {"group-a", "group-b"}
+
+
 def test_socket_preserves_direct_image_as_inbound(gateway):
     adapter, socket, _ = gateway
     assert adapter.read_new(("direct-1",)) == []

@@ -1123,6 +1123,7 @@ class LiarDiceGameRecord(Base):
     turn_deadline: Mapped[datetime | None] = mapped_column(BeijingDateTime)
     timeout_streak: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     signup_deadline: Mapped[datetime | None] = mapped_column(BeijingDateTime)
+    dealing_deadline: Mapped[datetime | None] = mapped_column(BeijingDateTime)
     created_at: Mapped[datetime] = mapped_column(
         BeijingDateTime, default=beijing_now, nullable=False
     )
@@ -2705,6 +2706,9 @@ class ClubPlayerRecord(Base):
     )
     created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(
+        BeijingDateTime, nullable=False, index=True
+    )
 
 
 class ClubPublicMessageRecord(Base):
@@ -2757,15 +2761,99 @@ class ClubDirectMessageRecord(Base):
 
 class ClubTaskClaimRecord(Base):
     __tablename__ = "club_task_claims"
-    __table_args__ = (UniqueConstraint("user_id", "task_key"),)
+    __table_args__ = (
+        CheckConstraint(
+            "(task_key = 'employment' AND claim_date IS NULL) OR "
+            "(task_key <> 'employment' AND claim_date IS NOT NULL)",
+            name="ck_club_task_claim_cycle",
+        ),
+        Index(
+            "ux_club_task_claim_once",
+            "user_id", "task_key",
+            unique=True,
+            sqlite_where=text("task_key = 'employment'"),
+            postgresql_where=text("task_key = 'employment'"),
+        ),
+        Index(
+            "ux_club_task_claim_daily",
+            "user_id", "task_key", "claim_date",
+            unique=True,
+            sqlite_where=text("task_key <> 'employment'"),
+            postgresql_where=text("task_key <> 'employment'"),
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     user_id: Mapped[UUID] = mapped_column(
         ForeignKey("users.id"), nullable=False, index=True
     )
     task_key: Mapped[str] = mapped_column(String(32), nullable=False)
+    claim_date: Mapped[date | None] = mapped_column(Date)
     reward: Mapped[int] = mapped_column(Integer, nullable=False)
     claimed_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+
+
+class ClubCardRoomRecord(Base):
+    """Shared room envelope for the three Club card-table modules."""
+
+    __tablename__ = "club_card_rooms"
+    __table_args__ = (
+        UniqueConstraint("creator_id", "create_request_id", name="uq_club_card_room_create"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    game: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    creator_id: Mapped[UUID] = mapped_column(ForeignKey("club_players.id"), nullable=False)
+    create_request_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    seats: Mapped[list] = mapped_column(JSON, nullable=False)
+    ready: Mapped[list] = mapped_column(JSON, default=list, server_default="[]", nullable=False)
+    room_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    stake: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    state: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}", nullable=False)
+    escrowed: Mapped[list] = mapped_column(JSON, default=list, server_default="[]", nullable=False)
+    hand_settled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), nullable=False)
+    phase: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    hand_number: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    version: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False, index=True)
+
+
+class ClubCardRequestRecord(Base):
+    __tablename__ = "club_card_requests"
+    __table_args__ = (UniqueConstraint("room_id", "user_id", "request_id"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    room_id: Mapped[UUID] = mapped_column(ForeignKey("club_card_rooms.id"), nullable=False)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("club_players.id"), nullable=False)
+    request_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    digest: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class ClubCardMessageRecord(Base):
+    __tablename__ = "club_card_messages"
+    __table_args__ = (UniqueConstraint("room_id", "user_id", "request_id"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    room_id: Mapped[UUID] = mapped_column(ForeignKey("club_card_rooms.id"), nullable=False)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("club_players.id"), nullable=False)
+    request_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    content: Mapped[str] = mapped_column(String(300), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+
+
+class ClubCardHandRecord(Base):
+    __tablename__ = "club_card_hands"
+    __table_args__ = (UniqueConstraint("room_id", "hand_number"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    room_id: Mapped[UUID] = mapped_column(ForeignKey("club_card_rooms.id"), nullable=False)
+    game: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    hand_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    players: Mapped[list] = mapped_column(JSON, nullable=False)
+    outcomes: Mapped[dict] = mapped_column(JSON, nullable=False)
+    payouts: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
 
 
 class DoudizhuRoomRecord(Base):
@@ -4855,6 +4943,13 @@ class MistrealmRequestRecord(Base):
     digest: Mapped[str] = mapped_column(String(64), nullable=False)
     result: Mapped[dict] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+
+
+class MistrealmExpeditionRecord(Base):
+    __tablename__ = "mistrealm_expeditions"
+    player_id: Mapped[UUID] = mapped_column(ForeignKey("mistrealm_players.id"), primary_key=True)
+    state: Mapped[dict] = mapped_column(JSON, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
 
 
 class MistrealmStoryProgressRecord(Base):

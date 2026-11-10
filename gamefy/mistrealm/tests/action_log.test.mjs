@@ -6,10 +6,11 @@ const source=readFileSync(new URL('../publish/v3/game.js',import.meta.url),'utf8
 function fixture(){
  const nodes=Object.fromEntries(['action-reveal','action-reveal-content','modal'].map(id=>[id,{hidden:true,innerHTML:'',open:false,dataset:{}}]));
  const timers=new Map(),renders=[];let seq=0;
- const ctx=vm.createContext({$:id=>nodes[id],room:null,latestRoom:null,main:{inert:false},data:{cards:{c1:{name:'测试单位',art:'art.jpg',text:'部署效果'},l1:{name:'测试领袖',art:'leader.jpg',text:'领袖效果'}}},esc:s=>s,desc:c=>c.text,
-  gameSettings:{animations:true},gameAudio:{play(){}},effectFeedback:{clear(){},snapshot(){return new Map();},play(){return false;},active:false},
+ const ctx=vm.createContext({$:id=>nodes[id],room:null,latestRoom:null,main:{inert:false},data:{transforms:{},cards:{c1:{name:'测试单位',art:'art.jpg',text:'部署效果'},l1:{name:'测试领袖',art:'leader.jpg',text:'领袖效果'}}},esc:s=>s,desc:c=>c.text,
+  expedition:{catalogue:()=>({cards:{xb01:{name:'碎骨执旗兵',art:'bone.svg',text:'阵亡强化',power:3}}})},gameSettings:{animations:true},gameAudio:{play(){}},effectFeedback:{clear(){},snapshot(){return new Map();},play(){return false;},active:false},
   document:{querySelectorAll:()=>[],querySelector:()=>null},render:()=>renders.push(ctx.room.state.version),
   setTimeout:fn=>{timers.set(++seq,fn);return seq;},clearTimeout:id=>timers.delete(id)});
+ vm.runInContext(source.match(/^const cardData=.+/m)[0],ctx);
  vm.runInContext('let revealQueue=[],revealTimer=null,revealCurrent=null;'+source.slice(source.indexOf('function clearReveal()'),source.indexOf('function showMatchLog()')),ctx);
  function state(log,id='room'){
   const players=[{name:'我',hand:[]},{name:'对手'}];
@@ -80,4 +81,11 @@ test('disabling animations releases queued actions and applies pending choices i
  f.ctx.gameSettings.animations=false;c.state.pending={actor:0,options:[{token:'target'}]};
  f.sync(b,c);assert.equal(f.ctx.room,c);assert.equal(f.ctx.main.inert,false);
  assert.equal(f.timers.size,0);assert.equal(f.nodes['action-reveal'].hidden,true);
+});
+
+test('expedition cards use the same reveal sequence and upgraded inspection data',()=>{
+ const f=fixture(),a=f.state([]),b=f.state([{...entry(1),card:'xb01'}]);
+ f.sync(null,a);f.sync(a,b);assert.match(f.nodes['action-reveal-content'].innerHTML,/碎骨执旗兵/);
+ assert.equal(vm.runInContext("cardData({card:'xb01',expedition_upgrade:2}).power",f.ctx),5);
+ f.ctx.nextReveal();assert.equal(f.ctx.room,b);assert.equal(f.ctx.main.inert,false);
 });

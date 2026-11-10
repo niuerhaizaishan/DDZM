@@ -3,6 +3,7 @@
 The work queue is JSON data so a choice survives reconnects and server restarts.
 """
 from itertools import combinations
+from . import mistrealm_expedition_effects as expedition
 from .mistrealm_v3_feedback import board_snapshot, record_changes
 import random
 from .mistrealm_v3_cards import ROW_CAPACITY, SPELL_CAPACITY
@@ -118,6 +119,7 @@ def _menu(state,seat,source):
     others=[c for c in own if c['id']!=source['id']]
     here=location(state,source['id']);row=here[1] if here else -1
     def targets(cards,kind,n=0,**extra):return target_options(cards,kind,n,**extra)
+    if cid in expedition.CARDS:return expedition.menu(state,seat,source)
     if cid=='c004':return targets(others,'boost',3)
     if cid=='c005':return [option(label(g),[op('boost',targets=[c['id'] for c in g],amount=2)],g[0]) for g in groups(others)]
     if cid=='c007':return targets(enemy['rows'][1],'damage',3)
@@ -250,6 +252,7 @@ def settle(state):
     queued=[]
     for seat,_,old,is_sealed in sorted(deaths,key=lambda x:(x[0]!=state['actor'],x[1])):
         c=entity(state,old['id'])
+        queued.extend(expedition.on_death(state,seat,c,is_sealed))
         if old.get('sacrificed'):
             for spell in state['players'][seat]['spells']:
                 if spell['card']=='c074':
@@ -323,7 +326,8 @@ def remove_unit(state,uid,death=False):
 
 def execute(state,seat,item,rng=None):
     kind=item['kind'];p=state['players'][seat];targets=item.get('targets',[]);n=item.get('amount',0)
-    if kind=='draw':draw(p,n)
+    if kind.startswith('expedition_'):expedition.execute(state,seat,item)
+    elif kind=='draw':draw(p,n)
     elif kind=='cycle':
         if draw(p,item['draw']):state['work'].insert(0,op('discard_choice',seat=seat,count=item['drop']))
     elif kind=='discard_hand':
@@ -548,6 +552,7 @@ def drain(state,rng=None):
                         execute(state,seat,op('boost',targets=[min(candidates)[2]],amount=3))
                         spell['healed_round']=spell.get('healed_round',0)+1
         elif kind=='end_triggers':
+            state['work'].extend(expedition.end_play(state,seat))
             for side in (seat,1-seat):
                 for spell in list(state['players'][side]['spells']):
                     if spell['card']=='c114' and spell.get('ticks',0)<3 and not state['players'][1-side]['passed']:
@@ -620,7 +625,7 @@ def choose(state,seat,token,rng):
 
 def can_lead(state,seat):
     p=state['players'][seat]
-    return not p['leader_used'] and bool(menu(state,seat,dict(card=p['leader'],id='leader')))
+    return bool(p['leader']) and not p['leader_used'] and bool(menu(state,seat,dict(card=p['leader'],id='leader')))
 
 
 def leader(state,seat,rng):

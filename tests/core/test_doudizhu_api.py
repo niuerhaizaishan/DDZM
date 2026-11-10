@@ -88,9 +88,10 @@ def test_sse_keeps_guest_identity_and_stops_when_disconnected(ddz):
             return self.disconnected
     async def check():
         request = Request()
-        stream = room_events(repo, UUID(room['id']), 'viewer', lambda: NOW, request)
+        times = iter((NOW, NOW + timedelta(seconds=1)))
+        stream = room_events(repo, UUID(room['id']), 'viewer', lambda: next(times), request)
         assert 'event: snapshot' in await anext(stream)
-        assert 'event: snapshot' in await anext(stream)
+        assert await anext(stream) == ': heartbeat\n\n'
         request.disconnected = True
         stream = room_events(repo, UUID(room['id']), 'host', lambda: NOW, request)
         with pytest.raises(StopAsyncIteration):

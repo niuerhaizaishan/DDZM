@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN" data-club-native-tools="true">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
+  <meta name="theme-color" content="#07352d">
+  <title>Club 牌桌</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <main id="app" class="card-app">
+    <header class="game-bar">
+      <button id="back" class="icon" type="button" aria-label="返回">←</button>
+      <div><span id="game-kicker">MOYU CLUB</span><h1 id="game-title">牌桌</h1></div>
+      <div class="bar-actions"><button id="public-channel" class="text-button" type="button">公屏</button><button id="refresh" class="icon" type="button" aria-label="刷新">↻</button></div>
+    </header>
+    <p id="feedback" class="feedback" role="status" aria-live="polite"></p>
+
+    <section id="lobby" class="lobby">
+      <article class="game-intro"><span id="game-mark">牌</span><div><b id="game-subtitle">经典牌局</b><p id="game-description"></p></div></article>
+      <div class="lobby-head"><div><span>TABLES</span><h2>选择牌桌</h2></div><button id="create" class="primary" type="button">开一桌</button></div>
+      <div id="rooms" class="room-list"></div>
+    </section>
+
+    <section id="room" class="room" hidden>
+      <div class="room-hud"><div><span id="hand-label">候场</span><h2 id="room-title">玩家的牌桌</h2></div><div><button id="room-public-channel" class="hud-button" type="button">公频聊天</button><button id="share" class="hud-button" type="button">分享公屏</button><button id="chat-toggle" class="hud-button" type="button">房间频道</button></div></div>
+      <div id="table" class="table">
+        <div id="dealer" class="dealer-area"></div>
+        <div id="board" class="board"></div>
+        <div id="pot" class="pot"></div>
+        <div id="seats" class="seats"></div>
+        <div id="my-cards" class="my-cards"></div>
+        <div id="actions" class="actions"></div>
+      </div>
+      <div id="waiting" class="waiting" hidden>
+        <div id="waiting-seats" class="waiting-seats"></div>
+        <p id="waiting-note"></p>
+        <div id="waiting-actions" class="waiting-actions"></div>
+      </div>
+      <section id="result" class="result" hidden></section>
+      <aside id="chat" class="chat" hidden><header><div><span>ROOM CHAT</span><b>房间频道</b></div><button id="chat-close" class="icon" type="button">×</button></header><div id="messages" class="messages"></div><div class="compose"><input id="chat-input" maxlength="300" placeholder="和牌桌上的玩家聊聊…"><button id="chat-send" class="primary" type="button">发送</button></div></aside>
+    </section>
+  </main>
+
+  <dialog id="create-dialog"><form method="dialog" class="dialog-card"><header><span>CREATE TABLE</span><h2 id="create-title">新建牌桌</h2><p>连续牌桌，一手结束后可以继续，也可以在牌局间离桌。</p></header><fieldset><legend>房间类型</legend><div class="segmented"><label><input name="room-type" value="casual" type="radio"><span>休闲场</span></label><label><input name="room-type" value="coin" type="radio" checked><span>摸鱼币场</span></label></div></fieldset><fieldset id="stake-field"><legend>每手带入</legend><div class="segmented stakes"><label><input name="stake" value="5" type="radio"><span>5 币</span></label><label><input name="stake" value="10" type="radio" checked><span>10 币</span></label><label><input name="stake" value="20" type="radio"><span>20 币</span></label></div></fieldset><p class="economy-note">虚拟摸鱼币仅用于游戏，不涉及兑换或现金交易。</p><footer><button id="cancel-create" class="secondary" type="button">取消</button><button id="confirm-create" class="primary" type="button">创建牌桌</button></footer></form></dialog>
+  <script src="../runtime-bootstrap.js"></script>
+  <script type="module" src="./game.js"></script>
+</body>
+</html>

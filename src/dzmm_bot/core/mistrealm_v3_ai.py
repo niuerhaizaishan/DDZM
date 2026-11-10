@@ -2,7 +2,7 @@
 from copy import deepcopy
 from random import Random
 from . import mistrealm_v3_state as game
-from .mistrealm_v3_cards import CARDS
+from .mistrealm_v3_scoring import definition
 
 
 def visible_simulation(state,seat):
@@ -22,7 +22,7 @@ def visible_simulation(state,seat):
 
 
 def hand_value(player):
-    return sum(3+min(10,CARDS[c['card']]['power'])*.25+('spy' in CARDS[c['card']]['abilities'])*2 for c in player['hand'])
+    return sum(3+min(10,definition(c)['power'])*.25+('spy' in definition(c)['abilities'])*2 for c in player['hand'])
 
 
 def evaluate(s,seat):
@@ -71,7 +71,7 @@ def pick_move(state,seat=1):
 def mulligan(state,seat=1,limit=2):
     hand=state['players'][seat]['hand'];seen=set();ranked=[]
     for c in hand:
-        d=CARDS[c['card']];priority=0
+        d=definition(c);priority=0
         if 'muster' in d['abilities'] and c['card'] in seen:priority+=10
         if d['type']=='special' and d['persistent']:priority+=2
         if d['hero']:priority-=3

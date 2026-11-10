@@ -1,0 +1,24 @@
+{
+  "production_revision": "20261021_129",
+  "source": "Read-only production snapshot before expedition deployment",
+  "preserved_files": {
+    "src/dzmm_bot/browser/aikda_socket.py": "3218903464a96667ee3dccfa929588240c81ec6233ae8020055fa893ecca75d6",
+    "src/dzmm_bot/browser/core_client.py": "2208e4b39e1e026a09612028f2944b4d35a049e1ba4aa2bb7fa4dbcf8c19af9e",
+    "src/dzmm_bot/browser/worker.py": "f62058e1fa599544cfb26abf079c74d8f078490d3b18c7ecc535a18dd4817fe7",
+    "src/dzmm_bot/core/app.py": "1c64d4e21f8f60c95f6a80ba2764cde371040c975dcde90f5b47538f071163be",
+    "src/dzmm_bot/core/chess_api.py": "8fa7a5e1ff2c212f96d226a5f1081a6e464c18d78112179035e07e84c93ff01c",
+    "src/dzmm_bot/core/chess_repository.py": "dd4c797f07341c5c4fecc79d6781a8b366b30c786160dea31c5c6d6a1e725e91",
+    "src/dzmm_bot/core/club_api.py": "9feef06d546ad4d5102b7fe20af87d1bf91b50ce9a26938e0623a6843b2684a3",
+    "src/dzmm_bot/core/club_card_games.py": "a079c275b814f7331825abc574325381a68d4065db45382cdd39286c96da788b",
+    "src/dzmm_bot/core/club_card_repository.py": "f9e490c2ef94fa4789d6c34bccb4e13527e7ab92390ec5c79e53d6f96e6ed0d0",
+    "src/dzmm_bot/core/club_repository.py": "94a13f847c6166e729c8022cf7b71b3e8a00d132a6f227266deba26158a57ce8",
+    "src/dzmm_bot/core/doudizhu_api.py": "651782bf5d1adc0aa73bc1e7fa89ae6beaa334b925621844a33c148f56342f2d",
+    "src/dzmm_bot/core/doudizhu_repository.py": "effb34e12082a4c58f9ab9bff0b1e50ffe5063f70aa0dcbba0a8828f25d2c993",
+    "src/dzmm_bot/core/drawguess_repository.py": "d7a91c05a81f857836c508f2862aa7758a969da6bb28897e99e787b569836c0f",
+    "src/dzmm_bot/core/mahjong_repository.py": "0b0924ec6468232a16e749023883d1359b860947a44b679da25bcc2a242b222c",
+    "src/dzmm_bot/core/repository.py": "d34e671fd81f458da681bffac03c89b72434e375d3497513394564e3f3a9090c",
+    "migrations/versions/20261021_127_club_daily_tasks.py": "52c0986dd61920c492d42edd0b98b387aa0fbce2abee4c9cc152be3b7a4847b4",
+    "migrations/versions/20261021_128_club_presence.py": "d915f6941b295a37f759dfcd4363cdc61a4d76046fbec1347c268fc66a442ee7",
+    "migrations/versions/20261021_129_club_card_tables.py": "168b86ce7c7b49775cea8bab9907f3d478b0820eabb08bea41d8bc6f982527de"
+  }
+}

@@ -10,6 +10,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from dzmm_bot.core.app import create_app
+from dzmm_bot.core.bot_accounts import BOT_PLATFORM_IDS
 from dzmm_bot.core.commands import GroupCommandHandler
 from dzmm_bot.core.honors import HonorConflict, HonorGrantInput, midnight, week_of
 from dzmm_bot.core.repository import CoreRepository
@@ -177,6 +178,26 @@ def test_chop_honor_metric_is_shared_across_groups(context):
     report = repository.preview_honors(WEEK, SETTLED)
     user_id = repository.find_user("male-1").id
     assert candidate_score(report, "charm_m", user_id) == 2
+
+
+def test_bot_account_is_not_an_honor_candidate(context):
+    repository, factory = context
+    configure(repository)
+    platform_id = next(iter(BOT_PLATFORM_IDS))
+    bot, _ = repository.create_user(
+        platform_id, "统计机器人", INITIAL - timedelta(days=90), 100
+    )
+    with factory.begin() as session:
+        session.get(UserRecord, bot.id).gender = "male"
+    chop(repository, factory, platform_id, count=20)
+
+    report = repository.preview_honors(WEEK, SETTLED)
+
+    assert all(
+        candidate["user_id"] != str(bot.id)
+        for honor in report["entries"]
+        for candidate in honor["candidates"]
+    )
 
 
 @pytest.mark.parametrize("revealed", [False, True])

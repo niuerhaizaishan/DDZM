@@ -4188,13 +4188,14 @@ def create_app(
     ) -> AcceptedResponse:
         repository.run_daily_jobs(request.now)
         repository.advance_chess_deadlines(request.now)
-        if doudizhu_game_id:
+        if doudizhu_game_id or club_game_id:
             repository.advance_doudizhu_deadlines(request.now)
-        if drawguess_game_id:
+        if drawguess_game_id or club_game_id:
             repository.advance_drawguess_deadlines(request.now)
         if mistrealm_enabled:
             repository.advance_mistrealm_deadlines(request.now)
         if club_game_id:
+            repository.advance_club_card_deadlines(request.now)
             repository.advance_mahjong_deadlines(request.now)
         return AcceptedResponse(accepted=True)
 

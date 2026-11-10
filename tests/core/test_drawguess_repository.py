@@ -100,15 +100,17 @@ def test_claim_ready_start_host_transfer_and_rematch(game):
         row.state = {**row.state, "phase": "finished", "ranking": []}
         row.phase = "finished"
         row.deadline = None
+    assert all(
+        item["room_id"] != room["room_id"]
+        for item in repo.list_drawguess_rooms("viewer", NOW)
+    )
     room = repo.drawguess_view(UUID(room["room_id"]), "p1", NOW)
-    room = action(repo, room, "p1", "rematch")
-    assert room["state"]["phase"] == "waiting"
-    assert [message["text"] for message in room["messages"]] == ["跨局保留"]
     assert all(not player["ready"] for player in room["state"]["players"])
-    assert room["code"] and room["code"].isdigit()
+    assert [message["text"] for message in room["messages"]] == ["跨局保留"]
     for uid in ("p1", "p2", "p3", "p4", "p5", "p6", "p7"):
         room = action(repo, room, uid, "ready")
     room = action(repo, room, "p1", "start")
+    assert room["state"]["phase"] == "selecting"
     assert room["canvas"] == []
 
 

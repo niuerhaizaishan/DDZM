@@ -35,6 +35,7 @@ class OutboundClaim:
     recall_after_seconds: int | None = None
     is_dark_market_list: bool = False
     dark_market_list_query_sender_name: str | None = None
+    attempt_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -565,6 +566,7 @@ class CoreClient:
             dark_market_list_query_sender_name=data.get(
                 "dark_market_list_query_sender_name"
             ),
+            attempt_count=data.get("attempt_count", 0),
         )
 
     def confirm_sent(

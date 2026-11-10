@@ -83,6 +83,7 @@ def chess_router(repository: CoreRepository, game_id: str, clock: Callable[[], d
             data.pop(f"{key}_platform_id", None)
         return jsonable_encoder({
             "game": data, "role": role, "offer_mine": game.offer_platform_id == platform_id,
+            "is_host": game.creator_platform_id == platform_id,
             "messages": repository.chess_messages(room_id),
             "moves": repository.chess_moves(room_id), "server_time": clock(),
         })
@@ -161,6 +162,10 @@ def chess_router(repository: CoreRepository, game_id: str, clock: Callable[[], d
                 await asyncio.sleep(1)
                 current = snapshot(room_id, pid)
 
-        return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-store"})
+        return StreamingResponse(
+            stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
 
     return router

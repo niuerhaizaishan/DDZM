@@ -66,6 +66,7 @@ class DoudizhuRepositoryMixin:
                     raise ValueError('群聊或入站消息不可用')
             room = session.scalar(select(Room).where(Room.inbound_id == inbound_id)) if inbound_id else None
             if room is None:
+                self._ensure_club_player_available(session, user.id, now)
                 account = None
                 if room_type == 'coin':
                     account = self._ddz_account(session, user, lock=True)
@@ -102,17 +103,19 @@ class DoudizhuRepositoryMixin:
                 'trustee': state['trustees'][i] if state else False,
                 'online': bool(room.presence.get(str(i))) and (now - datetime.fromisoformat(room.presence[str(i)])).total_seconds() < 30} if uid else None)
         messages = session.execute(select(Message, ClubPlayerRecord.display_name).join(ClubPlayerRecord, ClubPlayerRecord.id == Message.user_id)
-            .where(Message.room_id == room.id, Message.round_id == room.round_id)
+            .where(Message.room_id == room.id)
             .order_by(Message.created_at.desc(), Message.id.desc()).limit(100)).all()
         creator = session.get(ClubPlayerRecord, room.creator_id)
         return {'id': str(room.id), 'short_id': room.short_id,
             'creator_name': creator.display_name if creator else '玩家',
             'round_id': str(room.round_id) if room.round_id else None,
             'version': room.version, 'phase': room.phase, 'seat': seat, 'players': players,
+            'is_host': user.id == room.creator_id,
             'room_type': room.room_type, 'stake': room.stake, 'settlement': room.settlement,
             'rematch_waiting': room.phase == 'waiting' and room.round_number > 0,
             'deadline': room.deadline.isoformat() if room.deadline else None, 'server_time': now.isoformat(),
             'hand': list(state['hands'][seat]) if state and seat is not None else [],
+            'final_hands': [list(hand) for hand in state['hands']] if state and state['phase'] == 'finished' else [],
             'bottom': list(state['bottom']) if state and state['landlord'] is not None else [],
             'turn': state['turn'] if state else None, 'landlord': state['landlord'] if state else None,
             'bid': state['bid'] if state else 0, 'multiplier': state['multiplier'] if state else 1,
@@ -160,6 +163,7 @@ class DoudizhuRepositoryMixin:
 
     def _ddz_sync(self, session, room, row, now):
         state = row.state
+        previous_phase = room.phase
         if state['phase'] == 'redeal':
             room.redeals += 1
             if room.redeals < 3:
@@ -185,6 +189,8 @@ class DoudizhuRepositoryMixin:
             self._ddz_notice(session, room, '\n'.join(lines))
             row.notice_sent = True
         if room.phase == 'finished':
+            if previous_phase != 'finished':
+                room.ready = [False] * 3
             self._settle_doudizhu_room(session, room, state, now)
 
     def _refund_doudizhu_room(self, session, room, now, reason):
@@ -250,6 +256,9 @@ class DoudizhuRepositoryMixin:
                         raise ValueError('群消息尚未送达')
                     if seat is not None or None not in seats:
                         raise ValueError('已入座或房间已满')
+                    self._ensure_club_player_available(
+                        session, user.id, now, exclude=('doudizhu', room.id),
+                    )
                     if room.inbound_id is not None and payload.get('code') != room.code:
                         raise ValueError('入座码错误')
                     next_seat = seats.index(None)
@@ -293,7 +302,17 @@ class DoudizhuRepositoryMixin:
                 if seat is None or room.phase == 'cancelled':
                     raise ValueError('当前不能进行该操作')
                 row = session.get(Round, room.round_id)
-                if action == 'rematch' and row.state['phase'] == 'finished':
+                if row.state['phase'] == 'finished' and room.phase != 'finished':
+                    self._ddz_sync(session, room, row, now)
+                if row.state['phase'] == 'finished' and action in ('ready', 'unready'):
+                    ready = list(room.ready)
+                    ready[seat] = action == 'ready'
+                    room.ready = ready
+                elif row.state['phase'] == 'finished' and action in ('start', 'rematch'):
+                    if user.id != room.creator_id:
+                        raise ValueError('只有房主可以开始下一局')
+                    if not all(room.ready):
+                        raise ValueError('请等待所有玩家准备')
                     if room.room_type == 'coin':
                         accounts = []
                         for raw_player_id in room.seats:
@@ -307,12 +326,12 @@ class DoudizhuRepositoryMixin:
                                 account, -room.stake, 'doudizhu_buy_in', now,
                                 memo=f'斗地主房间 {room.short_id} 续局托管',
                             )
-                    room.round_id, room.phase, room.ready = None, 'waiting', [False] * 3
+                    room.ready = [False] * 3
                     room.settled, room.settlement = False, None
                     room.escrowed = [room.room_type == 'coin'] * 3
                     room.redeals = 0
                     room.code = ''
-                    room.deadline = now + timedelta(minutes=10)
+                    self._ddz_deal(session, room, now)
                 else:
                     row.state = apply_action(row.state, seat, 'takeover' if action == 'leave' else action, payload, now)
                     self._ddz_sync(session, room, row, now)
@@ -350,7 +369,7 @@ class DoudizhuRepositoryMixin:
                 if old.content != content or old.round_id != round_id:
                     raise ValueError('重复请求内容不同')
                 return {'id': str(old.id), 'name': user.display_name, 'text': old.content}
-            if room.round_id != round_id or room.phase not in ('waiting', 'bidding', 'playing'):
+            if room.round_id != round_id or room.phase not in ('waiting', 'bidding', 'playing', 'finished'):
                 raise ValueError('本局当前不能发言')
             previous = session.scalar(select(Message.created_at).where(Message.room_id == room_id, Message.user_id == user.id)
                 .order_by(Message.created_at.desc()).limit(1))

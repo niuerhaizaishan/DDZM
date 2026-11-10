@@ -701,6 +701,7 @@ canvas {
   border-radius: 14px;
   background: #f8f8fa;
 }
+.settlement-ready{display:flex;margin-top:14px;gap:7px;flex-wrap:wrap}.settlement-ready span{padding:6px 9px;border-radius:999px;color:var(--muted);background:rgb(0 0 0 / 7%);font-size:11px}.settlement-ready span.ready{color:#fff;background:#18705e}
 
 .rank-number {
   color: var(--primary-dark);
@@ -1415,3 +1416,37 @@ body.room-open {
 }
 /* Club-integrated lobby controls. */
 .club-link{margin-left:auto;padding:9px 13px;border:1px solid rgba(220,99,91,.22);border-radius:12px;color:#ce514b;background:#fff7f1;font-size:11px;font-weight:800;text-decoration:none}.create-strip{display:flex;flex-wrap:wrap;gap:7px;margin-top:18px}.create-strip button{min-height:38px;padding:0 13px;border:1px solid rgba(255,255,255,.38);border-radius:12px;color:#fff;background:rgba(153,60,54,.42);font-weight:800}.create-strip button:first-child{color:#9c342f;background:#fff3e9}
+
+/* v4: compact studio lobby and game-first mobile room. */
+.chat-toggle,#draw-chat-close{min-height:36px;padding:0 12px;border:1px solid #f0d7cd;border-radius:12px;color:#a54243;background:#fff7f2;font-weight:750;cursor:pointer}.chat-toggle,#draw-chat-close{display:none}.chat-heading-actions{display:flex;align-items:center;gap:8px}
+.content-scroll{display:flex;min-height:0;flex-direction:column;overflow:hidden}.content-scroll>.feedback{flex:none}.lobby{height:100%;min-height:0}.room-view{flex:1}
+@media (max-width:760px), (max-height:560px) and (orientation:landscape){
+  .app-shell{width:100%;padding:max(8px,env(safe-area-inset-top)) 8px max(8px,env(safe-area-inset-bottom))}
+  .brand-bar{min-height:58px;padding:0 3px 7px;grid-template-columns:auto minmax(0,1fr) auto auto;gap:8px;border-bottom:1px solid rgb(225 194 179 / 55%)}.brand-mark{width:39px;height:39px;border-radius:12px;font-size:21px}.brand-bar h1{font-size:17px}.brand-bar p{font-size:10px}.club-link{margin:0;padding:8px 10px}.brand-bar .icon-button{width:36px;height:36px;border-radius:11px}
+  .feedback{margin:4px 2px;padding:7px 10px;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .lobby{display:grid;height:100%;padding:8px 0 0;grid-template-columns:1fr;grid-template-rows:minmax(150px,.72fr) minmax(0,1.28fr);gap:8px;overflow:hidden}
+  .lobby-hero{min-height:0;padding:16px 18px;justify-content:center;border-radius:18px;background:linear-gradient(90deg,rgb(255 247 239 / 96%),rgb(255 226 209 / 72%)),url('./assets/art-studio-v1.webp') center/cover}.lobby-hero::before{top:14px;right:16px;left:auto;width:38px;height:38px;border-radius:12px;font-size:19px}.lobby-hero h2{max-width:none;margin:3px 0 6px;font-size:29px;line-height:1.02}.lobby-hero>p{display:block;overflow:hidden;margin:0;font-size:11px;line-height:1.5;text-overflow:ellipsis;white-space:nowrap}.hero-tags{margin-top:8px;gap:5px}.hero-tags span{padding:4px 7px;font-size:9px}.create-strip{display:grid;margin-top:9px;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px}.create-strip button{min-height:33px;padding:0 4px;border-radius:9px;font-size:10px}
+  .lobby-panel{min-height:0;padding:13px 14px;border-radius:18px}.section-heading h2{font-size:19px}.lobby-panel>.muted{margin:8px 0 0;overflow:hidden;font-size:10px;line-height:1.4;text-overflow:ellipsis;white-space:nowrap}.lobby-panel .room-list{min-height:0;margin-top:10px}.room-button{min-height:62px;padding:11px 12px 11px 55px;border-radius:14px}.room-button::before{left:12px;width:32px;height:32px;border-radius:10px}.empty{padding:26px 14px}
+  body.room-open .app-shell{padding-top:max(5px,env(safe-area-inset-top))}.room-view{position:relative;height:100%;padding:0;gap:6px}.room-toolbar{min-height:50px;padding:5px 6px;gap:7px;border-radius:15px}.room-toolbar>.icon-button{width:36px;height:36px;border-radius:11px}.room-toolbar .eyebrow{display:none}.room-title-row{gap:5px}.room-title-row h2{font-size:16px}.room-code{max-width:112px;min-height:24px;padding:0 7px;overflow:hidden;font-size:10px;text-overflow:ellipsis}.room-toolbar-actions{gap:5px}.timer{min-width:44px;min-height:28px;padding:0 8px;font-size:11px}.chat-toggle,#draw-chat-close{display:block;min-height:34px;padding:0 10px;font-size:11px}
+  .room-layout{position:relative;display:block;height:auto;overflow:hidden}.game-column{height:100%;grid-template-rows:32px auto minmax(0,1fr);gap:5px}.round-strip{min-height:32px}.seats-panel{padding:5px 7px;border-radius:14px}.seats-heading{margin-bottom:3px}.players{gap:3px}.avatar{width:29px}.seat-name{font-size:9px}.seat-meta{font-size:8px}.stage-workspace{border-radius:16px}.stage-card{padding:12px}.word-card{min-height:48px}.drawing-tools{padding:5px 7px}.color{width:23px;height:23px}.tool{min-height:31px;padding:0 8px;font-size:10px}
+  .chat-column{position:absolute;z-index:18;right:0;bottom:0;left:0;height:min(62%,470px);min-height:0;border-radius:22px 22px 0 0;background:rgb(255 255 255 / 98%);box-shadow:0 -18px 52px rgb(94 52 35 / 24%);transform:translateY(calc(100% + 12px));transition:transform .22s ease;pointer-events:none}.chat-column.open{transform:translateY(0);pointer-events:auto}.chat-heading{min-height:50px;padding:8px 12px}.chat-heading h3{font-size:14px}.messages{padding:9px 12px}.composer{padding:8px 10px max(8px,env(safe-area-inset-bottom))}.composer input{height:40px}
+}
+@media (max-width:400px){.lobby-hero>p{display:none}.hero-tags{display:none}.lobby-hero{padding-top:14px}.create-strip{margin-top:7px}.room-code{display:none}.room-toolbar{grid-template-columns:auto minmax(0,1fr) auto}.word-hint{display:none}}
+@media (max-height:560px) and (orientation:landscape){.app-shell{padding:6px 8px}.brand-bar{min-height:46px}.brand-bar p{display:none}.lobby{grid-template-columns:minmax(240px,.78fr) minmax(340px,1.22fr);grid-template-rows:minmax(0,1fr)}.lobby-hero{min-height:0}.lobby-hero h2{font-size:27px}.room-layout{display:block}.game-column{height:100%}.seats-panel{position:absolute;z-index:5;top:38px;right:6px;left:6px;background:rgb(255 255 255 / 89%)}.stage-workspace{padding-top:74px}.chat-column{right:0;left:auto;width:min(390px,48vw);height:100%;border-radius:20px 0 0 20px}}
+
+/* Club embed: collapse duplicate branding and let the canvas dominate play. */
+.club-embedded .app-shell{padding-top:8px}
+.club-embedded .brand-bar{height:40px;min-height:40px;padding:0 2px;grid-template-columns:auto auto;justify-content:end;border-bottom:1px solid rgb(225 194 179 / 55%)}
+.club-embedded .brand-bar>.brand-mark,
+.club-embedded .brand-bar>.brand-mark+div{display:none}
+.club-embedded .club-link{display:flex;height:34px;margin-right:auto;padding:0 10px;align-items:center}
+.club-embedded .brand-bar .icon-button{width:34px;height:34px;min-height:34px}
+.club-embedded body.room-open .stage-workspace{background:linear-gradient(145deg,rgb(255 253 250 / 97%),rgb(255 245 238 / 94%))}
+.club-embedded body.room-open .canvas-frame{border-width:4px;box-shadow:0 0 0 1px rgb(224 198 182 / 62%),0 14px 36px rgb(141 83 53 / 12%)}
+.club-embedded body.room-open .drawing-tools{border-top:1px solid rgb(224 198 182 / 52%);background:rgb(255 251 248 / 96%)}
+@media (max-width:760px),(max-height:560px) and (orientation:landscape){
+  .club-embedded .brand-bar{height:40px;min-height:40px;display:grid;padding:0 2px}
+  .club-embedded body.room-open .app-shell{padding:5px 7px 7px}
+  .club-embedded body.room-open .seats-panel{max-height:84px;overflow:hidden}
+  .club-embedded body.room-open .stage-workspace{min-height:0}
+}

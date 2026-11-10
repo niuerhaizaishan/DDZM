@@ -67,8 +67,8 @@ def test_group_to_complete_game_and_rematch_without_currency(ddz):
         assert notices == []
         assert [(u.id, u.balance) for u in s.scalars(select(UserRecord)).all()] == balances
         assert list(s.scalars(select(BalanceTransactionRecord.id))) == ledger_ids
-    action('host', 'rematch')
     for uid in users:
         state = action(uid, 'ready')
+    state = action('host', 'start')
     assert state['phase'] == 'bidding' and state['round_id'] != first_round
     assert view('viewer')['hand'] == []

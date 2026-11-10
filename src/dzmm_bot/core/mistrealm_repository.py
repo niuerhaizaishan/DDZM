@@ -50,9 +50,10 @@ def _engine(state):
 from .mistrealm_profile import MistrealmProfileMixin, settings
 from .mistrealm_social import MistrealmSocialMixin
 from .mistrealm_ranked import MistrealmRankedMixin, search_radius
+from .mistrealm_expedition_repository import MistrealmExpeditionMixin
 
 
-class MistrealmRepositoryMixin(MistrealmSocialMixin, MistrealmRankedMixin, MistrealmProfileMixin):
+class MistrealmRepositoryMixin(MistrealmSocialMixin, MistrealmRankedMixin, MistrealmProfileMixin, MistrealmExpeditionMixin):
     @staticmethod
     def _mr_player(session, uid):
         p = session.scalar(select(Player).where(Player.platform_uid == uid).with_for_update())

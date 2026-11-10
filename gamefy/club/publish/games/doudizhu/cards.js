@@ -1,7 +1,6 @@
 const ranks=['3','4','5','6','7','8','9','10','J','Q','K','A','2'];
 export function cardLabel(id){return id>=52 ? (id===52?'小王':'大王') : '♠♥♣♦'[id%4]+ranks[Math.floor(id/4)];}
 export function toggleSelection(selected,id){const next=new Set(selected);if(next.has(id))next.delete(id);else next.add(id);return next;}
-export function selectGesture(selected,id,visited){if(visited.has(id))return selected;visited.add(id);return toggleSelection(selected,id);}
 export function cardElement(id,small=false){
   const el=document.createElement(small?'span':'button');
   el.className=`card${small?' small':''}${id===53||id<52&&id%2===1?' red':''}`;

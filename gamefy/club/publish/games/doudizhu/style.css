@@ -28,6 +28,7 @@ h2, p { margin-top: 0; }
 .section-title > span, footer { color: var(--muted); font-size: 11px; }
 .muted { color: var(--muted); font-size: 12px; line-height: 1.7; }
 #rooms { display: grid; align-content: start; gap: 10px; overflow-y: auto; overscroll-behavior: contain; }
+#rooms:not(:has(.room-card)){place-items:center;align-content:center;border:1px dashed rgb(233 195 110 / 20%);border-radius:16px;color:#a9c0b7;background:radial-gradient(circle at 50% 38%,rgb(46 132 96 / 13%),transparent 42%);text-align:center}
 .room-card { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; padding: 15px 16px; color: var(--cream); text-align: left; border-color: var(--line); background: rgb(255 255 255 / 7%); box-shadow: none; }
 .room-card span { display: grid; gap: 5px; min-width: 0; }
 .room-card small { color: var(--muted); }
@@ -49,6 +50,9 @@ h2, p { margin-top: 0; }
 #plays { display: flex; min-height: 54px; margin-top: 8px; justify-content: space-around; gap: 10px; }
 .play { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
 .play small { display: block; margin-bottom: 4px; color: #c0d4cc; }
+.played-cards { display: grid; width: min(100%, calc(var(--played-count) * 22px + 10px)); margin: 0 auto; padding-right: 10px; grid-template-columns: repeat(var(--played-count), minmax(0, 1fr)); }
+.played-cards .card.small { width: calc(100% + 10px); min-width: 18px; }
+.play-pass { display: inline-block; padding: 5px 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: rgb(2 24 18 / 62%); }
 .watermark { position: absolute; right: 0; bottom: 10px; left: 0; color: rgb(255 255 255 / 12%); font-size: 11px; font-weight: 800; letter-spacing: .5em; pointer-events: none; }
 #self { display: flex; justify-content: center; min-height: 43px; }
 #self .player { min-width: 210px; max-width: 90%; align-self: center; text-align: center; background: rgb(2 25 19 / 78%); }
@@ -59,14 +63,16 @@ h2, p { margin-top: 0; }
 #hand .card { width: calc(100% + 20px); z-index: 1; }
 #hand .card:last-child { width: 100%; }
 #hand .card.selected { z-index: 2; transform: translateY(-14px); border-color: #e3b34b; box-shadow: 0 0 0 2px #e3b34b, 0 8px 18px rgb(0 0 0 / 28%); }
-.card { position: relative; display: flex; height: 100px; min-height: 78px; padding: 6px 5px; flex-direction: column; justify-content: space-between; color: #202931; text-align: left; border: 1px solid #bcc5bb; border-radius: 8px; background: linear-gradient(145deg, #fffef6, #e8e5d8); box-shadow: 0 4px 8px rgb(0 0 0 / 28%); user-select: none; touch-action: none; }
+.card { position: relative; display: flex; height: 100px; min-height: 78px; padding: 6px 5px; flex-direction: column; justify-content: space-between; color: #202931; text-align: left; border: 1px solid #bcc5bb; border-radius: 8px; background: linear-gradient(145deg, #fffef6, #e8e5d8); box-shadow: 0 4px 8px rgb(0 0 0 / 28%); user-select: none; touch-action: manipulation; }
 .card.red { color: #b53538; }
+.card.back{border:0;color:transparent;background:transparent url('./card-back-v1.webp') center / contain no-repeat;box-shadow:0 5px 10px rgb(0 0 0 / 30%)}
 .pip { font-size: 19px; font-weight: 850; line-height: 1; }
 .suit { font-size: 25px; line-height: 1; }
 .card.small { display: inline-flex; width: 32px; height: 46px; min-height: 46px; padding: 4px; }
 .small .pip { font-size: 12px; } .small .suit { font-size: 15px; }
 #result { padding: 12px; border: 1px solid var(--gold); border-radius: 14px; background: rgb(3 31 23 / 94%); line-height: 1.7; animation: arrive .3s; }
 #result h2 { margin-bottom: 4px; color: var(--gold); }
+.settle-summary{margin:0 0 8px;color:var(--muted);font-size:11px}.settle-rows{display:grid;gap:6px}.settle-rows article{display:grid;padding:7px;grid-template-columns:minmax(86px,auto) 1fr;gap:8px;align-items:center;border:1px solid rgb(255 255 255 / 9%);border-radius:10px;background:rgb(255 255 255 / 5%)}.settle-rows article.winner{border-color:rgb(224 183 81 / 60%);background:rgb(224 183 81 / 10%)}.settle-rows strong,.settle-rows small{display:block}.settle-rows small{color:var(--muted);font-size:9px}.settle-cards{display:flex;min-width:0}.settle-cards .card{width:30px;height:43px;min-height:43px;margin-left:-13px;padding:3px}.settle-cards .card:first-child{margin-left:0}.settle-cards .pip{font-size:10px}.settle-cards .suit{font-size:12px}.settle-ready{margin:8px 0 0;color:#d9c47e;font-size:9px}
 .chat-panel { display: grid; min-height: 0; padding: 16px; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; border: 1px solid var(--line); border-radius: 24px; background: rgb(2 25 19 / 88%); box-shadow: 0 24px 58px rgb(0 0 0 / 32%); backdrop-filter: blur(12px); }
 .chat-panel:not([open]) { display: block; min-height: 54px; align-self: end; }
 summary { cursor: pointer; font-weight: 750; }
@@ -119,3 +125,68 @@ footer { padding-top: 8px; text-align: center; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
 /* Club-integrated lobby controls. */
 .club-link{margin-left:auto;padding:9px 13px;border:1px solid rgba(235,205,139,.3);border-radius:12px;color:#f2d27a;background:rgba(7,32,27,.74);font-size:11px;font-weight:800;text-decoration:none}.create-strip{display:flex;flex-wrap:wrap;gap:7px;margin-top:18px}.create-strip button{min-height:38px;padding:0 13px;border:1px solid rgba(235,205,139,.32);border-radius:12px;color:#fff7df;background:rgba(8,38,31,.8);font-weight:800}.create-strip button:first-child{color:#39290a;background:linear-gradient(145deg,#efcf78,#c6963e)}
+
+/* v4: one-screen lobby and an unobstructed card table on small screens. */
+@media (max-width:760px), (max-height:560px) and (orientation:landscape){
+  .app-shell{width:100%;padding:max(8px,env(safe-area-inset-top)) 8px max(8px,env(safe-area-inset-bottom));grid-template-rows:auto auto minmax(0,1fr)}
+  .game-header{display:grid;min-height:58px;padding:0 3px 7px;grid-template-columns:minmax(0,1fr) auto auto;gap:7px;border-bottom:1px solid var(--line)}.brand{gap:8px}.brand-mark{width:38px;height:38px;border-radius:12px;font-size:21px}.club-link{margin:0;padding:8px 10px}#refresh{min-height:34px;padding:6px 10px}h1{font-size:17px}
+  #feedback{min-height:22px;margin:4px 3px;padding-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .lobby{height:100%;padding:8px;grid-template-columns:1fr;grid-template-rows:minmax(136px,.68fr) minmax(0,1.32fr);gap:8px;overflow:hidden;border-radius:20px}
+  .lobby-hero{min-height:0;padding:15px 16px;justify-content:center;border-radius:15px;background:linear-gradient(90deg,rgb(2 24 18 / 95%),rgb(16 79 56 / 54%))}.lobby-hero h2{max-width:none;margin:4px 0 6px;font-size:28px}.lobby-hero p{overflow:hidden;margin:0;font-size:11px;line-height:1.5;text-overflow:ellipsis;white-space:nowrap}.create-strip{display:grid;margin-top:10px;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px}.create-strip button{min-height:34px;padding:0 5px;border-radius:9px;font-size:11px}
+  .lobby-panel{min-height:0;padding:13px;border-radius:16px}.section-title h2{margin-top:3px;font-size:18px}.lobby-panel>.muted{margin-bottom:8px;overflow:hidden;font-size:10px;line-height:1.45;text-overflow:ellipsis;white-space:nowrap}#rooms{min-height:0}.room-card{min-height:58px;padding:10px 12px}
+  body.table-open .app-shell{grid-template-rows:minmax(0,1fr)}body.table-open .game-header,body.table-open #feedback,body.table-open footer{display:none}body.table-open .game-table{height:100%;grid-template-rows:minmax(0,1fr)}body.table-open .table-layout{grid-row:1}.table-nav{position:absolute;z-index:9;top:8px;right:10px;left:10px;min-height:36px;pointer-events:none}.table-nav>*{pointer-events:auto}.table-nav>div{padding:5px 9px;border:1px solid var(--line);border-radius:10px;background:rgb(2 25 19 / 88%);font-size:11px}.table-nav #back{min-height:34px;padding:5px 10px}
+  .table-layout{position:relative;display:block;height:100%;overflow:hidden}.play-stage{height:100%;border-radius:18px}.felt{padding:52px 7px 5px}#opponents{top:48px;right:7px;left:7px}.player{padding:5px 7px}.player small{margin-top:2px}#bottom{min-height:38px}#phase-label{margin:4px 0 2px}#plays{min-height:34px;margin-top:4px}#self{min-height:30px}.control-dock{min-height:38px}.control-dock button{min-height:34px;padding:6px 12px}
+  #hand{width:98%;min-height:76px;padding:5px 0 2px}.card{height:72px;min-height:64px;border-radius:7px}
+  .chat-panel{position:absolute;z-index:15;right:8px;bottom:8px;width:min(92%,380px);height:min(60%,430px);max-height:none;padding:12px;border-radius:20px;background:rgb(2 25 19 / 97%);box-shadow:0 18px 54px rgb(0 0 0 / 48%)}.chat-panel:not([open]){display:block;width:auto;height:auto;min-height:38px;padding:0;overflow:hidden;border-radius:999px}.chat-panel:not([open]) summary{padding:10px 14px;color:#2f281b;background:linear-gradient(145deg,#f4d994,#c89c45)}.chat-panel:not([open]) summary span{display:none}.chat-panel[open] summary{padding-bottom:10px;border-bottom:1px solid var(--line)}
+}
+@media (max-width:420px){.lobby-hero p{display:none}.create-strip{margin-top:8px}.section-title>span{display:none}}
+@media (max-height:560px) and (orientation:landscape){.app-shell{padding:6px 8px}.game-header{min-height:48px}.brand small,#feedback{display:none}.lobby{grid-template-columns:minmax(240px,.78fr) minmax(340px,1.22fr);grid-template-rows:minmax(0,1fr)}.lobby-hero{min-height:0}.lobby-hero h2{font-size:25px}.game-header,body.table-open #feedback,body.table-open footer{display:none}.chat-panel{width:min(360px,40vw);height:calc(100% - 16px)}}
+
+/* Club embed: the table owns the viewport; lobby navigation stays compact. */
+.club-embedded .app-shell{padding-top:8px}
+.club-embedded .game-header{height:40px;min-height:40px;padding:0;justify-content:flex-end;border-bottom:1px solid var(--line)}
+.club-embedded .game-header .brand{display:none}
+.club-embedded .club-link{display:flex;height:34px;margin-right:auto;padding:0 10px;align-items:center}
+.club-embedded .game-header #refresh{min-height:34px;padding:5px 10px}
+.club-embedded body.table-open .app-shell{padding:6px;grid-template-rows:minmax(0,1fr)}
+.club-embedded body.table-open .game-header,
+.club-embedded body.table-open #feedback,
+.club-embedded body.table-open footer{display:none}
+.club-embedded body.table-open .game-table{height:100%;grid-template-rows:minmax(0,1fr)}
+.club-embedded body.table-open .table-layout{grid-row:1;height:100%}
+.club-embedded body.table-open .play-stage{border-radius:20px;background:radial-gradient(circle at 50% 43%,rgb(20 83 59 / 78%) 0 18%,rgb(5 42 31 / 95%) 62%,rgb(2 24 18 / 98%) 100%)}
+.club-embedded body.table-open .felt:before{position:absolute;inset:12% 18%;border:1px solid rgb(233 195 110 / 16%);border-radius:50%;content:"";box-shadow:0 0 0 18px rgb(233 195 110 / 3%),0 0 0 38px rgb(233 195 110 / 2%);pointer-events:none}
+.club-embedded body.table-open #phase-label{position:relative;width:fit-content;margin:7px auto 3px;padding:5px 12px;border:1px solid rgb(233 195 110 / 24%);border-radius:999px;background:rgb(2 28 20 / 58%)}
+.club-embedded body.table-open #plays{position:relative;z-index:1}
+.club-embedded body.table-open .control-dock{width:fit-content;max-width:calc(100% - 16px);margin:0 auto 2px;padding:5px 8px;border:1px solid rgb(233 195 110 / 20%);border-radius:16px;background:rgb(2 24 18 / 72%);box-shadow:0 10px 30px rgb(0 0 0 / 24%)}
+@media (max-width:760px),(max-height:560px) and (orientation:landscape){
+  .club-embedded .game-header{height:40px;min-height:40px;display:flex;padding:0}
+  .club-embedded body.table-open .app-shell{padding:5px}
+  .club-embedded body.table-open .play-stage{border-radius:16px}
+
+  /* Keep the compact chat trigger in the table toolbar, never over the hand. */
+  body.table-open .table-nav{right:116px}
+  body.table-open .chat-panel:not([open]){top:8px;right:8px;bottom:auto}
+  body.table-open .chat-panel:not([open]) summary{white-space:nowrap}
+
+  /* An open chat takes its own layout track instead of covering playable cards. */
+  body.table-open .table-layout:has(> .chat-panel[open]){
+    display:grid;
+    grid-template-columns:minmax(0,1fr) minmax(240px,320px);
+    gap:8px;
+  }
+  body.table-open .table-layout:has(> .chat-panel[open]) .chat-panel[open]{
+    position:relative;
+    inset:auto;
+    width:auto;
+    height:100%;
+  }
+  body.table-open:has(.chat-panel[open]) .table-nav{right:10px}
+}
+@media (max-width:760px) and (orientation:portrait){
+  body.table-open .table-layout:has(> .chat-panel[open]){
+    grid-template-columns:1fr;
+    grid-template-rows:minmax(0,1fr) minmax(170px,35%);
+  }
+  body.table-open .table-layout:has(> .chat-panel[open]) .chat-panel[open]{height:auto}
+}

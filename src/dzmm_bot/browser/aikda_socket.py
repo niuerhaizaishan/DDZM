@@ -21,6 +21,7 @@ from dzmm_bot.runtime.contracts import (
 _LOGGER = logging.getLogger(__name__)
 _SEND_ACK_TIMEOUT_SECONDS = 3
 _DIRECT_JOIN_ACK_TIMEOUT_SECONDS = 2
+_GROUP_JOIN_ACK_TIMEOUT_SECONDS = 2
 
 # 平台入群系统消息（content.type == "system"）两种形态：
 #   「困乏 通过 ROI 的链接加入了群聊」 —— 经邀请链接，可归因邀请人
@@ -112,6 +113,7 @@ class AikdaSocketGateway:
         self._group_chatroom_ids: set[str] = {chatroom_id}
         self._joined_group_chatroom_ids: set[str] = {chatroom_id}
         self._group_join_errors: dict[str, str] = {}
+        self._next_group_room_join_index = 0
         self._direct_chatroom_ids: set[str] = set()
         self._joined_direct_chatroom_ids: set[str] = set()
         self._next_direct_room_join_index = 0
@@ -136,6 +138,7 @@ class AikdaSocketGateway:
             return
         self._group_targets = configured
         self._group_chatroom_ids = next_ids
+        self._next_group_room_join_index = 0
         self._joined_group_chatroom_ids.intersection_update(next_ids)
         self._group_join_errors = {
             room_id: error
@@ -144,8 +147,6 @@ class AikdaSocketGateway:
         }
         if next_ids:
             self.chatroom_id = sorted(next_ids)[0]
-        if self._socket is not None and self._socket.connected:
-            self._join_configured_group_rooms()
 
     def set_message_handler(
         self, handler: Callable[[InboundMessage], None]
@@ -163,6 +164,7 @@ class AikdaSocketGateway:
         self, direct_chatroom_ids: tuple[str, ...] = ()
     ) -> None:
         self._ensure_connected()
+        self._maintain_group_rooms()
         self._set_direct_targets(direct_chatroom_ids)
 
     def _set_direct_targets(self, direct_chatroom_ids: tuple[str, ...]) -> None:
@@ -209,7 +211,12 @@ class AikdaSocketGateway:
                 raise RuntimeError(error)
             self._joined_direct_chatroom_ids.add(chatroom_id)
 
-    def _join_group_room(self, chatroom_id: str, *, timeout: float = 10) -> None:
+    def _join_group_room(
+        self,
+        chatroom_id: str,
+        *,
+        timeout: float = _GROUP_JOIN_ACK_TIMEOUT_SECONDS,
+    ) -> None:
         with self._state_lock:
             if chatroom_id in self._joined_group_chatroom_ids:
                 return
@@ -226,10 +233,16 @@ class AikdaSocketGateway:
             self._joined_group_chatroom_ids.add(chatroom_id)
             self._group_join_errors.pop(chatroom_id, None)
 
-    def _join_configured_group_rooms(self) -> None:
-        for chatroom_id in sorted(self._group_chatroom_ids):
+    def _maintain_group_rooms(self) -> None:
+        chatroom_ids = sorted(self._group_chatroom_ids)
+        for offset in range(len(chatroom_ids)):
+            index = (self._next_group_room_join_index + offset) % len(
+                chatroom_ids
+            )
+            chatroom_id = chatroom_ids[index]
             if chatroom_id in self._joined_group_chatroom_ids:
                 continue
+            self._next_group_room_join_index = (index + 1) % len(chatroom_ids)
             try:
                 self._join_group_room(chatroom_id)
             except (SocketTimeoutError, RuntimeError) as error:
@@ -239,6 +252,7 @@ class AikdaSocketGateway:
                     chatroom_id,
                     error or type(error).__name__,
                 )
+            return
 
     def group_room_states(self) -> dict[str, tuple[str, str | None]]:
         return {
@@ -544,7 +558,6 @@ class AikdaSocketGateway:
 
     def _ensure_connected_locked(self) -> None:
         if self._socket is not None and self._socket.connected and self._joined.is_set():
-            self._join_configured_group_rooms()
             self._authenticated = True
             return
         if get_ident() != self._owner_thread_id:
@@ -593,7 +606,6 @@ class AikdaSocketGateway:
             raise AikdaTransportError("socket join timed out")
         if self._implicit_group_chatroom_id in self._group_chatroom_ids:
             self._joined_group_chatroom_ids.add(self._implicit_group_chatroom_id)
-        self._join_configured_group_rooms()
         self._authenticated = True
 
     def _on_message(self, payload: dict[str, Any]) -> None:

@@ -27,3 +27,6 @@ gamefy-workstation/publish/assets/
 gamefy-workstation/.gamefy/
 gamefy-workstation/publish/art.js
 # .dzmm/lock.json is a public publish baseline, not a credential; keep it trackable.
+output/imagegen/mistrealm-expedition/masters/
+outputs/mistrealm-3.19.0-release/
+gamefy/mistrealm/.dzmm/

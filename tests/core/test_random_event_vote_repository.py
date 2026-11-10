@@ -5,6 +5,7 @@ import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
+from dzmm_bot.core.bot_accounts import BOT_PLATFORM_IDS
 from dzmm_bot.core.company_lottery import BEIJING
 from dzmm_bot.core.schema import (
     Base,
@@ -549,6 +550,33 @@ def test_vote_rejects_unknown_position_and_unknown_employee(repository, seeded):
 
     assert repository.cast_random_event_vote("p1", 9, NOW).status == "no_candidate"
     assert repository.cast_random_event_vote("nobody", 1, NOW).status == "not_joined"
+
+
+def test_bot_vote_is_rejected_and_legacy_vote_is_not_counted(repository, seeded):
+    platform_id = next(iter(BOT_PLATFORM_IDS))
+    with seeded.begin() as session:
+        add_user(session, platform_id, "统计机器人", 99)
+        for name in ("甲", "乙", "丙"):
+            add_scene(session, name)
+        poll = _open_poll(repository, session)
+        bot_id = session.scalar(
+            select(UserRecord.id).where(UserRecord.platform_id == platform_id)
+        )
+        session.add(
+            RandomEventPollVoteRecord(
+                poll_id=poll.id,
+                user_id=bot_id,
+                candidate_id=poll.candidates[0].id,
+                created_at=NOW,
+                updated_at=NOW,
+            )
+        )
+
+    view = repository.random_event_poll_view(platform_id)
+
+    assert repository.cast_random_event_vote(platform_id, 1, NOW).status == "not_joined"
+    assert view.total_votes == 0
+    assert view.my_position is None
 
 
 def test_vote_rejects_when_there_is_no_open_poll(repository, seeded):

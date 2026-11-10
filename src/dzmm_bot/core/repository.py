@@ -54,6 +54,7 @@ from .ai_knowledge import (
 )
 
 from .ai_mentions import normalize_ai_mention
+from .bot_accounts import BOT_PLATFORM_IDS, is_bot_platform_id
 from .chinese_input import canonicalize_command_name
 from .game_statistics import (
     other_game_users, record_game_participations, resolved_game_users, truth_trade_game_users,
@@ -118,6 +119,7 @@ from .drawguess_repository import DrawguessRepositoryMixin
 from .mistrealm_repository import MistrealmRepositoryMixin
 from .mahjong_repository import MahjongRepositoryMixin
 from .club_repository import ClubRepositoryMixin
+from .club_card_repository import ClubCardRepositoryMixin
 from .performance import (
     PERFORMANCE_ACTIVE_STATES,
     PerformanceActionResult,
@@ -713,6 +715,7 @@ _DEFAULT_RANDOM_EVENT_SIGNUP_NOTICE_TEMPLATE = (
     "可选身份：{可选身份}\n"
     "请使用 /加入 身份 报名，报名将在 {报名截止分钟} 分钟后截止。"
 )
+_LIAR_DICE_DEAL_TIMEOUT_SECONDS = 15
 _COMPANY_STORY_NOVEL_URL_PATTERN = re.compile(
     r"/novel/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
     re.IGNORECASE,
@@ -1539,7 +1542,7 @@ _CHOP_BOSS_WORDS = ("老板", "董事长", "总裁", "总经理", "人事", "hr"
 _CHOP_BOT_ACCOUNT_NAMES = frozenset({"不问天", "总监事【测试】"})
 # Bot 的平台 ID（bot 未入职，回复它的消息按 platform_id 查不到用户；
 # 该账号在 inbound_messages 里有统计播报记录）。
-_CHOP_BOT_PLATFORM_IDS = frozenset({"acb22871-3895-4e7d-83e5-14b5ca421561"})
+_CHOP_BOT_PLATFORM_IDS = BOT_PLATFORM_IDS
 
 
 def _classify_chop_target(name: str) -> str | None:
@@ -3090,7 +3093,7 @@ class CompanyLotteryOverview:
     employees: tuple[CompanyLotteryEmployeeTotal, ...]
 
 
-class CoreRepository(ClubRepositoryMixin, MahjongRepositoryMixin, MistrealmRepositoryMixin, DrawguessRepositoryMixin, DoudizhuRepositoryMixin, ChessRepositoryMixin, ShopManagementMixin, HonorsMixin, EquipmentMixin):
+class CoreRepository(ClubRepositoryMixin, ClubCardRepositoryMixin, MahjongRepositoryMixin, MistrealmRepositoryMixin, DrawguessRepositoryMixin, DoudizhuRepositoryMixin, ChessRepositoryMixin, ShopManagementMixin, HonorsMixin, EquipmentMixin):
     def __init__(
         self,
         session_factory: sessionmaker[Session],
@@ -14418,6 +14421,9 @@ class CoreRepository(ClubRepositoryMixin, MahjongRepositoryMixin, MistrealmRepos
         game.current_seat = start_seat
         game.state = "dealing"
         game.turn_deadline = None
+        game.dealing_deadline = now + timedelta(
+            seconds=_LIAR_DICE_DEAL_TIMEOUT_SECONDS
+        )
         for player, user in players:
             player.dice = roll_dice(self._liar_dice_random)
             player.hand_delivery_state = "pending"
@@ -14461,11 +14467,20 @@ class CoreRepository(ClubRepositoryMixin, MahjongRepositoryMixin, MistrealmRepos
         )
         if int(pending or 0) != 0:
             return
+        self._start_liar_dice_calling_locked(session, game, now)
+
+    def _start_liar_dice_calling_locked(
+        self,
+        session: Session,
+        game: LiarDiceGameRecord,
+        now: datetime,
+    ) -> None:
         players = self._liar_dice_players(session, game.id, ("active",))
         round_record = self._liar_dice_current_round(session, game.id)
         if round_record is None:
             raise RuntimeError("大话骰子回合不存在")
         game.state = "calling"
+        game.dealing_deadline = None
         game.turn_deadline = now + timedelta(
             seconds=self._liar_dice_settings_row(
                 session, PRIMARY_GROUP_CHAT_ID
@@ -14488,6 +14503,17 @@ class CoreRepository(ClubRepositoryMixin, MahjongRepositoryMixin, MistrealmRepos
             f"{player.seat_number}号 {user.display_name}"
             for player, user in players
         )
+        failed_names = [
+            user.display_name
+            for player, user in players
+            if player.hand_delivery_state == "failed"
+        ]
+        if failed_names:
+            lines.append(
+                "⚠️ "
+                + "、".join(failed_names)
+                + " 的骰面私聊发送超时；牌局已继续，可在私聊发送 /看骰 补看。"
+            )
         lines.append(
             f"由 {game.current_seat}号 {first} 首叫：最少 {len(players)} 个，直接发送“N个X”；"
             "轮到自己质疑则发 /开骰，其他参与者可 /跳开 抢先质疑。超时将自动跳过。"
@@ -15660,6 +15686,7 @@ class CoreRepository(ClubRepositoryMixin, MahjongRepositoryMixin, MistrealmRepos
                 .where(
                     EstrusChopRecord.created_at >= day_start,
                     EstrusChopRecord.created_at < day_start + timedelta(days=1),
+                    UserRecord.platform_id.not_in(BOT_PLATFORM_IDS),
                 )
                 .group_by(UserRecord.id, UserRecord.display_name)
                 .order_by(func.count().desc(), UserRecord.id)
@@ -17211,6 +17238,52 @@ class CoreRepository(ClubRepositoryMixin, MahjongRepositoryMixin, MistrealmRepos
                             session, game, "cancelled", "signup_expired", now
                         )
                         messages.append("【大话骰子】报名超时，本局已自动取消。")
+                    return messages
+                if game.state == "dealing":
+                    if game.dealing_deadline is None:
+                        round_record = self._liar_dice_current_round(
+                            session, game.id
+                        )
+                        started_at = (
+                            now if round_record is None else round_record.started_at
+                        )
+                        game.dealing_deadline = started_at + timedelta(
+                            seconds=_LIAR_DICE_DEAL_TIMEOUT_SECONDS
+                        )
+                    if now < game.dealing_deadline:
+                        return messages
+                    pending_players = list(
+                        session.scalars(
+                            select(LiarDicePlayerRecord)
+                            .where(
+                                LiarDicePlayerRecord.game_id == game.id,
+                                LiarDicePlayerRecord.state == "active",
+                                LiarDicePlayerRecord.hand_delivery_state.in_(
+                                    (None, "pending")
+                                ),
+                            )
+                            .with_for_update()
+                        )
+                    )
+                    for player in pending_players:
+                        player.hand_delivery_state = "failed"
+                        if player.hand_outbound_id is None:
+                            continue
+                        outbound = session.get(
+                            OutboundRecord,
+                            player.hand_outbound_id,
+                            with_for_update=True,
+                        )
+                        if outbound is None or outbound.status not in {
+                            "pending",
+                            "leased",
+                        }:
+                            continue
+                        outbound.status = "failed"
+                        outbound.lease_worker_id = None
+                        outbound.lease_token = None
+                        outbound.lease_expires_at = None
+                    self._start_liar_dice_calling_locked(session, game, now)
                     return messages
                 if game.state != "calling" or game.turn_deadline is None:
                     return messages
@@ -27475,7 +27548,8 @@ class CoreRepository(ClubRepositoryMixin, MahjongRepositoryMixin, MistrealmRepos
                     return RandomEventVoteResult("vacant")
                 user_id = session.scalar(
                     select(UserRecord.id).where(
-                        UserRecord.platform_id == platform_id
+                        UserRecord.platform_id == platform_id,
+                        UserRecord.platform_id.not_in(BOT_PLATFORM_IDS),
                     )
                 )
                 if user_id is None:
@@ -28054,7 +28128,10 @@ class CoreRepository(ClubRepositoryMixin, MahjongRepositoryMixin, MistrealmRepos
                     UserRecord,
                     UserRecord.id == RandomEventPollVoteRecord.user_id,
                 )
-                .where(RandomEventPollVoteRecord.poll_id == poll.id)
+                .where(
+                    RandomEventPollVoteRecord.poll_id == poll.id,
+                    UserRecord.platform_id.not_in(BOT_PLATFORM_IDS),
+                )
                 .order_by(UserRecord.employee_number)
             ).all()
             by_candidate: dict[UUID, list[str]] = {}
@@ -28197,8 +28274,14 @@ class CoreRepository(ClubRepositoryMixin, MahjongRepositoryMixin, MistrealmRepos
                         [
                             vote.candidate_id
                             for vote in session.scalars(
-                                select(RandomEventPollVoteRecord).where(
-                                    RandomEventPollVoteRecord.poll_id == poll.id
+                                select(RandomEventPollVoteRecord)
+                                .join(
+                                    UserRecord,
+                                    UserRecord.id == RandomEventPollVoteRecord.user_id,
+                                )
+                                .where(
+                                    RandomEventPollVoteRecord.poll_id == poll.id,
+                                    UserRecord.platform_id.not_in(BOT_PLATFORM_IDS),
                                 )
                             )
                         ],
@@ -28902,8 +28985,11 @@ class CoreRepository(ClubRepositoryMixin, MahjongRepositoryMixin, MistrealmRepos
         )
         votes = list(
             session.scalars(
-                select(RandomEventPollVoteRecord).where(
-                    RandomEventPollVoteRecord.poll_id == poll.id
+                select(RandomEventPollVoteRecord)
+                .join(UserRecord, UserRecord.id == RandomEventPollVoteRecord.user_id)
+                .where(
+                    RandomEventPollVoteRecord.poll_id == poll.id,
+                    UserRecord.platform_id.not_in(BOT_PLATFORM_IDS),
                 )
             )
         )
@@ -29351,7 +29437,7 @@ class CoreRepository(ClubRepositoryMixin, MahjongRepositoryMixin, MistrealmRepos
     def record_activity(
         self, platform_id: str, received_at: datetime, content: str
     ) -> None:
-        if content.lstrip().startswith("/"):
+        if is_bot_platform_id(platform_id) or content.lstrip().startswith("/"):
             return
         character_count = len("".join(content.split()))
         if not character_count:
@@ -29392,6 +29478,8 @@ class CoreRepository(ClubRepositoryMixin, MahjongRepositoryMixin, MistrealmRepos
     def personal_activity(
         self, platform_id: str, now: datetime
     ) -> PersonalActivity | None:
+        if is_bot_platform_id(platform_id):
+            return PersonalActivity(level=0, reward=0)
         with self._session() as session:
             user = session.scalar(
                 select(UserRecord).where(UserRecord.platform_id == platform_id)
@@ -30992,7 +31080,10 @@ class CoreRepository(ClubRepositoryMixin, MahjongRepositoryMixin, MistrealmRepos
             users = {
                 user.platform_id: user
                 for user in session.scalars(
-                    select(UserRecord).where(UserRecord.joined_at < end)
+                    select(UserRecord).where(
+                        UserRecord.joined_at < end,
+                        UserRecord.platform_id.not_in(BOT_PLATFORM_IDS),
+                    )
                 )
             }
             activity_totals: dict[UUID, int] = {}
@@ -31043,7 +31134,10 @@ class CoreRepository(ClubRepositoryMixin, MahjongRepositoryMixin, MistrealmRepos
                 )
                 .join(UserRecord, UserRecord.id == DailyCheckinRecord.user_id)
                 .outerjoin(RankRecord, RankRecord.id == UserRecord.rank_id)
-                .where(DailyCheckinRecord.checkin_date == now.date())
+                .where(
+                    DailyCheckinRecord.checkin_date == now.date(),
+                    UserRecord.platform_id.not_in(BOT_PLATFORM_IDS),
+                )
             ):
                 income_recorded = session.scalar(
                     select(BalanceTransactionRecord.id).where(
@@ -31076,8 +31170,11 @@ class CoreRepository(ClubRepositoryMixin, MahjongRepositoryMixin, MistrealmRepos
             )
             activities = list(
                 session.scalars(
-                    select(DailyActivityRecord).where(
+                    select(DailyActivityRecord)
+                    .join(UserRecord, UserRecord.id == DailyActivityRecord.user_id)
+                    .where(
                         DailyActivityRecord.activity_date < now.date(),
+                        UserRecord.platform_id.not_in(BOT_PLATFORM_IDS),
                         ~already_settled,
                     )
                 )
@@ -31133,9 +31230,11 @@ class CoreRepository(ClubRepositoryMixin, MahjongRepositoryMixin, MistrealmRepos
         with self._session() as session:
             complete_user_ids = session.scalars(
                 select(DailyCheckinRecord.user_id)
+                .join(UserRecord, UserRecord.id == DailyCheckinRecord.user_id)
                 .where(
                     DailyCheckinRecord.checkin_date >= week_start,
                     DailyCheckinRecord.checkin_date < week_end,
+                    UserRecord.platform_id.not_in(BOT_PLATFORM_IDS),
                 )
                 .group_by(DailyCheckinRecord.user_id)
                 .having(func.count(DailyCheckinRecord.id) == 7)
@@ -31288,6 +31387,7 @@ class CoreRepository(ClubRepositoryMixin, MahjongRepositoryMixin, MistrealmRepos
                     BalanceTransactionRecord.amount > 0,
                     BalanceTransactionRecord.occurred_at >= start,
                     BalanceTransactionRecord.occurred_at < end,
+                    UserRecord.platform_id.not_in(BOT_PLATFORM_IDS),
                 )
                 .group_by(UserRecord.id, UserRecord.display_name)
                 .order_by(income.desc(), UserRecord.id)
@@ -32110,6 +32210,7 @@ class CoreRepository(ClubRepositoryMixin, MahjongRepositoryMixin, MistrealmRepos
             )
             .join(UserRecord, UserRecord.department_id == DepartmentRecord.id)
             .outerjoin(RankRecord, UserRecord.rank_id == RankRecord.id)
+            .where(UserRecord.platform_id.not_in(BOT_PLATFORM_IDS))
             .group_by(
                 DepartmentRecord.id,
                 DepartmentRecord.name,
@@ -32156,7 +32257,10 @@ class CoreRepository(ClubRepositoryMixin, MahjongRepositoryMixin, MistrealmRepos
                     UserRecord.employee_number,
                 )
                 .join(RankRecord, UserRecord.rank_id == RankRecord.id)
-                .where(UserRecord.department_id.in_(department_ids))
+                .where(
+                    UserRecord.department_id.in_(department_ids),
+                    UserRecord.platform_id.not_in(BOT_PLATFORM_IDS),
+                )
                 .order_by(
                     UserRecord.department_id,
                     RankRecord.sort_order.desc(),
@@ -33006,6 +33110,8 @@ class CoreRepository(ClubRepositoryMixin, MahjongRepositoryMixin, MistrealmRepos
         *,
         group_chat_id: UUID | None = None,
     ) -> bool:
+        if is_bot_platform_id(user.platform_id):
+            return False
         with self.transaction():
             with self._session() as session:
                 employee = session.get(UserRecord, user.id)

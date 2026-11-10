@@ -4,7 +4,7 @@ from copy import deepcopy
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 
-from .doudizhu_rules import Pattern, choose_pattern, rank
+from .doudizhu_rules import Pattern, choose_pattern, legal_plays, rank
 
 
 def _stamp(now):
@@ -36,7 +36,22 @@ def apply_action(state: dict, seat: int, action: str, payload: dict, now: dateti
     _stamp(now)
     if now >= datetime.fromisoformat(state['deadline']):
         raise ValueError("操作已超时，请刷新牌局")
-    return _transition(state, seat, action, payload, now)
+    return _auto_pass_unplayable_trustees(_transition(state, seat, action, payload, now), now)
+
+
+def _auto_pass_unplayable_trustees(state: dict, now: datetime) -> dict:
+    result = state
+    for _ in range(3):
+        if result['phase'] != 'playing' or result['previous'] is None:
+            break
+        seat = result['turn']
+        if not result['trustees'][seat]:
+            break
+        previous = Pattern(**{**result['previous'], 'cards': tuple(result['previous']['cards'])})
+        if legal_plays(tuple(result['hands'][seat]), previous):
+            break
+        result = _transition(result, seat, 'pass', {}, now)
+    return result
 
 
 def _transition(state, seat, action, payload, now):
@@ -124,4 +139,4 @@ def apply_timeout(state: dict, now: datetime) -> dict:
         action, payload = 'play', {'cards': [min(state['hands'][seat], key=lambda c: (rank(c), c))]}
     result = _transition(state, seat, action, payload, deadline)
     result['trustees'][seat] = True
-    return result
+    return _auto_pass_unplayable_trustees(result, deadline)

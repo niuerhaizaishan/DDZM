@@ -57,6 +57,25 @@ class TaskPayload(BaseModel):
     ]
 
 
+class CardRoomPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_id: UUID
+    room_type: Literal["casual", "coin"] = "coin"
+    stake: Literal[0, 5, 10, 20] = 10
+
+
+class CardActionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    version: StrictInt = Field(ge=0)
+    request_id: UUID
+    action: Literal[
+        "claim", "ready", "unready", "leave", "start", "next",
+        "check", "call", "raise", "all_in", "fold",
+        "look", "compare", "hit", "stand",
+    ]
+    payload: dict = Field(default_factory=dict)
+
+
 def _uid(authorization: str | None) -> str:
     if not authorization or not authorization.startswith("ClubUid "):
         raise HTTPException(401, "无法读取玩家身份")
@@ -92,6 +111,46 @@ async def mahjong_events(repository, room_id, uid, clock, request):
         await asyncio.sleep(1)
 
 
+async def club_social_events(repository, uid, clock, request):
+    previous = None
+    last_event = asyncio.get_running_loop().time()
+    while not await request.is_disconnected():
+        value = await asyncio.to_thread(repository.club_social_version, uid, clock())
+        encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        now = asyncio.get_running_loop().time()
+        if encoded != previous:
+            yield f"event: social\ndata: {encoded}\n\n"
+            previous = encoded
+            last_event = now
+        elif now - last_event >= 15:
+            yield ": heartbeat\n\n"
+            last_event = now
+        await asyncio.sleep(0.5)
+
+
+async def club_card_events(repository, game, room_id, uid, clock, request):
+    previous = None
+    last_event = asyncio.get_running_loop().time()
+    while not await request.is_disconnected():
+        try:
+            value = await asyncio.to_thread(
+                repository.club_card_view, game, room_id, uid, clock()
+            )
+        except ValueError:
+            yield "event: unavailable\ndata: {}\n\n"
+            return
+        encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        now = asyncio.get_running_loop().time()
+        if encoded != previous:
+            yield f"event: snapshot\ndata: {encoded}\n\n"
+            previous = encoded
+            last_event = now
+        elif now - last_event >= 15:
+            yield ": heartbeat\n\n"
+            last_event = now
+        await asyncio.sleep(0.5)
+
+
 def club_router(repository, clock):
     router = APIRouter(prefix="/api/club")
 
@@ -121,9 +180,34 @@ def club_router(repository, clock):
             avatar_url=body.avatar_url,
         )
 
+    @router.post("/presence")
+    def presence(authorization: str | None = Header(None)):
+        return _call(repository.club_presence, _uid(authorization), clock())
+
+    @router.get("/room-status/{game}/{room_id}")
+    def room_status(
+        game: Literal[
+            "mahjong", "chess", "doudizhu", "drawguess",
+            "texas", "zhajinhua", "blackjack",
+        ],
+        room_id: UUID,
+        authorization: str | None = Header(None),
+    ):
+        return _call(
+            repository.club_room_status,
+            game,
+            room_id,
+            _uid(authorization),
+            clock(),
+        )
+
     @router.get("/profile")
     def profile(authorization: str | None = Header(None)):
         return _call(repository.club_profile, _uid(authorization), clock())
+
+    @router.get("/players/{player_id}")
+    def player_profile(player_id: UUID, authorization: str | None = Header(None)):
+        return _call(repository.club_player_profile, _uid(authorization), player_id, clock())
 
     @router.get("/channel")
     def channel(authorization: str | None = Header(None)):
@@ -136,6 +220,16 @@ def club_router(repository, clock):
             _uid(authorization),
             body.text,
             clock(),
+        )
+
+    @router.get("/social/events")
+    async def social_events(request: Request, authorization: str | None = Header(None)):
+        uid = _uid(authorization)
+        await asyncio.to_thread(_call, repository.club_social_version, uid, clock())
+        return StreamingResponse(
+            club_social_events(repository, uid, clock, request),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
         )
 
     @router.get("/friends")
@@ -195,6 +289,52 @@ def club_router(repository, clock):
             body.task_key,
             clock(),
         )
+
+    @router.get("/active-room")
+    def active_room(authorization: str | None = Header(None)):
+        return _call(repository.club_active_room, _uid(authorization), clock())
+
+    @router.get("/cards/{game}/rooms")
+    def card_rooms(game: Literal["texas", "zhajinhua", "blackjack"], authorization: str | None = Header(None)):
+        return _call(repository.list_club_card_rooms, game, _uid(authorization), clock())
+
+    @router.post("/cards/{game}/rooms")
+    def create_card_room(game: Literal["texas", "zhajinhua", "blackjack"], body: CardRoomPayload, authorization: str | None = Header(None)):
+        return _call(repository.create_club_card_room, game, _uid(authorization), clock(),
+                     room_type=body.room_type, stake=body.stake, request_id=body.request_id)
+
+    @router.get("/cards/{game}/rooms/{room_id}")
+    def card_snapshot(game: Literal["texas", "zhajinhua", "blackjack"], room_id: UUID, authorization: str | None = Header(None)):
+        return _call(repository.club_card_view, game, room_id, _uid(authorization), clock())
+
+    @router.get("/cards/{game}/rooms/{room_id}/events")
+    async def card_events(
+        game: Literal["texas", "zhajinhua", "blackjack"],
+        room_id: UUID,
+        request: Request,
+        authorization: str | None = Header(None),
+    ):
+        uid = _uid(authorization)
+        await asyncio.to_thread(_call, repository.club_card_view, game, room_id, uid, clock())
+        return StreamingResponse(
+            club_card_events(repository, game, room_id, uid, clock, request),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
+
+    @router.post("/cards/{game}/rooms/{room_id}/actions")
+    def card_action(game: Literal["texas", "zhajinhua", "blackjack"], room_id: UUID, body: CardActionPayload, authorization: str | None = Header(None)):
+        expected = {"raise": {"amount"}, "compare": {"target"}}.get(body.action, set())
+        if set(body.payload) != expected:
+            raise HTTPException(422, "操作参数不正确")
+        return _call(repository.club_card_action, game, room_id, _uid(authorization), body.version,
+                     body.request_id, body.action, body.payload, clock())
+
+    @router.post("/cards/{game}/rooms/{room_id}/chat")
+    def card_chat(game: Literal["texas", "zhajinhua", "blackjack"], room_id: UUID, body: ChatPayload, authorization: str | None = Header(None)):
+        if not body.text.strip():
+            raise HTTPException(422, "请输入消息")
+        return _call(repository.club_card_chat, game, room_id, _uid(authorization), body.request_id, body.text, clock())
 
     @router.get("/mahjong/rooms/{room_id}")
     def snapshot(room_id: UUID, authorization: str | None = Header(None)):

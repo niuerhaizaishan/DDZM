@@ -37,7 +37,7 @@ def mark_sent(factory, inbound_id):
 def test_parallel_games_and_sent_gate(chess_repo):
     repo, factory, inbound_id = chess_repo
     one = repo.create_chess_game("creator", PRIMARY_GROUP_CHAT_ID, inbound_id, NOW)
-    two = repo.create_chess_game("creator", PRIMARY_GROUP_CHAT_ID, inbound_id, NOW)
+    two = repo.create_chess_game("bob", None, None, NOW)
     assert one.id != two.id
     assert one.code.isdigit() and len(one.code) == 4
     assert repo.claim_chess_seat(one.id, "alice", one.code, NOW).status == "not_announced"
@@ -50,7 +50,7 @@ def test_parallel_games_and_sent_gate(chess_repo):
     assert claimed.game.red_platform_id in {"creator", "alice"}
     assert claimed.game.black_platform_id in {"creator", "alice"}
     assert repo.claim_chess_seat(one.id, "bob", one.code, NOW).status == "occupied"
-    assert repo.claim_chess_seat(two.id, "bob", two.code, NOW + timedelta(minutes=10)).status == "expired"
+    assert repo.claim_chess_seat(two.id, "alice", two.code, NOW + timedelta(minutes=10)).status == "expired"
     assert repo.create_chess_game("nobody", None, None, NOW).creator_platform_id == "nobody"
 
 
@@ -71,3 +71,24 @@ def test_registered_players_can_chat_while_waiting(chess_repo):
         message = repo.chess_chat(game.id, pid, "等你来下棋", NOW)
         assert message["text"] == "等你来下棋"
     assert repo.chess_chat(game.id, "nobody", "hello", NOW)["text"] == "hello"
+
+
+def test_finished_game_stays_in_room_until_both_players_ready(chess_repo):
+    repo, factory, inbound_id = chess_repo
+    game = repo.create_chess_game("creator", PRIMARY_GROUP_CHAT_ID, inbound_id, NOW)
+    mark_sent(factory, inbound_id)
+    game = repo.claim_chess_seat(game.id, "alice", game.code, NOW).game
+    repo.chess_chat(game.id, "creator", "下一盘继续", NOW)
+    game = repo.chess_action(game.id, "creator", "resign", NOW, game.version)
+
+    assert game.status == "finished"
+    assert game.position is not None
+    game = repo.chess_action(game.id, "creator", "ready", NOW, game.version)
+    with pytest.raises(ValueError, match="双方准备"):
+        repo.chess_action(game.id, "creator", "start", NOW, game.version)
+    game = repo.chess_action(game.id, "alice", "ready", NOW, game.version)
+    game = repo.chess_action(game.id, "creator", "start", NOW, game.version)
+
+    assert game.status == "playing"
+    assert game.rematch_ready == ()
+    assert [message["text"] for message in repo.chess_messages(game.id)] == ["下一盘继续"]

@@ -83,6 +83,13 @@ class StoryStart(ClassicQueue):
     chapter: StrictInt = Field(ge=1, le=5)
 
 
+class ExpeditionAction(Body):
+    run_id: UUID
+    version: StrictInt = Field(ge=0)
+    action: Literal['choose','battle','buy','sell','upgrade','skip','leave','restart']
+    payload: dict = Field(default_factory=dict)
+
+
 class RankedHonor(Body):
     season_id: StrictInt | None = Field(default=None, ge=1)
 
@@ -497,5 +504,22 @@ def mistrealm_router(repository, clock):
     @router.post('/v3/story/start')
     def v3_story_start(body: StoryStart,authorization: str | None = Header(None)):
         return call(repository.mistrealm_story_start,identity(authorization),body.chapter,body.deck_id,clock(),3)
+
+    @router.get('/v3/expedition/catalogue')
+    def expedition_catalogue():
+        from .mistrealm_expedition_cards import CARDS, FACTIONS
+        return dict(cards=CARDS,factions=FACTIONS)
+
+    @router.get('/v3/expedition')
+    def expedition_get(authorization: str | None = Header(None)):
+        return call(repository.mistrealm_expedition_get,identity(authorization),clock())
+
+    @router.post('/v3/expedition/start')
+    def expedition_start(authorization: str | None = Header(None)):
+        return call(repository.mistrealm_expedition_start,identity(authorization),clock())
+
+    @router.post('/v3/expedition/actions')
+    def expedition_action(body: ExpeditionAction,authorization: str | None = Header(None)):
+        return call(repository.mistrealm_expedition_action,identity(authorization),body.run_id,body.version,body.action,body.payload,clock())
 
     return router

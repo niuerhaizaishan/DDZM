@@ -79,6 +79,24 @@ def test_timeout_and_takeover():
     assert 0 not in state['hands'][0]
 
 
+def test_trustee_immediately_passes_when_no_legal_play():
+    state = playing()
+    state['hands'][1] = [17, 18, 19]
+    state['trustees'][1] = True
+    state = apply_action(state, 0, 'play', {'cards': [53]}, NOW)
+    assert state['table'][1] == {'kind': 'pass', 'cards': []}
+    assert state['turn'] == 2
+
+
+def test_trustee_keeps_turn_when_a_legal_play_exists():
+    state = playing()
+    state['hands'][1] = [17]
+    state['trustees'][1] = True
+    state = apply_action(state, 0, 'play', {'cards': [0]}, NOW)
+    assert state['table'][1] is None
+    assert state['turn'] == 1
+
+
 @pytest.mark.parametrize(('seat', 'action', 'payload'), [
     (1, 'play', {'cards': [17]}), (0, 'play', {'cards': [0, 0]}),
     (0, 'play', {'cards': [20]}), (0, 'play', {'cards': []}),

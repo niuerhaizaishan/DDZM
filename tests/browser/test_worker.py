@@ -1191,6 +1191,27 @@ def test_worker_retries_socket_timeout_with_the_same_platform_message_id(context
     assert gateway.sent_message_ids == [str(OUTBOUND_ID), str(OUTBOUND_ID)]
 
 
+def test_worker_stops_retrying_liar_dice_hand_after_second_timeout(context):
+    worker, gateway, _, _, core, _ = context
+    core.pending = [
+        OutboundClaim(
+            OUTBOUND_ID,
+            "in-1",
+            "hand",
+            LEASE,
+            delivery_kind="liar_dice_hand",
+            attempt_count=2,
+        )
+    ]
+    gateway.send_errors = [SocketTimeoutError()]
+
+    worker.run_once()
+
+    assert core.failed_event.wait(timeout=1)
+    assert core.failed == [(OUTBOUND_ID, "worker-a", LEASE, NOW)]
+    assert core.released == []
+
+
 def test_worker_retries_a_temporarily_rejected_non_dark_market_outbound(context):
     worker, gateway, _, _, core, _ = context
     core.pending = [OutboundClaim(OUTBOUND_ID, "in-1", "reply", LEASE)]

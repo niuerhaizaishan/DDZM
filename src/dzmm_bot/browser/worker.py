@@ -567,12 +567,23 @@ class BrowserWorker:
         except SocketTimeoutError:
             _LOGGER.warning("outbound acknowledgement timed out: %s", outbound.id)
             self._gateway_reconnect_requested.set()
-            self._core.release_outbound(
-                outbound.id,
-                self._worker_id,
-                outbound.lease_token,
-                self._clock(),
-            )
+            if (
+                outbound.delivery_kind == "liar_dice_hand"
+                and outbound.attempt_count >= 2
+            ):
+                self._core.mark_outbound_failed(
+                    outbound.id,
+                    self._worker_id,
+                    outbound.lease_token,
+                    self._clock(),
+                )
+            else:
+                self._core.release_outbound(
+                    outbound.id,
+                    self._worker_id,
+                    outbound.lease_token,
+                    self._clock(),
+                )
             return False
         except AikdaMessageRejectedError as error:
             _LOGGER.warning(

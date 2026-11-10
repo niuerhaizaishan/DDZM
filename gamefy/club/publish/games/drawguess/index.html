@@ -6,6 +6,7 @@
   <meta name="theme-color" content="#fff8f2">
   <title>你画我猜</title>
   <link rel="stylesheet" href="./style.css">
+  <script src="../runtime-bootstrap.js"></script>
 </head>
 <body>
   <main class="app-shell">
@@ -34,6 +35,7 @@
           </div>
           <div class="room-toolbar-actions">
             <span id="timer" class="timer">--</span>
+            <button id="draw-chat-toggle" class="chat-toggle" type="button" aria-controls="draw-chat" aria-expanded="false">聊天</button>
             <button id="room-refresh" class="icon-button" type="button" aria-label="刷新房间">↻</button>
           </div>
         </div>
@@ -88,8 +90,8 @@
             </div>
           </div>
 
-          <aside class="chat-column">
-            <div class="chat-heading"><div><span class="eyebrow">房间聊天</span><h3 id="prompt">和群友聊两句</h3></div><span id="word-hint" class="word-hint"></span></div>
+          <aside id="draw-chat" class="chat-column">
+            <div class="chat-heading"><div><span class="eyebrow">房间聊天</span><h3 id="prompt">和群友聊两句</h3></div><div class="chat-heading-actions"><span id="word-hint" class="word-hint"></span><button id="draw-chat-close" type="button" aria-label="收起聊天">收起</button></div></div>
             <div id="messages" class="messages" aria-live="polite"></div>
             <div class="composer">
               <p id="input-reason" class="input-reason"></p>

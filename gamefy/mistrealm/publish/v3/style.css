@@ -1,3 +1,4 @@
+@import url('./expedition.css');
 @import url('../classic/style.css');
 #game-shell.battle main{max-width:1120px}
 #game-shell.battle .army{grid-template-columns:175px minmax(0,1fr)}

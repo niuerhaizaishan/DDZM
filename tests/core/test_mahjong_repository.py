@@ -94,6 +94,48 @@ def test_four_ready_players_start_authoritative_match(mahjong):
     assert viewer["game"]["hand_counts"] == [14, 13, 13, 13]
 
 
+def test_reaction_deadline_is_advanced_by_room_refresh(mahjong, monkeypatch):
+    repo, factory = mahjong
+    room = seated(mahjong)
+    from dzmm_bot.core import mahjong_repository
+    from dzmm_bot.core.schema import MahjongRoomRecord
+
+    with factory.begin() as session:
+        record = session.get(MahjongRoomRecord, UUID(room["id"]))
+        record.state = {
+            **record.state,
+            "phase": "reaction",
+            "deadline": (NOW - timedelta(seconds=1)).isoformat(),
+        }
+        record.phase = "reaction"
+        record.deadline = NOW - timedelta(seconds=1)
+
+    def advance(state, now, wall_factory):
+        return {
+            **state,
+            "phase": "playing",
+            "version": state["version"] + 1,
+            "deadline": (now + timedelta(seconds=10)).isoformat(),
+        }
+
+    monkeypatch.setattr(mahjong_repository, "apply_timeout", advance)
+    refreshed = repo.mahjong_view(UUID(room["id"]), "host", NOW)
+
+    assert refreshed["phase"] == "playing"
+
+
+def test_reaction_action_is_accepted_by_repository(mahjong, monkeypatch):
+    repo, _ = mahjong
+    monkeypatch.setattr(repo, "_mahjong_wall", lambda: list(range(136)))
+    room = seated(mahjong)
+
+    room = act(repo, room, "host", "discard", {"tile": room["game"]["hand"][-1]})
+    assert room["phase"] == "reaction"
+    room = act(repo, room, "carol", "pass")
+
+    assert room["phase"] == "playing"
+
+
 def test_match_settlement_pays_winner_the_zero_sum_pot_once(mahjong):
     repo, factory = mahjong
     room = seated(mahjong)
@@ -120,6 +162,12 @@ def test_match_settlement_pays_winner_the_zero_sum_pot_once(mahjong):
     assert [balance(factory, uid) for uid in ("host", "alice", "bob", "carol")] == [1030, 990, 990, 990]
     repo.mahjong_view(UUID(room["id"]), "host", NOW + timedelta(minutes=1))
     assert [balance(factory, uid) for uid in ("host", "alice", "bob", "carol")] == [1030, 990, 990, 990]
+
+    for uid in ("host", "alice", "bob", "carol"):
+        settled = act(repo, settled, uid, "ready")
+    settled = act(repo, settled, "host", "start")
+    assert settled["phase"] == "playing"
+    assert settled["settlement"] is None
 
 
 def test_casual_room_never_moves_balance(mahjong):

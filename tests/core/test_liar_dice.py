@@ -453,6 +453,68 @@ def test_liar_dice_timeout_skip_and_void():
     assert set(_seat_map(factory)) == {1, 2, 3}
 
 
+def test_liar_dice_dealing_timeout_starts_round_and_keeps_hands_available():
+    service, repository, factory = _service(liar_dice_random=Random(13))
+    now = datetime(2026, 10, 2, 16, 0, tzinfo=BEIJING)
+    repository.bootstrap_primary_group(
+        "https://www.aikda.com/chat?c=group-main", now
+    )
+    _join_employees(service, now)
+    _seed_direct_chats(factory, now)
+    _receive(service, "m1", "user-0", "/大话骰子", now)
+    _receive(service, "m2", "user-1", "/加入", now)
+    _receive(service, "m3", "user-2", "/加入", now)
+    _receive(service, "m4", "user-0", "/开始", now)
+
+    game = _dice_game(repository)
+    assert game.state == "dealing"
+    assert game.dealing_deadline == now + timedelta(seconds=15)
+
+    # 已经处于发骰阶段的旧对局没有截止时间，也必须能够自动补齐并恢复。
+    with factory.begin() as session:
+        session.get(type(game), game.id).dealing_deadline = None
+    repository.run_liar_dice_jobs(now + timedelta(seconds=14), game.group_chat_id)
+    assert _dice_game(repository).state == "dealing"
+
+    repository.run_liar_dice_jobs(now + timedelta(seconds=15), game.group_chat_id)
+    game = _dice_game(repository)
+    assert game.state == "calling"
+    assert game.dealing_deadline is None
+    assert game.turn_deadline is not None
+
+    from dzmm_bot.core.schema import LiarDicePlayerRecord, OutboundRecord
+
+    with factory() as session:
+        players = list(
+            session.scalars(
+                select(LiarDicePlayerRecord).where(
+                    LiarDicePlayerRecord.game_id == game.id,
+                    LiarDicePlayerRecord.state == "active",
+                )
+            )
+        )
+        assert {player.hand_delivery_state for player in players} == {"failed"}
+        hand_ids = {player.hand_outbound_id for player in players}
+        assert set(
+            session.scalars(
+                select(OutboundRecord.status).where(OutboundRecord.id.in_(hand_ids))
+            )
+        ) == {"failed"}
+        announcements = list(
+            session.scalars(
+                select(OutboundRecord.text).where(
+                    OutboundRecord.delivery_kind == "group",
+                    OutboundRecord.inbound_message_id.is_(None),
+                )
+            )
+        )
+        assert any("私聊发送超时" in text and "/看骰" in text for text in announcements)
+
+    shown = repository.liar_dice_private_hands("user-0", now)
+    assert shown.status == "shown"
+    assert "你的骰子" in shown.private_message
+
+
 def test_liar_dice_look_dice_is_direct_only():
     service, repository, factory = _service(liar_dice_random=Random(5))
     now = datetime(2026, 10, 2, 16, 0, tzinfo=BEIJING)

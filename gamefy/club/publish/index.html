@@ -12,7 +12,7 @@
   <main class="app-shell">
     <header class="topbar">
       <button id="home" class="brand" type="button" aria-label="返回 Club 首页"><span>摸</span><div><strong>摸鱼 Club</strong><small>群友的游戏会所</small></div></button>
-      <div class="top-actions"><span id="identity" class="identity">连接中</span><button id="channel-toggle" class="top-nav-button" type="button">公屏</button><button id="tasks-toggle" class="top-nav-button" type="button">任务</button><button id="profile-toggle" class="icon-button" type="button" aria-label="个人中心">我</button><button id="refresh" class="icon-button" type="button" aria-label="刷新">↻</button></div>
+      <div class="top-actions"><span id="identity" class="identity">连接中</span><button id="refresh" class="icon-button" type="button" aria-label="刷新">↻</button></div>
     </header>
     <p id="feedback" class="feedback" role="status" aria-live="polite"></p>
 
@@ -20,7 +20,7 @@
       <div class="club-home-layout">
         <div class="hero"><span class="hero-label">TONIGHT'S CLUB</span><h1>今晚，开哪一桌？</h1><p>和群友下一盘、打一局，或者开桌麻将。</p><button id="channel-peek" class="channel-peek" type="button"><span><i></i>Club 公共频道</span><b id="channel-peek-text">正在连接群友…</b><em>展开 ›</em></button></div>
         <div class="game-panel">
-          <div class="section-head"><div><span>CLUB GAMES</span><h2>游戏大厅</h2></div><b>4 款</b></div>
+          <div class="section-head"><div><span>CLUB GAMES</span><h2>游戏大厅</h2></div><div id="club-presence" class="club-presence" aria-label="Club 实时人数" aria-live="polite"><span><i></i><b id="club-online-count">--</b> 在线</span><span><b id="club-playing-count">--</b> 游戏中</span></div></div>
           <div id="game-grid" class="game-grid"></div>
         </div>
       </div>
@@ -38,12 +38,12 @@
     </section>
 
     <section id="table" class="screen table-screen" hidden>
-      <div class="table-head"><button id="lobby-back" class="hud-back" type="button" aria-label="返回麻将大厅">←</button><div><span id="round-label">候场</span><h2 id="table-title">牌桌</h2></div><div class="table-head-actions"><b id="timer">--</b><button id="fullscreen" class="hud-button" type="button" aria-label="进入全屏">全屏</button><button id="chat-toggle" class="hud-button chat-button" type="button">消息<i id="chat-unread" hidden>0</i></button></div></div>
+      <div class="table-head"><button id="lobby-back" class="hud-back" type="button" aria-label="返回麻将大厅">←</button><div><span id="round-label">候场</span><h2 id="table-title">牌桌</h2></div><div class="table-head-actions"><b id="timer">--</b><button id="table-channel" class="hud-button" type="button">公屏</button><button id="fullscreen" class="hud-button" type="button" aria-label="进入全屏">全屏</button><button id="chat-toggle" class="hud-button chat-button" type="button">房间消息<i id="chat-unread" hidden>0</i></button></div></div>
       <div id="waiting" class="waiting-card" hidden>
         <div class="waiting-meta"><div><span>WAITING TABLE</span><strong id="room-kind">休闲房</strong></div><b id="room-code">等待入座</b></div>
         <div class="waiting-stage"><div class="waiting-table-mark" aria-hidden="true"><span>雀</span><small>四人到齐即可开局</small></div><div id="seats" class="waiting-seats"></div></div>
         <div id="claim-controls" class="claim-panel" hidden><div><b>牌桌还有空位</b><span>点击即可，先到先得</span></div><button id="claim" class="primary gold">立即入座</button></div>
-        <div id="waiting-actions" class="action-row" hidden><button id="share-room" class="secondary">邀请</button><button id="leave" class="secondary">离开</button><button id="ready" class="secondary">准备</button><button id="start" class="primary">开始</button></div>
+        <div id="waiting-actions" class="action-row" hidden><button id="share-room-channel" class="secondary">公屏分享</button><button id="share-room" class="secondary">好友邀请</button><button id="leave" class="secondary">离开</button><button id="ready" class="secondary">准备</button><button id="start" class="primary">开始</button></div>
       </div>
       <div id="mahjong-table" class="mahjong-table" hidden>
         <div id="opponent-top" class="player player-top"></div><div id="opponent-left" class="player player-left"></div><div id="opponent-right" class="player player-right"></div>
@@ -55,15 +55,31 @@
         <button id="chat-preview" class="chat-preview" type="button"><span class="chat-preview-head"><b>牌桌聊天</b><i id="chat-preview-unread" hidden>0</i><em>展开 ›</em></span><span id="chat-preview-lines" class="chat-preview-lines">还没有聊天消息</span></button>
       </div>
       <div id="result" class="result-sheet" hidden></div>
-      <aside id="chat-drawer" class="chat-drawer" hidden><div class="chat-head"><div><span>TABLE CHAT</span><strong>牌桌聊天</strong><small>玩家与观众都可以发言</small></div><button id="chat-close" class="hud-button" type="button">收起</button></div><div id="messages" class="messages"></div><div class="quick-chat" aria-label="快捷发言"><button type="button" data-quick-chat="好牌！">好牌！</button><button type="button" data-quick-chat="快点出牌～">快点出牌～</button><button type="button" data-quick-chat="承让了">承让了</button><button type="button" data-quick-chat="再来一局">再来一局</button></div><div class="chat-compose"><input id="chat-input" maxlength="300" placeholder="说点什么…"><button id="chat-send" class="primary">发送</button></div></aside>
+      <aside id="chat-drawer" class="chat-drawer" hidden><div class="chat-head"><div><span>TABLE CHAT</span><strong>牌桌聊天</strong><small>玩家与观众都可以发言</small></div><div class="chat-head-actions"><button id="chat-channel" class="hud-button" type="button">切到公屏</button><button id="chat-close" class="hud-button" type="button">收起</button></div></div><div id="messages" class="messages"></div><div class="quick-chat" aria-label="快捷发言"><button type="button" data-quick-chat="好牌！">好牌！</button><button type="button" data-quick-chat="快点出牌～">快点出牌～</button><button type="button" data-quick-chat="承让了">承让了</button><button type="button" data-quick-chat="再来一局">再来一局</button></div><div class="chat-compose"><input id="chat-input" maxlength="300" placeholder="说点什么…"><button id="chat-send" class="primary">发送</button></div></aside>
     </section>
+
+    <section id="club-game" class="screen club-game-screen" hidden>
+      <nav class="club-module-tools" aria-label="Club 游戏工具">
+        <button id="club-module-home" type="button">大厅</button>
+        <button id="club-module-public" type="button">公屏</button>
+        <button id="club-module-share" type="button" hidden>分享房间</button>
+      </nav>
+      <div id="club-game-mount" class="club-game-mount" aria-live="polite"></div>
+    </section>
+
+    <nav class="club-bottom-nav" aria-label="Club 主导航">
+      <button id="home-nav" class="active" type="button"><b>⌂</b><span>大厅</span></button>
+      <button id="channel-toggle" type="button"><b>聊</b><span>公屏</span></button>
+      <button id="tasks-toggle" type="button"><b>✓</b><span>任务</span></button>
+      <button id="profile-toggle" type="button"><b>我</b><span>我的</span></button>
+    </nav>
 
     <aside id="club-drawer" class="club-drawer" hidden>
       <header class="club-drawer-head"><div><span>MOYU CLUB</span><strong id="club-drawer-title">公共频道</strong></div><button id="club-drawer-close" class="icon-button" type="button" aria-label="关闭">×</button></header>
       <nav class="club-drawer-tabs" aria-label="Club 功能"><button type="button" data-club-tab="channel" class="active">公屏</button><button type="button" data-club-tab="friends">好友</button><button type="button" data-club-tab="tasks">任务</button><button type="button" data-club-tab="profile">我的</button></nav>
       <section id="club-panel-channel" class="club-panel"><div id="club-channel-messages" class="club-message-list"></div><div class="club-compose"><input id="club-channel-input" maxlength="300" placeholder="和大厅里的群友聊聊…"><button id="club-channel-send" class="primary" type="button">发送</button></div></section>
       <section id="club-panel-friends" class="club-panel" hidden><div class="friend-add"><input id="friend-player-id" placeholder="输入玩家 ID"><button id="friend-add" class="secondary" type="button">添加</button></div><div id="friend-list" class="friend-list"></div><div id="direct-chat" class="direct-chat" hidden><header><button id="direct-back" type="button">←</button><b id="direct-name">私聊</b></header><div id="direct-messages" class="club-message-list"></div><div class="club-compose"><input id="direct-input" maxlength="300" placeholder="发消息…"><button id="direct-send" class="primary" type="button">发送</button></div></div></section>
-      <section id="club-panel-tasks" class="club-panel" hidden><div class="task-summary"><span>一次性任务</span><b>完成后领取摸鱼币</b></div><div id="task-list" class="task-list"></div></section>
+      <section id="club-panel-tasks" class="club-panel" hidden><div class="task-summary"><span>TASK CENTER</span><b>完成任务领取摸鱼币</b><small>每日任务于北京时间 00:00 重置</small></div><div id="task-list" class="task-list"></div></section>
       <section id="club-panel-profile" class="club-panel" hidden><div id="club-profile" class="club-profile"></div></section>
     </aside>
     <button id="club-drawer-backdrop" class="club-drawer-backdrop" type="button" aria-label="关闭 Club 面板" hidden></button>

@@ -29,6 +29,7 @@ small { color: #c5af91; font-size: 11px; }
 .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .section-heading h2 { margin: 0; font-size: 21px; }
 #rooms { display: grid; align-content: start; gap: 10px; margin-top: 18px; overflow: auto; overscroll-behavior: contain; }
+#rooms:empty{place-items:center;align-content:center;border:1px dashed rgb(219 184 120 / 20%);border-radius:16px;background:radial-gradient(circle at 50% 38%,rgb(168 51 46 / 14%),transparent 42%)}#rooms:empty::after{content:'楚河汉界已铺好\A等你开第一桌';color:#ad9271;text-align:center;white-space:pre-line;line-height:1.8}
 .room-card { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; padding: 15px 16px; text-align: left; }
 .room-card span { display: grid; gap: 5px; min-width: 0; }
 .room-card strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -50,7 +51,7 @@ small { color: #c5af91; font-size: 11px; }
 #board { display: grid; width: min(100%, calc((100dvh - 274px) * .9)); max-height: calc(100dvh - 274px); margin: 4px auto; grid-template-columns: repeat(9, 1fr); grid-template-rows: repeat(10, 1fr); aspect-ratio: 9 / 10; border-radius: 9px; background: url('./board.svg') center / 100% 100%; box-shadow: 0 0 0 4px #b48b53, 0 0 0 6px #6c4925, 0 16px 30px rgb(0 0 0 / 34%); }
 .cell { position: relative; display: grid; min-width: 0; min-height: 0; padding: 0; place-items: center; border: 0; border-radius: 0; background: transparent; }
 .cell:hover { background: rgb(255 255 255 / 10%); transform: none; }
-.piece { position: relative; display: grid; width: 84%; place-items: center; aspect-ratio: 1; border: 1px solid #ad8248; border-radius: 50%; background: radial-gradient(circle at 35% 25%, #fff3d5, #e1bd7f 82%); font: 900 clamp(17px, 3.2vmin, 31px) "STKaiti", "KaiTi", serif; box-shadow: inset 0 2px 1px #fff9e9, inset 0 -3px 2px #bd8f4f, 0 3px 0 #77512b, 0 5px 7px rgb(28 14 5 / 46%); }
+.piece { position: relative; display: grid; width: 84%; place-items: center; aspect-ratio: 1; border: 1px solid #ad8248; border-radius: 50%; background: #e1bd7f url('./piece-blank-v1.webp') center / cover no-repeat; font: 900 clamp(17px, 3.2vmin, 31px) "STKaiti", "KaiTi", serif; box-shadow: inset 0 2px 1px #fff9e9, inset 0 -3px 2px #bd8f4f, 0 3px 0 #77512b, 0 5px 7px rgb(28 14 5 / 46%); }
 .piece::after { content: ''; position: absolute; inset: 4px; border: 1px solid currentColor; border-radius: 50%; opacity: .62; }
 .cell.selected .piece { transform: translateY(-3px); outline: 3px solid #d4b463; outline-offset: 1px; }
 .cell.in-check .piece { outline: 3px solid #df4f45; outline-offset: 2px; box-shadow: 0 0 20px #e34b428c; }
@@ -59,6 +60,7 @@ small { color: #c5af91; font-size: 11px; }
 #result { display: grid; gap: 5px; margin: 8px 0; padding: 12px; text-align: center; border: 1px solid rgb(226 184 106 / 45%); border-radius: 14px; background: rgb(133 49 40 / 28%); }
 #result-title { color: #f1c478; font: 700 25px "STKaiti", "KaiTi", serif; }
 #result-reason, #feedback { color: #d5bfa1; font-size: 12px; }
+#result{position:absolute;z-index:8;top:50%;left:50%;width:min(430px,calc(100% - 28px));padding:20px;gap:7px;border-color:rgb(226 184 106 / 58%);background:linear-gradient(150deg,rgb(45 18 14 / 96%),rgb(76 31 23 / 96%));box-shadow:0 24px 70px rgb(0 0 0 / 46%);transform:translate(-50%,-50%)}#result>small{color:#d5a756;font-size:9px;font-weight:900;letter-spacing:.16em}#result-economy,#result-ready{color:#e6d6bd;font-size:11px}#result-ready{margin-top:4px;padding:8px;border-radius:10px;background:rgb(255 255 255 / 7%)}#result-actions{display:flex;margin-top:7px;gap:7px;flex-wrap:wrap;justify-content:center}#result-actions button{min-height:38px;padding:0 12px;border:1px solid rgb(226 184 106 / 44%);border-radius:11px;color:#f8e7c5;background:rgb(255 255 255 / 8%);font-weight:800}#result-actions button:last-child:not(:disabled){color:#40280b;background:#e2b85d}
 #claim-panel, #actions, #respond, #chat-form { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 #claim-panel { justify-content: space-between; margin-top: 8px; padding: 10px 12px; border-radius: 14px; background: rgb(255 255 255 / 6%); }
 input { min-width: 0; padding: 10px 12px; color: #fff4e2; border: 1px solid var(--line); border-radius: 10px; background: rgb(255 255 255 / 8%); }
@@ -118,3 +120,31 @@ summary { cursor: pointer; font-weight: 700; }
 /* Club-integrated lobby controls. */
 .club-link{margin-left:auto;padding:9px 13px;border:1px solid rgba(231,202,137,.34);border-radius:12px;color:#f0d180;background:rgba(6,31,25,.72);font-size:11px;font-weight:800;text-decoration:none}
 .create-strip{display:flex;flex-wrap:wrap;gap:7px;margin-top:18px}.create-strip button{min-height:38px;padding:0 13px;border:1px solid rgba(234,207,145,.34);border-radius:12px;color:#fff7df;background:rgba(10,46,38,.78);font-weight:800}.create-strip button:first-child{color:#352709;background:linear-gradient(145deg,#ebcc78,#c6963e)}
+.club-embedded .app-shell{padding-top:8px}
+.club-embedded .game-header{height:40px;min-height:40px;padding:0;justify-content:flex-end;border-bottom:1px solid var(--line)}
+.club-embedded .game-header .brand{display:none}
+.club-embedded .club-link{display:flex;height:34px;margin-right:auto;padding:0 10px;align-items:center}
+
+/* v4: game-first responsive shell. Auxiliary content becomes a drawer on phones. */
+.table-toolbar-actions,.drawer-handle{display:flex;align-items:center;gap:10px}.social-toggle,.drawer-handle{display:none}
+@media (max-width:760px), (max-height:560px) and (orientation:landscape){
+  .app-shell{width:100%;padding:max(8px,env(safe-area-inset-top)) 8px max(8px,env(safe-area-inset-bottom));}
+  .game-header{display:grid;min-height:70px;padding:0 4px 7px;grid-template-columns:minmax(0,1fr) auto;gap:2px 8px;border-bottom:1px solid var(--line)}
+  .brand{gap:9px}.seal{width:38px;height:38px;border-radius:12px;font-size:22px}h1{margin:0;font-size:17px;letter-spacing:.08em}.club-link{margin:0;padding:8px 11px}
+  #status{grid-column:1/-1;max-width:none;overflow:hidden;color:#cdb99d;font-size:10px;text-align:left;text-overflow:ellipsis;white-space:nowrap}
+  .lobby{height:100%;padding:8px;grid-template-columns:1fr;grid-template-rows:minmax(136px,.7fr) minmax(0,1.3fr);gap:8px;overflow:hidden;border-radius:20px}
+  .lobby-hero{min-height:0;padding:15px 16px;justify-content:center;border-radius:15px;background:linear-gradient(90deg,rgb(27 13 8 / 91%),rgb(112 45 30 / 46%))}
+  .lobby-hero h2{max-width:none;margin:4px 0 6px;font-size:28px;line-height:1.05}.lobby-hero p{overflow:hidden;margin:0;color:#d5c2a6;font-size:11px;line-height:1.5;text-overflow:ellipsis;white-space:nowrap}
+  .create-strip{display:grid;margin-top:10px;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px}.create-strip button{min-height:34px;padding:0 5px;border-radius:9px;font-size:11px}
+  .lobby-panel{min-height:0;padding:13px;border-radius:16px}.section-heading h2{font-size:18px}.section-heading .eyebrow{margin-bottom:3px}.section-heading button{min-height:34px;padding:5px 10px;font-size:11px}#rooms{min-height:0;margin-top:10px}.room-card{min-height:58px;padding:10px 12px}
+  .layout{position:relative;display:block;min-height:0;overflow:hidden}.board-stage{height:100%;padding:7px 9px 8px;align-content:start;border-radius:18px;grid-template-rows:repeat(7,auto)}
+  .table-toolbar-actions{gap:7px}.step-clock{white-space:nowrap}.step-clock b{font-size:17px}.social-toggle{display:block;min-height:32px;padding:4px 9px;border-radius:9px;font-size:10px}
+  .board-stage>*{min-width:0}.table-toolbar{width:100%;min-width:0}.table-toolbar-actions{min-width:0;flex-shrink:1}
+  #board{width:calc((100dvh - 238px)*.9);max-width:calc(100vw - 42px);max-height:calc(100dvh - 238px);margin:3px auto;justify-self:center}
+  .player{margin:3px 0;padding:4px 7px}.avatar{width:28px;height:28px;font-size:18px}.clock{font-size:17px}.piece{font-size:clamp(14px,5.7vw,25px)}
+  #claim-panel{margin-top:4px;padding:6px 8px}#actions{margin-top:4px}#actions button,#respond button{min-height:34px;padding:6px 10px;font-size:11px}#feedback{margin-top:3px}
+  .side-panel{position:absolute;z-index:12;right:0;bottom:0;left:0;display:grid;height:min(64%,480px);padding:10px 12px max(10px,env(safe-area-inset-bottom));grid-template-columns:minmax(105px,.72fr) minmax(0,1.28fr);grid-template-rows:auto auto minmax(0,1fr) auto;gap:8px;border-radius:22px 22px 0 0;background:rgb(24 16 13 / 97%);box-shadow:0 -18px 50px rgb(0 0 0 / 48%);transform:translateY(calc(100% + 14px));transition:transform .22s ease;pointer-events:none}
+  .side-panel.open{transform:translateY(0);pointer-events:auto}.drawer-handle{display:flex;grid-column:1/-1;justify-content:space-between;padding-bottom:7px;border-bottom:1px solid var(--line)}.drawer-handle button{min-height:30px;padding:3px 9px}.moves{grid-row:2/5;padding:4px 8px 4px 0;border-right:1px solid var(--line);border-bottom:0}.chat-heading,#chat-list,#chat-form{grid-column:2}#moves-list{max-height:calc(100% - 28px)}
+}
+@media (max-width:420px){.side-panel{grid-template-columns:1fr}.moves{display:none}.chat-heading,#chat-list,#chat-form{grid-column:1}.lobby-hero p{display:none}.create-strip{margin-top:8px}}
+@media (max-height:560px) and (orientation:landscape){.app-shell{padding:6px 8px}.game-header{min-height:48px;padding-bottom:5px}.brand small,#status{display:none}.seal{width:34px;height:34px}.lobby{grid-template-columns:minmax(240px,.78fr) minmax(340px,1.22fr);grid-template-rows:minmax(0,1fr)}.lobby-hero{min-height:0}.lobby-hero h2{font-size:25px}.layout{height:100%}#board{width:min(52vw,calc((100dvh - 100px)*.9));max-height:calc(100dvh - 100px)}.player{position:absolute;z-index:2;top:48px;width:170px}.player#black-player{left:10px}.player#red-player{right:10px}.side-panel{right:8px;bottom:8px;left:auto;width:min(430px,55vw);height:calc(100% - 16px);border-radius:20px}}

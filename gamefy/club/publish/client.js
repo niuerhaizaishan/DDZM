@@ -28,8 +28,10 @@ export class ClubClient {
     this.sleepImpl = sleepImpl;
     this.uid = null;
     this.userInfo = null;
+    this.clubPlayer = null;
     this.identityPromise = null;
     this.stop = null;
+    this.socialStop = null;
   }
 
   async identity(refresh = false) {
@@ -37,6 +39,7 @@ export class ClubClient {
       this.stop?.();
       this.uid = null;
       this.userInfo = null;
+      this.clubPlayer = null;
       this.identityPromise = null;
     }
     if (this.uid) return this.uid;
@@ -46,7 +49,7 @@ export class ClubClient {
           if (typeof info?.id !== "string" || !info.id.trim()) throw new Error("无法读取玩家身份，请重试");
           this.uid = info.id;
           this.userInfo = info;
-          await this.clubRequest("/session", {
+          this.clubPlayer = await this.clubRequest("/session", {
             method: "POST",
             body: JSON.stringify({
               name: info.name || info.displayName || info.nickname || null,
@@ -123,8 +126,11 @@ export class ClubClient {
     return this.request(`/rooms/${roomId}/chat`, {method: "POST", body: JSON.stringify({request_id: requestId(), text})});
   }
   profile() { return this.clubRequest("/profile"); }
+  activeRoom() { return this.clubRequest("/active-room"); }
+  playerProfile(playerId) { return this.clubRequest(`/players/${playerId}`); }
   channel() { return this.clubRequest("/channel"); }
   sendChannel(text) { return this.clubRequest("/channel", {method: "POST", body: JSON.stringify({request_id: requestId(), text})}); }
+  roomStatus(game, roomId) { return this.clubRequest(`/room-status/${encodeURIComponent(game)}/${encodeURIComponent(roomId)}`); }
   friends() { return this.clubRequest("/friends"); }
   requestFriend(playerId) { return this.clubRequest("/friends", {method: "POST", body: JSON.stringify({player_id: playerId})}); }
   acceptFriend(requestIdValue) { return this.clubRequest(`/friends/${requestIdValue}/accept`, {method: "POST"}); }
@@ -132,6 +138,7 @@ export class ClubClient {
   sendDirectMessage(playerId, text) { return this.clubRequest(`/friends/${playerId}/messages`, {method: "POST", body: JSON.stringify({request_id: requestId(), text})}); }
   tasks() { return this.clubRequest("/tasks"); }
   claimTask(taskKey) { return this.clubRequest("/tasks/claim", {method: "POST", body: JSON.stringify({task_key: taskKey})}); }
+  presence() { return this.clubRequest("/presence", {method: "POST"}); }
   follow(roomId, onUpdate, onError) {
     this.stop?.();
     const controller = new AbortController();
@@ -149,5 +156,47 @@ export class ClubClient {
     })();
     return this.stop;
   }
-  dispose() { this.stop?.(); this.stop = null; }
+  followSocial(onUpdate, onError) {
+    this.socialStop?.();
+    const controller = new AbortController();
+    this.socialStop = () => controller.abort();
+    (async () => {
+      while (!controller.signal.aborted) {
+        try {
+          const uid = await this.identity();
+          const response = await this.fetchImpl(`${this.apiRoot}/social/events`, {
+            signal: controller.signal,
+            headers: {Authorization: `ClubUid ${uid}`},
+          });
+          if (!response.ok || !response.body) throw new Error("公共频道实时连接失败");
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          while (!controller.signal.aborted) {
+            const {done, value} = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, {stream: true}).replaceAll("\r\n", "\n");
+            let boundary;
+            while ((boundary = buffer.indexOf("\n\n")) >= 0) {
+              const frame = buffer.slice(0, boundary);
+              buffer = buffer.slice(boundary + 2);
+              const data = frame.split("\n").filter(line => line.startsWith("data:"))
+                .map(line => line.slice(5).trimStart()).join("\n");
+              if (data) onUpdate(JSON.parse(data));
+            }
+          }
+        } catch (error) {
+          if (!controller.signal.aborted) onError(error);
+        }
+        if (!controller.signal.aborted) await this.sleepImpl(1000);
+      }
+    })();
+    return this.socialStop;
+  }
+  dispose() {
+    this.stop?.();
+    this.socialStop?.();
+    this.stop = null;
+    this.socialStop = null;
+  }
 }

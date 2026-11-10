@@ -1,5 +1,6 @@
 import {ClubClient} from "./client.js";
 import {CONFIG} from "./config.js";
+import {createTileFace, tileLabel, tileSuit} from "./mahjong-faces.js";
 
 const $ = selector => document.querySelector(selector);
 const sdk = window.dzmm;
@@ -8,6 +9,20 @@ let rooms = [], room = null, stopFollow = null, selectedTile = null, receivedAt 
 let chatOpen = false, unreadChat = 0, seenMessageCount = 0, messagesInitialized = false;
 let dismissedResult = null;
 let activeClubTab = "channel", activeDirectFriend = null;
+let socialVersion = null, socialRefreshTimer = null, channelRenderVersion = 0, directRenderVersion = 0;
+let actionBusy = false, handGesture = null, handHoldTimer = null, ignoreTileClickUntil = 0;
+let presenceTimer = null;
+let activeClubModule = null, clubModuleVersion = 0, clubModuleRoom = null;
+const roomSharePrefix = "MoyuClubRoom:";
+const gameNames = {mahjong: "摸鱼麻将", chess: "群聊象棋", doudizhu: "斗地主", drawguess: "你画我猜", texas: "德州扑克", zhajinhua: "炸金花", blackjack: "21 点"};
+const clubModules = {
+  chess: {base: "./games/chess", title: "群聊象棋"},
+  doudizhu: {base: "./games/doudizhu", title: "斗地主"},
+  drawguess: {base: "./games/drawguess", title: "你画我猜"},
+  texas: {base: "./games/card-table", title: "德州扑克"},
+  zhajinhua: {base: "./games/card-table", title: "炸金花"},
+  blackjack: {base: "./games/card-table", title: "21 点"},
+};
 
 const winds = ["东", "南", "西", "北"];
 const phaseNames = {waiting: "候场", playing: "对局中", reaction: "鸣牌响应", hand_finished: "本局结算", match_finished: "终局", cancelled: "已取消"};
@@ -46,6 +61,7 @@ async function toggleFullscreen() {
   }
 }
 async function returnToLobby() {
+  if (["playing", "reaction"].includes(room?.phase) && !confirm("牌局尚未结束。返回后将由系统按倒计时自动摸切，重新进入 Club 会回到本桌。确定返回吗？")) return;
   const exit = document.exitFullscreen || document.webkitExitFullscreen;
   if (fullscreenElement() && exit) {
     try { await exit.call(document); } catch {}
@@ -57,38 +73,9 @@ function secondsLeft() {
   const server = Date.parse(room.server_time) + (Date.now() - receivedAt);
   return Math.max(0, Math.ceil((Date.parse(room.deadline) - server) / 1000));
 }
-function tileType(id) { return Math.floor(id / 4); }
-function tileLabel(id) {
-  const type = tileType(id);
-  if (type < 9) return `${type + 1}萬`;
-  if (type < 18) return `${type - 8}筒`;
-  if (type < 27) return `${type - 17}索`;
-  return ["東", "南", "西", "北", "白", "發", "中"][type - 27];
-}
-function tileFace(id) {
-  const type = tileType(id);
-  const face = document.createElement("span"); face.className = "tile-face";
-  if (type < 9) {
-    face.classList.add("man-face");
-    const rank = document.createElement("b"); rank.textContent = ["一", "二", "三", "四", "五", "六", "七", "八", "九"][type];
-    const suit = document.createElement("i"); suit.textContent = "萬"; face.append(rank, suit); return face;
-  }
-  if (type < 18) {
-    face.classList.add("pin-face"); face.dataset.rank = String(type - 8);
-    for (let index = 0; index <= type - 9; index += 1) { const pip = document.createElement("i"); pip.className = `pip pip-${index % 3}`; face.append(pip); }
-    return face;
-  }
-  if (type < 27) {
-    face.classList.add("sou-face"); face.dataset.rank = String(type - 17);
-    for (let index = 0; index <= type - 18; index += 1) { const bamboo = document.createElement("i"); bamboo.className = `bamboo bamboo-${index % 2}`; face.append(bamboo); }
-    return face;
-  }
-  face.classList.add("honor-face", `honor-${type - 27}`); face.textContent = ["東", "南", "西", "北", "白", "發", "中"][type - 27]; return face;
-}
-function tileSuit(id) { const type = tileType(id); return type < 9 ? "man" : type < 18 ? "pin" : type < 27 ? "sou" : "honor"; }
 function tileNode(id, small = false) {
   const tile = document.createElement("button");
-  tile.type = "button"; tile.className = `tile ${small ? "small" : ""}`; tile.dataset.id = String(id); tile.dataset.suit = tileSuit(id); tile.append(tileFace(id)); tile.setAttribute("aria-label", tileLabel(id)); tile.title = tileLabel(id);
+  tile.type = "button"; tile.className = `tile ${small ? "small" : ""}`; tile.dataset.id = String(id); tile.dataset.suit = tileSuit(id); tile.append(createTileFace(id)); tile.setAttribute("aria-label", tileLabel(id)); tile.title = tileLabel(id);
   return tile;
 }
 function avatarNode(player, className = "") {
@@ -99,12 +86,18 @@ function avatarNode(player, className = "") {
   }
   return avatar;
 }
+function playerButton(player, className = "") {
+  const button = document.createElement("button"); button.type = "button"; button.className = `player-link ${className}`.trim(); button.setAttribute("aria-label", `查看${player?.name || "玩家"}的主页`); button.append(avatarNode(player, className ? `${className}-avatar` : ""));
+  if (player?.id) button.addEventListener("click", () => openPlayerProfile(player.id));
+  return button;
+}
 function gameCard(game) {
   const button = document.createElement("button"); button.type = "button"; button.className = "game-card";
+  button.dataset.game = game.id;
   const art = document.createElement("span"); art.className = `game-art ${game.id}`; art.textContent = game.icon; art.style.backgroundImage = `url("${game.image}")`; art.setAttribute("aria-hidden", "true");
   const copy = document.createElement("div"); const name = document.createElement("strong"); name.textContent = game.name; const description = document.createElement("small"); description.textContent = game.description; copy.append(name, description);
   const arrow = document.createElement("b"); arrow.textContent = "›"; button.append(art, copy, arrow);
-  if (game.path) button.addEventListener("click", () => { window.location.href = game.path; });
+  if (game.path) button.addEventListener("click", () => void openClubGame(game.id));
   return button;
 }
 function renderGames() {
@@ -114,24 +107,105 @@ function renderGames() {
   grid.append(mahjongCard, ...CONFIG.games.map(gameCard));
 }
 
+function decodeRoomShare(text) {
+  if (typeof text !== "string" || !text.startsWith(roomSharePrefix)) return null;
+  try {
+    const value = JSON.parse(text.slice(roomSharePrefix.length));
+    if (!gameNames[value.game] || typeof value.roomId !== "string" || !/^[0-9a-f-]{36}$/i.test(value.roomId)) return null;
+    return {game: value.game, roomId: value.roomId, host: String(value.host || "玩家").slice(0, 40)};
+  } catch { return null; }
+}
+function roomShareText(value) { return `${roomSharePrefix}${JSON.stringify({game: value.game, roomId: value.roomId, host: value.host})}`; }
+function joinSharedRoom(value) {
+  closeClubDrawer();
+  if (value.game === "mahjong") { void enterRoom(value.roomId, null, true); return; }
+  const game = CONFIG.games.find(item => item.id === value.game); if (!game) return;
+  void openClubGame(game.id, value.roomId);
+}
+async function hydrateRoomShare(row, share) {
+  const meta = row.querySelector(".room-share-meta");
+  const action = row.querySelector(".room-share-action");
+  try {
+    const status = await client.roomStatus(share.game, share.roomId);
+    meta.textContent = `${status.label} · 人数 ${status.occupied}/${status.capacity}`;
+    row.dataset.roomState = status.state;
+    action.disabled = !status.enterable;
+    action.textContent = status.state === "started" ? "进入观战" : status.state === "waiting" ? "进入房间" : status.label;
+    if (status.enterable) action.addEventListener("click", () => joinSharedRoom({...share, game: status.game}), {once: true});
+  } catch {
+    meta.textContent = "状态暂不可用";
+    action.textContent = "尝试进入";
+    action.disabled = false;
+    action.addEventListener("click", () => joinSharedRoom(share), {once: true});
+  }
+}
 function messageRow(item, direct = false) {
   const row = document.createElement("article"); row.className = `club-message${direct && item.mine ? " mine" : ""}`;
-  const name = document.createElement("b"); name.textContent = direct ? (item.mine ? "我" : activeDirectFriend?.name || "好友") : item.player?.name || "玩家";
-  const text = document.createElement("p"); text.textContent = item.text; row.append(name, text); return row;
+  const player = direct ? (item.mine ? client.clubPlayer : activeDirectFriend) : item.player; const identity = document.createElement("span"); identity.className = "message-identity";
+  if (player) identity.append(playerButton(player, "message")); const name = document.createElement("b"); name.textContent = direct ? (item.mine ? "我" : activeDirectFriend?.name || "好友") : item.player?.name || "玩家"; if (player) { name.role = "button"; name.tabIndex = 0; name.addEventListener("click", () => openPlayerProfile(player.id)); } identity.append(name);
+  const share = direct ? null : decodeRoomShare(item.text);
+  if (!share) { const text = document.createElement("p"); text.textContent = item.text; row.append(identity, text); return row; }
+  row.classList.add("room-share-message"); const title = document.createElement("strong"); title.textContent = `${gameNames[share.game]} · ${share.host}的房间`;
+  const meta = document.createElement("span"); meta.className = "room-share-meta"; meta.textContent = "正在读取房间状态…";
+  const action = document.createElement("button"); action.type = "button"; action.className = "room-share-action"; action.textContent = "读取中"; action.disabled = true;
+  row.append(identity, title, meta, action); row.roomShare = share; return row;
 }
 async function refreshChannelPreview() {
   try {
     const messages = await client.channel(); const latest = messages.at(-1);
-    $("#channel-peek-text").textContent = latest ? `${latest.player.name}：${latest.text}` : "还没有消息，来打个招呼吧";
+    const share = latest && decodeRoomShare(latest.text);
+    $("#channel-peek-text").textContent = latest ? (share ? `${latest.player.name} 分享了${gameNames[share.game]}房间` : `${latest.player.name}：${latest.text}`) : "还没有消息，来打个招呼吧";
     return messages;
   } catch (error) {
     $("#channel-peek-text").textContent = "公共频道暂时连接不上";
     return [];
   }
 }
+async function refreshPresence() {
+  try {
+    const presence = await client.presence();
+    $("#club-online-count").textContent = String(presence.online);
+    $("#club-playing-count").textContent = String(presence.playing);
+    $("#club-presence").classList.remove("unavailable");
+  } catch {
+    $("#club-presence").classList.add("unavailable");
+  }
+}
+function startPresenceHeartbeat() {
+  clearInterval(presenceTimer);
+  void refreshPresence();
+  presenceTimer = setInterval(refreshPresence, 15000);
+}
+function startSocialFollowing() {
+  client.followSocial(next => {
+    const previous = socialVersion;
+    socialVersion = next;
+    const channelChanged = !previous || previous.channel !== next.channel;
+    const directChanged = !previous || previous.direct !== next.direct;
+    const friendsChanged = !previous || previous.friends !== next.friends;
+    clearTimeout(socialRefreshTimer);
+    socialRefreshTimer = setTimeout(async () => {
+      const drawerOpen = !$("#club-drawer").hidden;
+      try {
+        if (channelChanged) {
+          if (drawerOpen && activeClubTab === "channel") await renderChannel();
+          else await refreshChannelPreview();
+        }
+        if (drawerOpen && activeClubTab === "friends") {
+          if (directChanged && activeDirectFriend) await openDirect(activeDirectFriend);
+          else if (friendsChanged) await renderFriends();
+        }
+      } catch {}
+    }, 50);
+  }, () => {});
+}
 async function renderChannel() {
-  const list = $("#club-channel-messages"); list.replaceChildren();
-  const messages = await refreshChannelPreview(); messages.forEach(item => list.append(messageRow(item))); list.scrollTop = list.scrollHeight;
+  const version = ++channelRenderVersion;
+  const messages = await refreshChannelPreview();
+  if (version !== channelRenderVersion) return;
+  const list = $("#club-channel-messages"); const rows = messages.map(item => messageRow(item)); list.replaceChildren(...rows);
+  await Promise.allSettled(rows.filter(row => row.roomShare).map(row => hydrateRoomShare(row, row.roomShare)));
+  if (version === channelRenderVersion) list.scrollTop = list.scrollHeight;
 }
 function friendCard(player, actionLabel, action) {
   const row = document.createElement("div"); row.className = "friend-card"; const avatar = avatarNode(player, "friend-avatar");
@@ -139,11 +213,13 @@ function friendCard(player, actionLabel, action) {
   const button = document.createElement("button"); button.type = "button"; button.className = "secondary compact"; button.textContent = actionLabel; button.addEventListener("click", action); row.append(avatar, copy, button); return row;
 }
 async function openDirect(player) {
-  activeDirectFriend = player; $("#direct-name").textContent = player.name; show("#direct-chat");
-  const list = $("#direct-messages"); list.replaceChildren(); const messages = await client.directMessages(player.id); messages.forEach(item => list.append(messageRow(item, true))); list.scrollTop = list.scrollHeight;
+  const version = ++directRenderVersion; activeDirectFriend = player; $("#direct-name").textContent = player.name; show("#direct-chat");
+  const messages = await client.directMessages(player.id);
+  if (version !== directRenderVersion || activeDirectFriend?.id !== player.id) return;
+  const list = $("#direct-messages"); list.replaceChildren(...messages.map(item => messageRow(item, true))); list.scrollTop = list.scrollHeight;
 }
 async function renderFriends() {
-  show("#direct-chat", false); activeDirectFriend = null; const data = await client.friends(); const list = $("#friend-list"); list.replaceChildren();
+  directRenderVersion += 1; show("#direct-chat", false); activeDirectFriend = null; const data = await client.friends(); const list = $("#friend-list"); list.replaceChildren();
   for (const item of data.incoming) list.append(friendCard(item, "接受", async () => { await client.acceptFriend(item.request_id); await renderFriends(); }));
   for (const item of data.friends) list.append(friendCard(item, "私聊", () => openDirect(item).catch(error => feedback(error.message, "error"))));
   for (const item of data.outgoing) list.append(friendCard(item, "等待接受", () => {}));
@@ -152,23 +228,44 @@ async function renderFriends() {
 const taskNames = {employment: "加入公司", checkin: "完成一次打卡", random_event: "完成一次随机事件", five_rounds: "小游戏完成 5 轮", activity: "活跃彩蛋", dark_market: "上架一次暗网商品"};
 async function renderTasks() {
   const tasks = await client.tasks(); const list = $("#task-list"); list.replaceChildren();
-  tasks.filter(item => !item.hidden || item.eligible || item.claimed).forEach(item => {
-    const row = document.createElement("div"); row.className = "task-card"; const copy = document.createElement("div"); const name = document.createElement("b"); name.textContent = taskNames[item.key]; const reward = document.createElement("small"); reward.textContent = `奖励 ${item.reward} 摸鱼币`; copy.append(name, reward);
-    const button = document.createElement("button"); button.type = "button"; button.className = "primary compact"; button.textContent = item.claimed ? "已领取" : item.eligible ? "领取" : "未完成"; button.disabled = item.claimed || !item.eligible;
-    button.addEventListener("click", async () => { try { await client.claimTask(item.key); await renderTasks(); await renderProfile(); } catch (error) { feedback(error.message, "error"); } }); row.append(copy, button); list.append(row);
-  });
+  const visible = tasks.filter(item => !item.hidden || item.eligible || item.claimed);
+  for (const cadence of ["once", "daily"]) {
+    const items = visible.filter(item => item.cadence === cadence);
+    if (!items.length) continue;
+    const section = document.createElement("section"); section.className = `task-group task-group-${cadence}`;
+    const heading = document.createElement("header"); const title = document.createElement("b"); title.textContent = cadence === "once" ? "一次性任务" : "每日任务"; const note = document.createElement("small"); note.textContent = cadence === "once" ? "每个账号仅可领取一次" : "每日 00:00 刷新"; heading.append(title, note); section.append(heading);
+    items.forEach(item => {
+      const row = document.createElement("div"); row.className = "task-card"; const copy = document.createElement("div"); const line = document.createElement("span"); const name = document.createElement("b"); name.textContent = taskNames[item.key]; const cadenceBadge = document.createElement("em"); cadenceBadge.textContent = cadence === "once" ? "仅一次" : "每日"; line.append(name, cadenceBadge); const reward = document.createElement("small"); reward.textContent = `+${item.reward} 摸鱼币`; copy.append(line, reward);
+      const button = document.createElement("button"); button.type = "button"; button.className = "primary compact"; button.textContent = item.claimed ? "已领取" : item.eligible ? "领取奖励" : "未完成"; button.disabled = item.claimed || !item.eligible;
+      button.addEventListener("click", async () => { try { await client.claimTask(item.key); await renderTasks(); await renderProfile(); } catch (error) { feedback(error.message, "error"); } }); row.append(copy, button); section.append(row);
+    });
+    list.append(section);
+  }
 }
-async function renderProfile() {
-  const profile = await client.profile(); const holder = $("#club-profile"); holder.replaceChildren(); const avatar = avatarNode(profile, "profile-avatar");
+async function renderProfile(playerId = null) {
+  const profile = playerId ? await client.playerProfile(playerId) : await client.profile(); const holder = $("#club-profile"); holder.replaceChildren(); const avatar = avatarNode(profile, "profile-avatar");
   const name = document.createElement("h2"); name.textContent = profile.name; const role = document.createElement("p"); role.textContent = profile.employee ? "已入职玩家" : "游客玩家";
-  const balance = document.createElement("strong"); balance.textContent = profile.employee ? `${profile.balance} 摸鱼币` : "入职后可参加摸鱼币场并领取任务";
+  const id = document.createElement("code"); id.textContent = `玩家编号：${profile.id.slice(0, 8)}`;
+  const balance = document.createElement("strong"); balance.className = "balance-chip"; balance.textContent = profile.employee ? `${profile.balance} 摸鱼币` : "入职后可参加摸鱼币场并领取任务";
+  if (playerId && profile.relationship !== "self") {
+    const actions = document.createElement("div"); actions.className = "profile-actions";
+    const button = document.createElement("button"); button.type = "button"; button.className = "primary";
+    if (profile.relationship === "friend") { button.textContent = "发起私聊"; button.addEventListener("click", () => { openClubDrawer("friends"); openDirect(profile).catch(error => feedback(error.message, "error")); }); }
+    else if (profile.relationship === "none") { button.textContent = "添加好友"; button.addEventListener("click", async () => { try { await client.requestFriend(profile.id); await renderProfile(profile.id); } catch (error) { feedback(error.message, "error"); } }); }
+    else { button.textContent = profile.relationship === "incoming" ? "待你在好友页接受" : "好友申请已发送"; button.disabled = true; }
+    actions.append(button); holder.append(avatar, name, role, actions, id); return;
+  }
   const stats = document.createElement("section"); stats.className = "profile-stats";
   const total = profile.stats?.total || {played: 0, wins: 0, losses: 0, draws: 0};
   const summary = document.createElement("b"); summary.textContent = `对局 ${total.played} · 胜 ${total.wins} · 负 ${total.losses} · 平 ${total.draws}`; stats.append(summary);
-  const labels = {mahjong: "摸鱼麻将", chess: "群聊象棋", doudizhu: "斗地主", drawguess: "你画我猜"};
+  const labels = {mahjong: "摸鱼麻将", chess: "群聊象棋", doudizhu: "斗地主", drawguess: "你画我猜", texas: "德州扑克", zhajinhua: "炸金花", blackjack: "21 点"};
   Object.entries(labels).forEach(([key, label]) => { const item = profile.stats?.games?.[key] || {played: 0, wins: 0, losses: 0, draws: 0}; const row = document.createElement("small"); row.textContent = `${label} · ${item.played} 局 · ${item.wins}胜 ${item.losses}负 ${item.draws}平`; stats.append(row); });
-  const id = document.createElement("code"); id.textContent = `玩家 ID：${profile.id}`; holder.append(avatar, name, role, balance, stats, id);
+  const ledger = document.createElement("section"); ledger.className = "profile-ledger"; const ledgerTitle = document.createElement("header"); ledgerTitle.textContent = "最近摸鱼币记录"; ledger.append(ledgerTitle);
+  for (const item of profile.recent_transactions || []) { const row = document.createElement("div"); const copy = document.createElement("span"); const label = document.createElement("b"); label.textContent = item.label; const at = document.createElement("small"); at.textContent = new Date(item.at).toLocaleString("zh-CN", {month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit"}); copy.append(label, at); const amount = document.createElement("strong"); amount.textContent = `${item.amount > 0 ? "+" : ""}${item.amount}`; amount.className = item.amount >= 0 ? "gain" : "loss"; row.append(copy, amount); ledger.append(row); }
+  if (!(profile.recent_transactions || []).length) { const empty = document.createElement("p"); empty.textContent = "还没有摸鱼币记录"; ledger.append(empty); }
+  holder.append(avatar, name, role, balance, stats, ledger, id);
 }
+async function openPlayerProfile(playerId) { await openClubDrawer("profile"); await renderProfile(playerId); }
 async function openClubDrawer(tab = "channel") {
   activeClubTab = tab; show("#club-drawer"); show("#club-drawer-backdrop"); document.body.classList.add("drawer-open");
   document.querySelectorAll("[data-club-tab]").forEach(button => button.classList.toggle("active", button.dataset.clubTab === tab));
@@ -181,22 +278,81 @@ function closeClubDrawer() { show("#club-drawer", false); show("#club-drawer-bac
 async function boot(refresh = false) {
   feedback("正在进入 Club…"); sdk?.loading?.progress?.({phase: "runtime_initializing", progress: 20, message: "正在进入摸鱼 Club"});
   try {
-    const uid = await client.identity(refresh); $("#identity").textContent = `ID · ${uid.slice(0, 6)}`;
+    await client.identity(refresh); $("#identity").textContent = "在线"; startPresenceHeartbeat(); startSocialFollowing();
     renderGames();
     await refreshChannelPreview();
     const launch = await sdk?.getLaunchParams?.().catch?.(() => null);
     const roomId = launch?.roomId ?? launch?.params?.roomId;
     if (typeof roomId === "string" && roomId) await enterRoom(roomId);
-    else openHome();
+    else {
+      const activeRoom = await client.activeRoom().catch(() => null);
+      if (activeRoom?.game === "mahjong" && activeRoom?.room_id) {
+        await enterRoom(activeRoom.room_id);
+      } else if (activeRoom?.game && activeRoom?.room_id && clubModules[activeRoom.game]) {
+        await openClubGame(activeRoom.game, activeRoom.room_id);
+      } else openHome();
+    }
     feedback(); markReady();
   } catch (error) {
     feedback(error.message || "加载失败，请重试", "error"); sdk?.loading?.error?.("CLUB_BOOT_FAILED", error.message || "加载失败");
   }
 }
 function stopRoom() { stopFollow?.(); stopFollow = null; room = null; selectedTile = null; dismissedResult = null; chatOpen = false; unreadChat = 0; seenMessageCount = 0; messagesInitialized = false; show("#chat-drawer", false); $("#table").classList.remove("chat-open"); updateChatBadges(); }
-function openHome() { stopRoom(); show("#club-home"); show("#mahjong-lobby", false); show("#table", false); document.body.dataset.view = "home"; }
+function moduleCss(css, base) {
+  return css
+    .replaceAll(":root", ":host")
+    .replace(/\bhtml\b/g, ":host")
+    .replace(/url\((['"]?)\.\//g, `url($1${base}/`);
+}
+function stopClubModule() {
+  activeClubModule?.module?.unmount?.();
+  activeClubModule?.host?.remove();
+  activeClubModule = null;
+  clubModuleRoom = null;
+  $("#club-module-share").hidden = true;
+  window.MoyuClubRuntime?.clearRoomContext?.();
+}
+async function openClubGame(game, roomId = null) {
+  const config = clubModules[game];
+  if (!config) return;
+  const version = ++clubModuleVersion;
+  stopClubModule(); stopRoom(); show("#club-home", false); show("#mahjong-lobby", false); show("#table", false); show("#club-game"); document.body.dataset.view = "subgame";
+  const mount = $("#club-game-mount"); mount.replaceChildren();
+  const loading = document.createElement("div"); loading.className = "club-module-loading"; loading.textContent = `正在进入${config.title}…`; mount.append(loading);
+  try {
+    const [htmlResponse, cssResponse] = await Promise.all([fetch(`${config.base}/index.html`), fetch(`${config.base}/style.css`)]);
+    if (!htmlResponse.ok || !cssResponse.ok) throw new Error("游戏资源加载失败");
+    const source = await htmlResponse.text(); const css = await cssResponse.text();
+    if (version !== clubModuleVersion) return;
+    const parsed = new DOMParser().parseFromString(source, "text/html"); parsed.querySelectorAll("script").forEach(node => node.remove());
+    const host = document.createElement("div"); host.className = "club-module-host"; const root = host.attachShadow({mode: "open"});
+    const style = document.createElement("style"); style.textContent = `:host{display:block;width:100%;height:100%;min-height:0}\n${moduleCss(css, config.base)}`;
+    const body = document.createElement("body"); body.className = "club-module-body"; body.innerHTML = parsed.body.innerHTML;
+    body.querySelectorAll("[src],[href]").forEach(node => {
+      for (const attribute of ["src", "href"]) {
+        const value = node.getAttribute(attribute); if (value?.startsWith("./")) node.setAttribute(attribute, `${config.base}/${value.slice(2)}`);
+      }
+    });
+    root.append(style, body); mount.replaceChildren(host);
+    root.querySelectorAll(".club-link").forEach(link => { link.hidden = true; link.addEventListener("click", event => { event.preventDefault(); closeClubGame(); }); });
+    const duplicatePublicButton = root.querySelector("#public-channel"); if (duplicatePublicButton) duplicatePublicButton.hidden = true;
+    window.CHESS_API_BASE = CONFIG.apiBase; window.DOUDIZHU_CONFIG = {apiBase: CONFIG.apiBase};
+    window.MoyuClubModuleMount = {root, game, roomId, close: closeClubGame, reload: () => void openClubGame(game, roomId)};
+    const module = await import(`${config.base}/game.js?mount=${version}`);
+    delete window.MoyuClubModuleMount;
+    if (version !== clubModuleVersion) { module.unmount?.(); host.remove(); return; }
+    activeClubModule = {game, host, module};
+  } catch (error) {
+    delete window.MoyuClubModuleMount;
+    if (version !== clubModuleVersion) return;
+    loading.textContent = error.message || "游戏加载失败，请返回大厅重试"; loading.dataset.kind = "error";
+  }
+}
+function closeClubGame() { clubModuleVersion += 1; stopClubModule(); $("#club-game-mount").replaceChildren(); show("#club-game", false); openHome(); }
+function setMainNavigation(active) { document.querySelectorAll(".club-bottom-nav button").forEach(button => button.classList.toggle("active", button.id === active)); }
+function openHome() { stopRoom(); show("#club-home"); show("#mahjong-lobby", false); show("#table", false); show("#club-game", false); document.body.dataset.view = "home"; setMainNavigation("home-nav"); }
 async function openLobby() {
-  stopRoom(); show("#club-home", false); show("#mahjong-lobby"); show("#table", false); document.body.dataset.view = "lobby"; feedback("正在刷新牌桌…");
+  stopRoom(); show("#club-home", false); show("#mahjong-lobby"); show("#table", false); document.body.dataset.view = "lobby"; setMainNavigation("home-nav"); feedback("正在刷新牌桌…");
   try { rooms = await client.rooms(); renderRooms(); feedback(); } catch (error) { feedback(error.message, "error"); }
 }
 function renderRooms() {
@@ -226,7 +382,9 @@ async function enterRoom(roomId, initial = null, immersive = false) {
   if (immersive) void enterFullscreen(true);
   stopFollow?.(); feedback("正在落座…");
   try {
-    setRoom(initial || await client.snapshot(roomId)); show("#club-home", false); show("#mahjong-lobby", false); show("#table"); document.body.dataset.view = "table"; renderTable(); feedback();
+    const next = initial || await client.snapshot(roomId);
+    if (next.phase === "cancelled") { await openLobby(); return; }
+    setRoom(next); show("#club-home", false); show("#mahjong-lobby", false); show("#table"); document.body.dataset.view = "table"; renderTable(); feedback();
     stopFollow = client.follow(roomId, next => { const changed = renderKey(next) !== renderKey(room); setRoom(next); if (changed) renderTable(); feedback(); }, error => feedback(`${error.message}，正在重连…`, "warning"));
   } catch (error) { feedback(error.message, "error"); }
 }
@@ -268,7 +426,7 @@ function renderHand() {
   const holder = $("#hand"); holder.replaceChildren();
   if (room.seat === null) { const spectator = document.createElement("div"); spectator.className = "spectator"; spectator.textContent = "观战模式 · 手牌已隐藏"; holder.append(spectator); return; }
   const discardable = new Set(room.game.actions.discard || []);
-  room.game.hand.forEach(id => { const tile = tileNode(id); tile.disabled = !discardable.has(id); tile.classList.toggle("selected", id === selectedTile); tile.addEventListener("click", () => { selectedTile = selectedTile === id ? null : id; renderHand(); renderActions(); }); holder.append(tile); });
+  room.game.hand.forEach(id => { const tile = tileNode(id); tile.disabled = !discardable.has(id); tile.classList.toggle("selected", id === selectedTile); tile.addEventListener("click", () => { if (Date.now() < ignoreTileClickUntil) return; selectedTile = selectedTile === id ? null : id; for (const item of holder.querySelectorAll(".tile")) item.classList.toggle("selected", Number(item.dataset.id) === selectedTile); renderActions(); }); tile.addEventListener("dblclick", event => { event.preventDefault(); if (!discardable.has(id) || actionBusy) return; selectedTile = id; void perform("discard", {tile: id}); }); holder.append(tile); });
 }
 function actionButton(label, action, payload = {}, className = "secondary") { const button = document.createElement("button"); button.type = "button"; button.className = className; button.textContent = label; button.addEventListener("click", () => perform(action, payload)); return button; }
 function renderActions() {
@@ -292,13 +450,32 @@ function renderResult() {
   if (!room.game?.result || !["hand_finished", "match_finished"].includes(room.phase) || dismissedResult === resultKey) { show("#result", false); return; }
   show("#result"); const heading = document.createElement("header"); const headingCopy = document.createElement("div"); const eyebrow = document.createElement("span"); eyebrow.textContent = room.phase === "match_finished" ? "MATCH RESULT" : "ROUND RESULT"; const title = document.createElement("h2"); title.textContent = resultCopy(room.game.result); const subtitle = document.createElement("small"); subtitle.textContent = room.phase === "match_finished" ? "本场最终排名" : "本局点数变化"; headingCopy.append(eyebrow, title, subtitle); const mark = document.createElement("b"); mark.textContent = room.phase === "match_finished" ? "终" : "局"; heading.append(headingCopy, mark);
   const rows = document.createElement("div"); rows.className = "result-rows";
+  const lastHand = room.game.last_hand_result;
+  if (lastHand?.winners?.length) {
+    const evidence = document.createElement("div"); evidence.className = "winning-evidence";
+    for (const seat of lastHand.winners) {
+      const block = document.createElement("article"); const label = document.createElement("div"); const name = document.createElement("strong"); name.textContent = `${room.players[seat]?.name || "玩家"} · ${resultNames[lastHand.kind] || lastHand.kind}`;
+      const detail = lastHand.details?.find(item => item.seat === seat); const yaku = document.createElement("small"); yaku.textContent = detail ? `${detail.yaku.join(" · ")} · ${detail.han}番${detail.fu ? ` ${detail.fu}符` : ""}${detail.limit ? ` · ${detail.limit}` : ""}` : "和牌"; label.append(name, yaku);
+      const tiles = document.createElement("div"); tiles.className = "winning-tiles"; (room.game.winning_hands?.[String(seat)] || []).forEach(id => { const tile = tileNode(id, true); tile.disabled = true; tiles.append(tile); }); if (lastHand.kind === "ron" && lastHand.tile !== undefined) { const separator = document.createElement("i"); separator.textContent = "+"; tiles.append(separator); const tile = tileNode(lastHand.tile, true); tile.disabled = true; tiles.append(tile); }
+      block.append(label, tiles); evidence.append(block);
+    }
+    holder.append(heading, evidence);
+  } else holder.append(heading);
   const order = room.settlement?.order || room.game.result.order || [0, 1, 2, 3].sort((a, b) => room.game.points[b] - room.game.points[a]);
   order.forEach((seat, index) => {
     const player = room.players[seat]; const row = document.createElement("div"); row.className = index === 0 ? "winner" : "";
-    const rank = document.createElement("b"); rank.textContent = String(index + 1); const avatar = avatarNode(player, "result-avatar"); const copy = document.createElement("div"); const name = document.createElement("strong"); name.textContent = player?.name || "玩家"; const note = document.createElement("small"); note.textContent = room.settlement?.payouts ? `摸鱼币 +${room.settlement.payouts[seat] || 0}` : ["东", "南", "西", "北"][seat] + "家"; copy.append(name, note);
+    const rank = document.createElement("b"); rank.textContent = String(index + 1); const avatar = avatarNode(player, "result-avatar"); const copy = document.createElement("div"); const name = document.createElement("strong"); name.textContent = player?.name || "玩家"; const note = document.createElement("small");
+    if (room.room_type === "coin" && room.settlement?.payouts) { const net = (room.settlement.payouts[seat] || 0) - room.buy_in; note.textContent = `摸鱼币 ${net >= 0 ? "+" : ""}${net}`; } else note.textContent = ["东", "南", "西", "北"][seat] + "家";
+    copy.append(name, note);
     const score = document.createElement("span"); const points = document.createElement("strong"); points.textContent = room.game.points[seat].toLocaleString(); const delta = room.game.result.deltas?.[seat]; const change = document.createElement("small"); change.textContent = delta === undefined ? "" : `${delta >= 0 ? "+" : ""}${delta}`; score.append(points, change); row.append(rank, avatar, copy, score); rows.append(row);
   });
-  const actions = document.createElement("div"); actions.className = "result-actions"; const close = document.createElement("button"); close.type = "button"; close.className = "primary gold"; close.textContent = room.phase === "match_finished" ? "返回大厅" : "继续牌局"; close.addEventListener("click", () => { dismissedResult = resultKey; show("#result", false); if (room.phase === "match_finished") void returnToLobby(); }); actions.append(close); holder.append(heading, rows, actions);
+  const actions = document.createElement("div"); actions.className = "result-actions";
+  if (room.phase === "match_finished" && room.seat !== null) {
+    const ready = room.players[room.seat]?.ready; const readyButton = document.createElement("button"); readyButton.type = "button"; readyButton.className = ready ? "secondary" : "primary gold"; readyButton.textContent = ready ? "取消准备" : "准备下一场"; readyButton.addEventListener("click", () => perform(ready ? "unready" : "ready")); actions.append(readyButton);
+    const exit = document.createElement("button"); exit.type = "button"; exit.className = "secondary"; exit.textContent = "退出房间"; exit.addEventListener("click", returnToLobby); actions.append(exit);
+    if (room.seat === room.creator_seat) { const readyCount = room.players.filter(player => player?.ready).length; const start = document.createElement("button"); start.type = "button"; start.className = "primary gold"; start.disabled = readyCount !== 4; start.textContent = start.disabled ? `等待准备 ${readyCount}/4` : "开始下一场"; start.addEventListener("click", () => perform("start")); actions.append(start); }
+  } else { const close = document.createElement("button"); close.type = "button"; close.className = "primary gold"; close.textContent = room.phase === "match_finished" ? "返回大厅" : "继续牌局"; close.addEventListener("click", () => { dismissedResult = resultKey; show("#result", false); if (room.phase === "match_finished") void returnToLobby(); }); actions.append(close); }
+  holder.append(rows, actions);
 }
 function renderGame() {
   document.body.dataset.tablePhase = "game";
@@ -318,7 +495,7 @@ function renderMessages() {
   if (messagesInitialized && entries.length > seenMessageCount && !chatOpen) unreadChat += entries.length - seenMessageCount;
   messagesInitialized = true; seenMessageCount = entries.length;
   const list = $("#messages"); list.replaceChildren();
-  for (const item of entries) { const row = document.createElement("div"); const avatar = document.createElement("i"); avatar.textContent = item.name?.slice(0, 1) || "?"; const copy = document.createElement("span"); const name = document.createElement("strong"); name.textContent = item.name; const text = document.createElement("b"); text.textContent = item.text; copy.append(name, text); row.append(avatar, copy); list.append(row); }
+  for (const item of entries) { const row = document.createElement("div"); const avatar = item.player ? playerButton(item.player, "message") : document.createElement("i"); if (!item.player) avatar.textContent = item.name?.slice(0, 1) || "?"; const copy = document.createElement("span"); const name = document.createElement("strong"); name.textContent = item.name; if (item.player) { name.role = "button"; name.tabIndex = 0; name.addEventListener("click", () => openPlayerProfile(item.player.id)); } const text = document.createElement("b"); text.textContent = item.text; copy.append(name, text); row.append(avatar, copy); list.append(row); }
   list.scrollTop = list.scrollHeight;
   const preview = $("#chat-preview-lines"); preview.replaceChildren();
   for (const item of entries.slice(-3)) { const line = document.createElement("span"); const name = document.createElement("b"); name.textContent = item.name; const text = document.createElement("i"); text.textContent = item.text; line.append(name, text); preview.append(line); }
@@ -330,12 +507,12 @@ function renderTable() {
   if (room.phase === "waiting") renderWaiting(); else renderGame(); renderMessages(); updateTimer();
 }
 async function perform(action, payload = {}) {
-  if (!room) return; feedback();
+  if (!room || actionBusy) return; feedback(); actionBusy = true; document.body.classList.add("action-busy");
   try {
     const next = await client.action(room.id, room.version, action, payload);
     if (action === "leave") { await returnToLobby(); return; }
     setRoom(next); selectedTile = null; renderTable();
-  } catch (error) { feedback(error.message, "error"); }
+  } catch (error) { feedback(error.message, "error"); } finally { actionBusy = false; document.body.classList.remove("action-busy"); }
 }
 async function sendChatText(text) { if (!room || !text) return; $("#chat-send").disabled = true; try { await client.chat(room.id, text); setRoom(await client.snapshot(room.id)); renderMessages(); } catch (error) { feedback(error.message, "error"); } finally { $("#chat-send").disabled = false; } }
 async function sendChat() { const input = $("#chat-input"); const text = input.value.trim(); if (!text) return; input.value = ""; await sendChatText(text); }
@@ -344,6 +521,12 @@ async function shareRoom() {
   try {
     await sdk?.share?.({title: "摸鱼麻将", description: `${room.players[0]?.name || "玩家"}的牌桌 · 点击即可入座或观战`, params: JSON.stringify({roomId: room.id})});
   } catch (error) { feedback(error.message || "分享失败，请重试", "error"); }
+}
+async function shareRoomToChannel(value = null) {
+  const share = value || (room && {game: "mahjong", roomId: room.id, host: room.players[0]?.name || room.creator_name || "玩家"});
+  if (!share) throw new Error("请先进入房间");
+  await client.sendChannel(roomShareText(share));
+  await openClubDrawer("channel");
 }
 function updateTimer() { const seconds = secondsLeft(); $("#timer").textContent = seconds === null ? "--" : `${seconds}s`; }
 
@@ -386,11 +569,29 @@ document.addEventListener("pointerdown", event => { if (!event.target.closest(".
 $("#create-dialog").addEventListener("close", () => closeCustomSelects());
 $("#room-type").addEventListener("change", syncCreateEconomy); $("#stake").addEventListener("change", syncCreateEconomy); syncCreateEconomy();
 
-$("#refresh").addEventListener("click", () => boot(true)); $("#home").addEventListener("click", openHome); $("#club-back").addEventListener("click", openHome); $("#lobby-back").addEventListener("click", returnToLobby);
+function clearHandGesture() { clearTimeout(handHoldTimer); handHoldTimer = null; handGesture = null; $("#hand").classList.remove("drag-armed", "drag-ready"); }
+$("#hand").addEventListener("pointerdown", event => {
+  const tile = event.target.closest(".tile:not(:disabled)"); if (!tile || !room?.game) return;
+  handGesture = {pointerId: event.pointerId, tile: Number(tile.dataset.id), startY: event.clientY, currentY: event.clientY, armed: false};
+  handHoldTimer = setTimeout(() => { if (!handGesture || handGesture.pointerId !== event.pointerId) return; handGesture.armed = true; $("#hand").classList.add("drag-armed"); }, 280);
+  tile.setPointerCapture?.(event.pointerId);
+});
+document.addEventListener("pointermove", event => { if (!handGesture || handGesture.pointerId !== event.pointerId) return; handGesture.currentY = event.clientY; $("#hand").classList.toggle("drag-ready", handGesture.armed && handGesture.startY - event.clientY >= 44); });
+document.addEventListener("pointerup", event => {
+  if (!handGesture || handGesture.pointerId !== event.pointerId) return;
+  const gesture = {...handGesture, currentY: event.clientY}; const play = gesture.armed && gesture.startY - gesture.currentY >= 44; clearHandGesture();
+  if (play && (room?.game?.actions?.discard || []).includes(gesture.tile)) { ignoreTileClickUntil = Date.now() + 500; selectedTile = gesture.tile; event.preventDefault(); void perform("discard", {tile: gesture.tile}); }
+});
+document.addEventListener("pointercancel", event => { if (handGesture?.pointerId === event.pointerId) clearHandGesture(); });
+
+$("#refresh").addEventListener("click", () => boot(true)); $("#home").addEventListener("click", openHome); $("#home-nav").addEventListener("click", openHome); $("#club-back").addEventListener("click", openHome); $("#lobby-back").addEventListener("click", returnToLobby);
 $("#create-room").addEventListener("click", () => $("#create-dialog").showModal()); $("#cancel-create").addEventListener("click", () => $("#create-dialog").close()); $("#confirm-create").addEventListener("click", event => { event.preventDefault(); void enterFullscreen(true); createRoom(); });
 $("#claim").addEventListener("click", () => perform("claim")); $("#ready").addEventListener("click", () => perform($("#ready").dataset.action || "ready")); $("#start").addEventListener("click", () => perform("start")); $("#leave").addEventListener("click", () => perform("leave"));
 $("#share-room").addEventListener("click", shareRoom);
+$("#share-room-channel").addEventListener("click", () => shareRoomToChannel().catch(error => feedback(error.message || "分享失败，请重试", "error")));
 $("#fullscreen").addEventListener("click", toggleFullscreen); document.addEventListener("fullscreenchange", updateFullscreenButton); document.addEventListener("webkitfullscreenchange", updateFullscreenButton);
+$("#table-channel").addEventListener("click", () => openClubDrawer("channel"));
+$("#chat-channel").addEventListener("click", () => openClubDrawer("channel"));
 $("#chat-toggle").addEventListener("click", openChat); $("#chat-preview").addEventListener("click", openChat); $("#chat-close").addEventListener("click", closeChat); $("#chat-send").addEventListener("click", sendChat); $("#chat-input").addEventListener("keydown", event => { if (event.key === "Enter" && !event.isComposing) { event.preventDefault(); sendChat(); } });
 document.querySelectorAll("[data-quick-chat]").forEach(button => button.addEventListener("click", () => sendChatText(button.dataset.quickChat)));
 $("#channel-toggle").addEventListener("click", () => openClubDrawer("channel")); $("#channel-peek").addEventListener("click", () => openClubDrawer("channel")); $("#tasks-toggle").addEventListener("click", () => openClubDrawer("tasks")); $("#profile-toggle").addEventListener("click", () => openClubDrawer("profile"));
@@ -400,4 +601,18 @@ $("#club-channel-input").addEventListener("keydown", event => { if (event.key ==
 $("#friend-add").addEventListener("click", async () => { const input = $("#friend-player-id"); try { await client.requestFriend(input.value.trim()); input.value = ""; await renderFriends(); } catch (error) { feedback(error.message, "error"); } });
 $("#direct-back").addEventListener("click", () => renderFriends().catch(error => feedback(error.message, "error")));
 $("#direct-send").addEventListener("click", async () => { const input = $("#direct-input"); const text = input.value.trim(); if (!activeDirectFriend || !text) return; try { await client.sendDirectMessage(activeDirectFriend.id, text); input.value = ""; await openDirect(activeDirectFriend); } catch (error) { feedback(error.message, "error"); } });
-setInterval(updateTimer, 500); window.addEventListener("pagehide", () => client.dispose()); updateFullscreenButton(); boot();
+window.MoyuClubRuntime = {
+  embedded: true,
+  sdk,
+  openChannel: () => openClubDrawer("channel"),
+  openProfile: player => openPlayerProfile(player.id),
+  shareRoom: shareRoomToChannel,
+  setRoomContext(value) { clubModuleRoom = value; $("#club-module-share").hidden = !value; },
+  clearRoomContext() { clubModuleRoom = null; $("#club-module-share").hidden = true; },
+  close: closeClubGame,
+};
+window.MoyuClub = {closeGame: closeClubGame};
+$("#club-module-home").addEventListener("click", closeClubGame);
+$("#club-module-public").addEventListener("click", () => openClubDrawer("channel"));
+$("#club-module-share").addEventListener("click", () => { if (clubModuleRoom) void shareRoomToChannel(clubModuleRoom); });
+setInterval(updateTimer, 500); window.addEventListener("visibilitychange", () => { if (!document.hidden) void refreshPresence(); }); window.addEventListener("pagehide", () => { clearInterval(presenceTimer); clearTimeout(socialRefreshTimer); client.dispose(); }); updateFullscreenButton(); boot();

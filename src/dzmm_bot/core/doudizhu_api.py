@@ -18,7 +18,7 @@ class ActionPayload(BaseModel):
     round_id: UUID | None
     version: StrictInt = Field(ge=0)
     request_id: UUID
-    action: Literal['claim', 'ready', 'unready', 'leave', 'bid', 'play', 'pass', 'takeover', 'resume', 'rematch']
+    action: Literal['claim', 'ready', 'unready', 'leave', 'bid', 'play', 'pass', 'takeover', 'resume', 'start', 'rematch']
     payload: dict = Field(default_factory=dict)
 
 
@@ -36,13 +36,24 @@ class CreateRoomPayload(BaseModel):
 
 
 async def room_events(repository, room_id, uid, clock, request):
+    previous = None
     while not await request.is_disconnected():
         try:
             value = await asyncio.to_thread(repository.doudizhu_view, room_id, uid, clock())
         except ValueError:
             yield 'event: unavailable\ndata: {}\n\n'
             return
-        yield 'event: snapshot\ndata: ' + json.dumps(value, ensure_ascii=False) + '\n\n'
+        encoded = json.dumps(value, ensure_ascii=False, separators=(',', ':'))
+        fingerprint = json.dumps(
+            {key: item for key, item in value.items() if key != 'server_time'},
+            ensure_ascii=False,
+            separators=(',', ':'),
+        )
+        if fingerprint != previous:
+            yield 'event: snapshot\ndata: ' + encoded + '\n\n'
+            previous = fingerprint
+        else:
+            yield ': heartbeat\n\n'
         await asyncio.sleep(1)
 
 
@@ -115,5 +126,8 @@ def doudizhu_router(repository, clock):
         uid = player_uid(authorization)
         await asyncio.to_thread(call, repository.doudizhu_view, room_id, uid, clock())
         return StreamingResponse(room_events(repository, room_id, uid, clock, request),
-                                 media_type='text/event-stream', headers={'Cache-Control': 'no-store'})
+                                 media_type='text/event-stream', headers={
+                                     'Cache-Control': 'no-store',
+                                     'X-Accel-Buffering': 'no',
+                                 })
     return router

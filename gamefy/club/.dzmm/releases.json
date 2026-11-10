@@ -33,5 +33,82 @@
     "deployedAt": "2026-10-20T20:37:12.966Z",
     "label": "Club 全功能整合版",
     "gitHead": "abe0143"
+  },
+  {
+    "revision": "1792568484302",
+    "deployedAt": "2026-10-21T07:40:28.375Z",
+    "label": "Club 实时人数与全量优化",
+    "gitHead": "ad366ca"
+  },
+  {
+    "revision": "1792569390194",
+    "deployedAt": "2026-10-21T07:55:33.270Z",
+    "label": "Club 模块身份桥接与竖屏修复",
+    "gitHead": "ad366ca"
+  },
+  {
+    "revision": "1792570327243",
+    "deployedAt": "2026-10-21T08:11:12.068Z",
+    "label": "Club 房间清理与满屏修复",
+    "gitHead": "ad366ca"
+  },
+  {
+    "revision": "1792571414785",
+    "deployedAt": "2026-10-21T08:29:18.059Z",
+    "label": "Club 公屏分享与个人中心滚动",
+    "gitHead": "ad366ca"
+  },
+  {
+    "revision": "1792575086110",
+    "deployedAt": "2026-10-21T09:30:28.734Z",
+    "label": "Club 三款扑克与社交资料",
+    "gitHead": "ad366ca"
+  },
+  {
+    "revision": "1792576221698",
+    "deployedAt": "2026-10-21T09:49:25.471Z",
+    "label": "牌桌候场公频聊天",
+    "gitHead": "ad366ca"
+  },
+  {
+    "revision": "1792577671534",
+    "deployedAt": "2026-10-21T10:13:36.055Z",
+    "label": "房间实时状态与扑克模块隔离修复",
+    "gitHead": "ad366ca"
+  },
+  {
+    "revision": "1792578191852",
+    "deployedAt": "2026-10-21T10:22:14.337Z",
+    "label": "修复六个子游戏黑屏",
+    "gitHead": "ad366ca"
+  },
+  {
+    "revision": "1792579536467",
+    "deployedAt": "2026-10-21T10:44:39.981Z",
+    "label": "七游戏单页内置架构",
+    "gitHead": "ad366ca"
+  },
+  {
+    "revision": "1792587014607",
+    "deployedAt": "2026-10-21T12:49:20.623Z",
+    "label": "Club 全量功能与实时联机",
+    "gitHead": "ad366ca"
+  },
+  {
+    "revision": "1792667206022",
+    "deployedAt": "2026-10-22T11:05:48.914Z",
+    "gitHead": "1c722f3"
+  },
+  {
+    "revision": "1792731461954",
+    "deployedAt": "2026-10-23T04:56:44.685Z",
+    "label": "club-20261023-gameplay-fixes",
+    "gitHead": "47e8a6b"
+  },
+  {
+    "revision": "1792740353963",
+    "deployedAt": "2026-10-23T07:24:59.021Z",
+    "label": "club-20261023-between-hands-join",
+    "gitHead": "0a930c6"
   }
 ]

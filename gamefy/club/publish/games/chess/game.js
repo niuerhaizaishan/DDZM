@@ -1,3 +1,11 @@
+import {isClubNavigation,platformLoading} from '../runtime.js';
+import {moduleEnvironment} from '../module-document.js';
+
+const environment = moduleEnvironment();
+const document = environment.document;
+const location = environment.location;
+let activeController = null, clockTimer = null;
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function resolveRoomId(gp, hash) {
@@ -15,7 +23,7 @@ export function canMove(state) {
   return !!state && state.game.status === 'playing' && state.role === state.game.position?.turn;
 }
 
-export function canChat(state) { return !!state && ['waiting', 'playing'].includes(state.game.status); }
+export function canChat(state) { return !!state && ['waiting', 'playing', 'finished'].includes(state.game.status); }
 
 export class ChessClient {
   constructor({ sdk, fetchImpl, apiBase, roomId }) {
@@ -119,7 +127,7 @@ export function eventText(event) {
     const result = resultNotice(event.result, 'spectator');
     return `${result.title} · ${result.reason}`;
   }
-  const labels = { offer_draw: '请求和棋', accept_draw: '同意和棋', decline_draw: '拒绝和棋', offer_undo: '请求悔棋', accept_undo: '同意悔棋', decline_undo: '拒绝悔棋', resign: '认输' };
+  const labels = { offer_draw: '请求和棋', accept_draw: '同意和棋', decline_draw: '拒绝和棋', offer_undo: '请求悔棋', accept_undo: '同意悔棋', decline_undo: '拒绝悔棋', resign: '认输', rematch_ready: '已准备下一局', rematch_unready: '取消准备' };
   return `${side} · ${labels[event.kind] || event.kind}`;
 }
 
@@ -133,22 +141,24 @@ export function moveNotice(previousSeq, events) {
 
 async function boot() {
   const status = document.querySelector('#status');
-  const loading = window.dzmm.loading;
+  const sdk = window.MoyuClubRuntime?.sdk ?? window.dzmm;
+  const loading = platformLoading(sdk);
   loading?.progress({ phase: 'start', message: '正在进入棋局' });
   let ready = false;
   const showReady = () => {
     if (!ready) { ready = true; loading?.ready(); }
   };
-  const launch = await window.dzmm.getLaunchParams();
-  let roomId = location.hash === '#lobby' ? null : resolveRoomId(launch?.gp, location.hash);
+  const launch = isClubNavigation() ? {} : await sdk.getLaunchParams();
+  const linkedRoom = new URLSearchParams(location.search).get('room');
+  let roomId = location.hash === '#lobby' ? null : (UUID.test(linkedRoom || '') ? linkedRoom.toLowerCase() : resolveRoomId(launch?.gp, location.hash));
   if (!/^https:\/\//.test(window.CHESS_API_BASE || '')) { status.textContent = '棋局 API 尚未配置 HTTPS 地址。'; showReady(); return; }
-  const client = new ChessClient({ sdk: window.dzmm, fetchImpl: fetch, apiBase: window.CHESS_API_BASE, roomId });
+  const client = new ChessClient({ sdk, fetchImpl: fetch, apiBase: window.CHESS_API_BASE, roomId });
   let lastRoomKey;
   try { lastRoomKey = `chess:last-room:${await client.identity()}`; }
   catch (error) { status.textContent = error.message; showReady(); return; }
   if (!roomId && location.hash !== '#lobby') {
     try {
-      const saved = (await window.dzmm.kv.get(lastRoomKey))?.value;
+      const saved = (await sdk.kv.get(lastRoomKey))?.value;
       if (typeof saved === 'string' && UUID.test(saved)) {
         const rooms = await client.rooms();
         if (rooms.some(room => room.id === saved)) {
@@ -159,6 +169,8 @@ async function boot() {
     } catch { /* A missing platform save must not block the room list. */ }
   }
   if (!roomId) {
+    window.MoyuClubRuntime?.clearRoomContext?.();
+    document.body.classList.remove('room-open');
     const lobby = document.querySelector('#lobby');
     lobby.hidden = false;
     document.querySelector('.layout').hidden = true;
@@ -202,14 +214,17 @@ async function boot() {
     lobby.hidden = true;
     document.querySelector('.layout').hidden = false;
   }
+  document.body.classList.add('room-open');
+  window.MoyuClubRuntime?.setRoomContext?.({ game: 'chess', roomId, host: '玩家' });
   location.hash = `room=${roomId}`;
-  try { await window.dzmm.kv.put(lastRoomKey, roomId, { flush: true }); }
+  try { await sdk.kv.put(lastRoomKey, roomId, { flush: true }); }
   catch { document.querySelector('#feedback').textContent = '未能保存最近棋局，下次请从列表进入。'; }
   document.querySelector('#back-to-rooms').addEventListener('click', () => {
+    if (state?.game?.status === 'playing' && !confirm('棋局尚未结束。返回后棋钟继续，超时会判负；重新进入 Club 会回到本局。确定返回吗？')) return;
     location.hash = 'lobby';
     location.reload();
   });
-  const controller = new AbortController();
+  const controller = new AbortController(); activeController = controller;
   let state = null;
   let selected = null;
   let serverOffset = 0;
@@ -272,6 +287,7 @@ async function boot() {
     state = next;
     serverOffset = Date.now() - Date.parse(next.server_time || new Date().toISOString());
     const game = next.game;
+    window.MoyuClubRuntime?.setRoomContext?.({ game: 'chess', roomId, host: game.red_name || '玩家' });
     const events = game.events || [];
     const notice = document.querySelector('#move-notice');
     const message = moveNotice(lastEventSeq, events);
@@ -288,6 +304,11 @@ async function boot() {
       const outcome = resultNotice(game.result, next.role);
       document.querySelector('#result-title').textContent = outcome.title;
       document.querySelector('#result-reason').textContent = outcome.reason;
+      const payouts = game.settlement?.payouts || {}; const color = next.role;
+      document.querySelector('#result-economy').textContent = game.room_type === 'coin' && ['red', 'black'].includes(color) ? `摸鱼币 ${(payouts[color] || 0) - game.stake >= 0 ? '+' : ''}${(payouts[color] || 0) - game.stake}` : '最终局面保留在棋盘，可查看完整着法记录';
+      const ready = new Set(game.rematch_ready || []); document.querySelector('#result-ready').textContent = `红方 ${ready.has('red') ? '已准备' : '未准备'} · 黑方 ${ready.has('black') ? '已准备' : '未准备'}`;
+      const readyButton = document.querySelector('#result-ready-action'); const seated = ['red', 'black'].includes(next.role); readyButton.hidden = !seated; readyButton.textContent = ready.has(next.role) ? '取消准备' : '准备下一局'; readyButton.dataset.action = ready.has(next.role) ? 'unready' : 'ready';
+      const start = document.querySelector('#result-start'); start.hidden = !next.is_host; start.disabled = ready.size !== 2; start.textContent = start.disabled ? `等待准备 ${ready.size}/2` : '开始下一局';
       notice.hidden = true;
     }
     document.querySelector('#players').textContent = `红方 ${game.red_name || '待定'} · 黑方 ${game.black_name || '待定'}`;
@@ -309,7 +330,7 @@ async function boot() {
     document.querySelector('#offer-label').textContent = game.pending_offer ? `对手请求${game.pending_offer === 'undo' ? '悔棋' : '和棋'}` : '';
     document.querySelector('#chat-input').disabled = !canChat(next);
     document.querySelector('#chat-send').disabled = !canChat(next);
-    document.querySelector('#chat-input').placeholder = canChat(next) ? '聊聊这盘棋…' : '棋局已结束，聊天记录已保留';
+    document.querySelector('#chat-input').placeholder = canChat(next) ? (game.status === 'finished' ? '赛后聊聊，准备好再开一局…' : '聊聊这盘棋…') : '当前不能发言';
     const list = document.querySelector('#chat-list');
     list.replaceChildren();
     for (const message of next.messages || []) {
@@ -348,17 +369,35 @@ async function boot() {
   document.querySelector('#chat-input').addEventListener('keydown', event => {
     if (event.key === 'Enter') { event.preventDefault(); document.querySelector('#chat-send').click(); }
   });
+  document.querySelector('#result-exit').addEventListener('click', () => document.querySelector('#back-to-rooms').click());
   for (const button of document.querySelectorAll('[data-action]')) button.addEventListener('click', async () => {
     const action = button.dataset.action;
     if (action === 'resign' && !confirm('确定认输吗？')) return;
     try { render(await client.action(action, state.game.version)); }
     catch (error) { render(client.state); status.textContent = error.message; }
   });
-  setInterval(clocks, 250);
+  clockTimer = setInterval(clocks, 250);
   await client.follow(render, controller.signal);
+}
+
+export function unmount() {
+  activeController?.abort(); activeController = null;
+  clearInterval(clockTimer); clockTimer = null;
+  window.MoyuClubRuntime?.clearRoomContext?.();
+}
+
+if (typeof document !== 'undefined') {
+  const panel = document.querySelector('#chess-social');
+  const toggle = document.querySelector('#chess-social-toggle');
+  const setSocialOpen = open => {
+    panel.classList.toggle('open', open);
+    toggle.setAttribute('aria-expanded', String(open));
+  };
+  toggle.addEventListener('click', () => setSocialOpen(!panel.classList.contains('open')));
+  document.querySelector('#chess-social-close').addEventListener('click', () => setSocialOpen(false));
 }
 
 if (typeof document !== 'undefined') boot().catch(error => {
   document.querySelector('#status').textContent = error.message;
-  window.dzmm.loading?.error('CHESS_BOOT_FAILED', error.message);
+  platformLoading(window.MoyuClubRuntime?.sdk ?? window.dzmm)?.error?.('CHESS_BOOT_FAILED', error.message);
 });

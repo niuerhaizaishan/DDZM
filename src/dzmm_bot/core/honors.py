@@ -11,6 +11,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
+from .bot_accounts import BOT_PLATFORM_IDS
 from .game_statistics import sync_game_participations
 from .schema import (
     ActivityLevelRuleRecord, AIRequestRecord, AuditEventRecord, BEIJING,
@@ -534,7 +535,10 @@ class HonorsMixin:
     def _honor_metrics(self, session, config, week):
         start, end = midnight(week), midnight(week + timedelta(days=7))
         groups = [UUID(value) for value in config["group_ids"]]
-        users = {user.id: user for user in session.scalars(select(UserRecord).where(UserRecord.joined_at < end))}
+        users = {user.id: user for user in session.scalars(select(UserRecord).where(
+            UserRecord.joined_at < end,
+            UserRecord.platform_id.not_in(BOT_PLATFORM_IDS),
+        ))}
         scores = {metric: defaultdict(int) for metric in SUPPORTED_METRICS}
 
         sync_game_participations(session, start, end, groups)

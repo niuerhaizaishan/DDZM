@@ -36,6 +36,7 @@ class PlatformBuild(unittest.TestCase):
             for name in ['config.js','classic/config.js','v3/config.js','v3-original/config.js','v3-r1/config.js']:
                 self.assertIn('https://49.234.20.159',(out/name).read_text())
             self.assertEqual(len(list((out/'assets/classic').glob('*.webp'))),122)
+            self.assertEqual(len(list((out/'assets/expedition').glob('*.webp'))),60)
             self.assertIn("apiBase:''",(source/'classic/config.js').read_text())
             self.assertIn("apiBase:''",(source/'v3/config.js').read_text())
             self.assertTrue((out/'v3-original/cards.json').exists())
