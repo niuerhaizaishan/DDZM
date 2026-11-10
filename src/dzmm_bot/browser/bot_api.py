@@ -12,7 +12,7 @@ class DzmmBotSender:
         if not api_token:
             raise ValueError("Bot API token must be nonempty")
         self._client = client or httpx.Client(
-            base_url="https://www.ivorune.xyz",
+            base_url="https://www.aikda.com",
             headers={"X-Bot-Token": api_token},
             timeout=20,
         )
@@ -20,10 +20,13 @@ class DzmmBotSender:
             self._client.headers["X-Bot-Token"] = api_token
 
     def send_to(self, chatroom_id: str, text: str) -> str:
-        response = self._client.post(
-            "/api/bot/send-message",
-            json={"chatroom_id": chatroom_id, "content": text},
-        )
+        try:
+            response = self._client.post(
+                "/api/bot/send-message",
+                json={"chatroom_id": chatroom_id, "content": text},
+            )
+        except httpx.RequestError as error:
+            raise DzmmBotSendError("Bot API request failed") from error
         try:
             body = response.json()
         except ValueError as error:
