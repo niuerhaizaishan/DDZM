@@ -107,7 +107,7 @@ def test_upstream_head_can_upgrade_to_workstation_and_permanent_honors(tmp_path,
     config = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
     command.stamp(config, "20261005_95")
     command.upgrade(config, "20261005_99")
-    command.stamp(config, "20261021_126")
+    command.stamp(config, "20261103_130")
     command.upgrade(config, "head")
     with engine.connect() as connection:
         assert connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all() == [
