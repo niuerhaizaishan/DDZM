@@ -27,6 +27,7 @@ from dzmm_bot.runtime.outbound import group_message_chunks
 
 from .bot_api import DzmmBotSendError
 from .black_history_card import render_black_history_card
+from .workstation_image import render_workstation_image
 from .core_client import CorePort, OutboundClaim, WorkerCommand
 from .aikda_socket import AikdaAuthenticationError, AikdaMessageRejectedError, AikdaMemberRemovalRejectedError
 from .session import BrowserSession, ChatGateway, ImageUploadRejectedError
@@ -761,11 +762,14 @@ class BrowserWorker:
                         reference=reference,
                     )
             return self._send_with_main_account_tokens(send_group_image)
-        if outbound.content_type == "history_card":
+        if outbound.content_type in {"history_card", "workstation"}:
             payload = json.loads(text)
+            is_workstation = outbound.content_type == "workstation"
+            image_alt = f"{payload['display_name']}的工位（工号：{payload['employee_number']}）" if is_workstation else "黑历史"
             with TemporaryDirectory(prefix="dzmm-black-history-") as directory:
                 path = Path(directory) / "card.png"
-                render_black_history_card(payload, path)
+                renderer = render_workstation_image if is_workstation else render_black_history_card
+                renderer(payload, path)
                 upload = gateway.upload_image(path, "image/png")
                 image_url = upload.get("url")
                 if not isinstance(image_url, str) or not image_url:
@@ -774,7 +778,7 @@ class BrowserWorker:
                     send_image = lambda: gateway.send_image_to(
                         outbound.destination_chatroom_id,
                         image_url,
-                        alt="黑历史",
+                        alt=image_alt,
                         message_id=platform_message_id,
                         reference=reference,
                     )
@@ -784,7 +788,7 @@ class BrowserWorker:
                 return self._send_with_main_account_tokens(
                     lambda: gateway.send_image(
                         image_url,
-                        alt="黑历史",
+                        alt=image_alt,
                         message_id=platform_message_id,
                         reference=reference,
                     )

@@ -288,7 +288,7 @@ class OutboundClaimResponse(ApiModel):
     inbound_message_id: UUID | None
     group_chat_id: UUID | None
     text: str
-    content_type: Literal["text", "image", "novel", "group_invite", "character", "history_card", "history_image"]
+    content_type: Literal["text", "image", "novel", "group_invite", "character", "history_card", "history_image", "workstation"]
     image_url: str | None
     image_alt: str | None
     lease_token: UUID

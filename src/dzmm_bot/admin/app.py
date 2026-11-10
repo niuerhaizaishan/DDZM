@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import time
 from secrets import compare_digest, token_urlsafe
-from typing import Annotated, Callable
+from typing import Annotated, Callable, Literal
 from uuid import UUID
 
 from fastapi import (
@@ -49,7 +49,12 @@ from .shop_excel import (
     error_report as shop_error_report, export_workbook as export_shop_workbook,
     parse_workbook as parse_shop_workbook,
 )
-from dzmm_bot.core.honors import HonorConfigInput, HonorSettleInput, HonorCorrectionInput
+from .workstation import install_workstation_routes
+from .workstation_management import install_workstation_management
+from dzmm_bot.core.honors import (
+    HonorConfigInput, HonorSettleInput, HonorCorrectionInput, HonorGrantInput,
+    HonorRevokeInput, HonorSeasonIssueInput, HonorSeasonPreviewInput,
+)
 
 
 _ROOT = Path(__file__).parent
@@ -116,6 +121,7 @@ def create_app(
     if not admin_token:
         raise ValueError("admin_token must be nonempty")
     app = FastAPI()
+    install_workstation_routes(app, core)
     app.add_middleware(ShopExcelUploadLimitMiddleware)
     console = console_client or NoVNCClient()
     connect_websocket = websocket_connector or NoVNCWebSocketConnector()
@@ -241,6 +247,14 @@ def create_app(
         return idempotent_response(
             identity, idempotency_key, versioned_operation, scope=scope
         )
+
+    install_workstation_management(app, core, repository, authorize, require_super_admin,
+                                  idempotent_response, versioned_configuration_response, forward_integration)
+
+    @app.get("/static/workstation-admin.js")
+    def workstation_admin_script() -> FileResponse:
+        return FileResponse(_ROOT / "static" / "workstation-admin.js", media_type="text/javascript",
+                            headers={"Cache-Control": "no-store"})
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> FileResponse:
@@ -1074,12 +1088,44 @@ def create_app(
     @app.get("/api/game/honors/history")
     def honor_history(_: Annotated[AdminIdentity, Depends(authorize)], user_id: UUID | None = None,
                       title_key: str | None = None, week_start: str | None = None,
+                      source: Literal["weekly", "season", "manual"] | None = None,
                       page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100)) -> dict:
         params = {"page": page, "page_size": page_size}
         params.update({key: str(value) for key, value in {
-            "user_id": user_id, "title_key": title_key, "week_start": week_start,
+            "user_id": user_id, "title_key": title_key, "week_start": week_start, "source": source,
         }.items() if value is not None})
         return forward_integration(lambda: core.honor_get("history", params))
+
+    @app.get("/api/game/honors/employees")
+    def honor_employee_search(_: Annotated[AdminIdentity, Depends(authorize)],
+                              query: str = Query(min_length=1, max_length=64)) -> dict:
+        return forward_integration(lambda: core.honor_get("employees", {"query": query}))
+
+    @app.post("/api/game/honors/permanent/grant")
+    def honor_grant(request: HonorGrantInput, identity: Annotated[AdminIdentity, Depends(authorize)],
+                    idempotency_key: str | None = Header(None)) -> JSONResponse:
+        return idempotent_response(identity, idempotency_key, lambda: (200, forward_integration(
+            lambda: core.honor_mutate("permanent/grant", {**request.model_dump(), "actor": identity.username})
+        )), scope="honor-permanent-grant")
+
+    @app.post("/api/game/honors/permanent/{award_id}/revoke")
+    def honor_revoke(award_id: UUID, request: HonorRevokeInput,
+                     identity: Annotated[AdminIdentity, Depends(require_super_admin)]) -> dict:
+        return forward_integration(lambda: core.honor_mutate(f"permanent/{award_id}/revoke", {
+            **request.model_dump(), "actor": identity.username,
+        }))
+
+    @app.post("/api/game/honors/seasons/s1/preview")
+    def honor_season_preview(request: HonorSeasonPreviewInput,
+                             _: Annotated[AdminIdentity, Depends(require_super_admin)]) -> dict:
+        return forward_integration(lambda: core.honor_mutate("seasons/s1/preview", request.model_dump()))
+
+    @app.post("/api/game/honors/seasons/s1/issue")
+    def honor_season_issue(request: HonorSeasonIssueInput,
+                           identity: Annotated[AdminIdentity, Depends(require_super_admin)]) -> dict:
+        return forward_integration(lambda: core.honor_mutate("seasons/s1/issue", {
+            **request.model_dump(), "actor": identity.username,
+        }))
 
     @app.get("/api/game/users/{platform_id}/honors")
     def employee_honors(platform_id: str, _: Annotated[AdminIdentity, Depends(authorize)]) -> dict:

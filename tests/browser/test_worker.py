@@ -1318,25 +1318,34 @@ def test_worker_sends_dark_market_list_without_artificial_prefix(context):
     assert text == "#1 旧钥匙\n#2 铜镜"
 
 
-def test_worker_sends_novel_outbound_as_a_share_card(context):
+@pytest.mark.parametrize(("share_type", "resource_id", "destination", "delivery_kind"), [
+    ("novel", "66408bb3-60a0-40e1-a434-ee40efee4d27", "direct-a", "direct"),
+    ("character", "3772306", "group-a", "group"),
+    ("character", "3772306", "direct-a", "direct"),
+    ("character", "3772306", None, "group"),
+])
+def test_worker_sends_outbound_as_a_share_card(context, share_type, resource_id, destination, delivery_kind):
     worker, gateway, _, _, _, _ = context
     outbound = OutboundClaim(
         OUTBOUND_ID,
         "in-1",
-        "66408bb3-60a0-40e1-a434-ee40efee4d27",
+        resource_id,
         LEASE,
-        content_type="novel",
-        destination_chatroom_id="direct-a",
-        delivery_key="direct-a",
-        delivery_kind="direct",
+        content_type=share_type,
+        destination_chatroom_id=destination,
+        delivery_key=destination,
+        delivery_kind=delivery_kind,
     )
 
     worker._send_outbound(gateway, outbound)
 
     assert gateway.sent_shares == [
-        ("direct-a", "novel", "66408bb3-60a0-40e1-a434-ee40efee4d27")
+        (destination or "group-1", share_type, resource_id)
     ]
     assert gateway.sent_to == []
+    assert gateway.sent == []
+    assert gateway.sent_message_ids == [str(OUTBOUND_ID)]
+    assert gateway.sent_references == [None]
 
 
 def test_worker_sends_custom_command_group_invite_as_share_card(context):
@@ -1392,6 +1401,41 @@ def test_worker_renders_uploads_and_sends_black_history_card(context, monkeypatc
     assert gateway.sent_images_to == [
         ("group-a", "https://cdn.example.com/uploaded.png", "黑历史")
     ]
+
+
+def test_worker_composes_and_uploads_workstation_to_selected_group(context, monkeypatch):
+    worker, gateway, _, _, _, _ = context
+    rendered = []
+
+    def render(payload, output_path):
+        rendered.append(payload)
+        output_path.write_bytes(b"png")
+
+    monkeypatch.setattr("dzmm_bot.browser.worker.render_workstation_image", render)
+    outbound = OutboundClaim(
+        OUTBOUND_ID, None,
+        '{"display_name":"糯糯","employee_number":"#0001","equipped":[]}',
+        LEASE, content_type="workstation", destination_chatroom_id="group-a",
+    )
+    worker._send_outbound(gateway, outbound)
+    assert rendered[0]["equipped"] == []
+    assert gateway.uploaded_images[0][1] == "image/png"
+    assert gateway.sent_images_to == [("group-a", "https://cdn.example.com/uploaded.png", "糯糯的工位（工号：#0001）")]
+    assert not gateway.sent_to
+
+
+def test_worker_does_not_send_text_on_workstation_upload_failure(context):
+    worker, gateway, _, _, _, _ = context
+    gateway.upload_error = RuntimeError("upload failed")
+    outbound = OutboundClaim(
+        OUTBOUND_ID, None,
+        '{"display_name":"糯糯","employee_number":"#0001","equipped":[]}',
+        LEASE, content_type="workstation", destination_chatroom_id="group-a",
+    )
+    with pytest.raises(RuntimeError, match="upload failed"):
+        worker._send_outbound(gateway, outbound)
+    assert not gateway.sent_images_to
+    assert not gateway.sent_to
 
 
 def test_worker_reports_an_expired_black_history_image(context, monkeypatch):

@@ -9,3 +9,21 @@ config.local.json
 data/
 browser_profile/
 tmp_deploy_staging/
+
+# Local credentials, generated releases, audits, and browser/test state.
+.env
+.env.*
+!.env.example
+output/
+outputs/
+.pytest_cache/
+.coverage
+htmlcov/
+*.sqlite3
+*.sqlite3-*
+*.db-wal
+*.db-shm
+gamefy-workstation/publish/assets/
+gamefy-workstation/.gamefy/
+gamefy-workstation/publish/art.js
+# .dzmm/lock.json is a public publish baseline, not a credential; keep it trackable.

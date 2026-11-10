@@ -1,0 +1,4 @@
+"""Content-addressed art; placements validated by shared workstation layout rules."""
+REVISION = 'd5963c576818'
+FILES = {'base': 'stage1-d5963c576818-base.png', 'computer-basic': 'stage1-d5963c576818-computer-basic.png', 'computer-upgraded': 'stage1-56666d9d5919-computer-upgraded.png', 'monitor-basic': 'stage1-d5963c576818-monitor-basic.png', 'monitor-upgraded': 'stage1-d5963c576818-monitor-upgraded.png', 'keyboard-basic': 'stage1-d5963c576818-keyboard-basic.png', 'keyboard-upgraded': 'stage1-d5963c576818-keyboard-upgraded.png', 'mouse-basic': 'stage1-d5963c576818-mouse-basic.png', 'mouse-upgraded': 'stage1-d5963c576818-mouse-upgraded.png', 'headphones': 'stage1-d5963c576818-headphones.png', 'desk-mat': 'stage1-d5963c576818-desk-mat.png'}
+ORDER = ['base', 'desk-mat', 'computer-basic', 'computer-upgraded', 'monitor-basic', 'monitor-upgraded', 'keyboard-basic', 'keyboard-upgraded', 'mouse-basic', 'mouse-upgraded', 'headphones']

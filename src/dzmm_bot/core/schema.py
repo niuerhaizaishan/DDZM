@@ -2611,21 +2611,46 @@ class HonorPeriodRecord(Base):
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
 
+class HonorSeasonRecord(Base):
+    __tablename__ = "honor_seasons"
+
+    code: Mapped[str] = mapped_column(String(8), primary_key=True)
+    issued_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+    issued_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    preview_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    issued_count: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
 class HonorAwardRecord(Base):
     __tablename__ = "honor_awards"
-    __table_args__ = (UniqueConstraint("period_id", "title_key", "user_id", name="uq_honor_awards_period_title_user"),)
+    __table_args__ = (
+        UniqueConstraint("period_id", "title_key", "user_id", name="uq_honor_awards_period_title_user"),
+        UniqueConstraint("season_code", "user_id", name="uq_honor_awards_season_user"),
+        CheckConstraint(
+            "(source = 'weekly' AND period_id IS NOT NULL AND expires_at IS NOT NULL "
+            "AND season_code IS NULL AND revoked_at IS NULL) OR "
+            "(source IN ('season', 'manual') AND period_id IS NULL AND expires_at IS NULL "
+            "AND user_id IS NOT NULL AND ((source = 'season' AND season_code IS NOT NULL) "
+            "OR (source = 'manual' AND season_code IS NULL)))",
+            name="ck_honor_award_source",
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
-    period_id: Mapped[UUID] = mapped_column(ForeignKey("honor_periods.id"), nullable=False)
+    period_id: Mapped[UUID | None] = mapped_column(ForeignKey("honor_periods.id"))
     title_key: Mapped[str] = mapped_column(String(64), nullable=False)
     title_name: Mapped[str] = mapped_column(String(64), nullable=False)
     user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"), index=True)
     winner_name: Mapped[str | None] = mapped_column(String(64))
     score: Mapped[int | None] = mapped_column(Integer)
     valid_from: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False, index=True)
+    expires_at: Mapped[datetime | None] = mapped_column(BeijingDateTime, index=True)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False)
     public_score: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    source: Mapped[str] = mapped_column(String(12), default="weekly", server_default="weekly", nullable=False)
+    season_code: Mapped[str | None] = mapped_column(ForeignKey("honor_seasons.code", name="fk_honor_awards_season"))
+    source_details: Mapped[dict | None] = mapped_column(JSON)
+    revoked_at: Mapped[datetime | None] = mapped_column(BeijingDateTime)
 
 
 class HonorWearRecord(Base):
@@ -3634,6 +3659,51 @@ class ActivityRewardSettlementRecord(Base):
     settled_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
 
 
+class WorkstationRulesRecord(Base):
+    __tablename__ = 'workstation_rules'
+    __table_args__ = (CheckConstraint('id = 1', name='ck_workstation_rules_singleton'),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    data: Mapped[dict] = mapped_column(JSON, nullable=False)
+
+
+class WorkstationAdminOperationRecord(Base):
+    __tablename__ = 'workstation_admin_operations'
+    __table_args__ = (UniqueConstraint('actor', 'request_id', name='uq_workstation_admin_request'),)
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    actor: Mapped[str] = mapped_column(String(200), nullable=False)
+    request_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    user_id: Mapped[UUID | None] = mapped_column(ForeignKey('users.id'))
+    reason: Mapped[str] = mapped_column(String(500), nullable=False)
+    before: Mapped[dict] = mapped_column(JSON, nullable=False)
+    after: Mapped[dict] = mapped_column(JSON, nullable=False)
+    result: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+
+
+class WorkstationIncomeSettingsRecord(Base):
+    __tablename__ = "workstation_income_settings"
+    __table_args__ = (CheckConstraint("id = 1", name="ck_workstation_income_settings_singleton"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    first_settlement_date: Mapped[date] = mapped_column(Date, nullable=False)
+    last_settled_on: Mapped[date | None] = mapped_column(Date)
+
+
+class WorkstationIncomeRecord(Base):
+    __tablename__ = "workstation_income_settlements"
+    __table_args__ = (CheckConstraint("amount >= 0", name="ck_workstation_income_amount"),)
+
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    settlement_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    amount: Mapped[int] = mapped_column(Integer, nullable=False)
+    components: Mapped[list] = mapped_column(JSON, nullable=False)
+    settled_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+
+
 class BalanceTransactionRecord(Base):
     __tablename__ = "balance_transactions"
     __table_args__ = (
@@ -3670,6 +3740,115 @@ class IntegrationIdempotencyRecord(Base):
     created_at: Mapped[datetime] = mapped_column(
         BeijingDateTime, default=beijing_now, nullable=False
     )
+
+
+class EquipmentItemRecord(Base):
+    __tablename__ = "equipment_items"
+    __table_args__ = (
+        CheckConstraint("price >= 0", name="ck_equipment_price"),
+        CheckConstraint("daily_income >= 0", name="ck_equipment_income"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    public_number: Mapped[int] = mapped_column(Integer, unique=True, nullable=False)
+    asset_key: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    price: Mapped[int] = mapped_column(Integer, nullable=False)
+    daily_income: Mapped[int] = mapped_column(Integer, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+
+class EquipmentOwnershipRecord(Base):
+    __tablename__ = "equipment_ownerships"
+    __table_args__ = (UniqueConstraint("user_id", "item_id", name="uq_equipment_owner"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    item_id: Mapped[UUID] = mapped_column(ForeignKey("equipment_items.id"), nullable=False)
+    equipped: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    purchased_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+
+
+class EquipmentPurchaseRecord(Base):
+    __tablename__ = "equipment_purchases"
+    __table_args__ = (CheckConstraint("price >= 0", name="ck_equipment_purchase_price"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    inbound_message_id: Mapped[UUID] = mapped_column(ForeignKey("inbound_messages.id"), unique=True, nullable=False)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    item_id: Mapped[UUID] = mapped_column(ForeignKey("equipment_items.id"), nullable=False)
+    group_chat_id: Mapped[UUID] = mapped_column(ForeignKey("group_chats.id"), nullable=False)
+    price: Mapped[int] = mapped_column(Integer, nullable=False)
+    result: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+
+
+class WorkstationComponentRecord(Base):
+    __tablename__ = "workstation_components"
+    __table_args__ = (
+        CheckConstraint("category_number BETWEEN 1 AND 9", name="ck_workstation_category"),
+        CheckConstraint("highest_level BETWEEN 1 AND 10", name="ck_workstation_level"),
+        CheckConstraint("active_level BETWEEN 1 AND highest_level", name="ck_workstation_active"),
+    )
+
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    category_number: Mapped[int] = mapped_column(Integer, primary_key=True)
+    highest_level: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    active_level: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    equipped: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+class WorkstationUpgradeRecord(Base):
+    __tablename__ = "workstation_upgrades"
+    __table_args__ = (
+        CheckConstraint("category_number BETWEEN 1 AND 9", name="ck_workstation_upgrade_category"),
+        CheckConstraint("from_level BETWEEN 1 AND 9 AND to_level = from_level + 1", name="ck_workstation_upgrade_step"),
+        CheckConstraint("price >= 0 AND credit_used >= 0 AND cash_paid >= 0 AND price = credit_used + cash_paid", name="ck_workstation_upgrade_payment"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    inbound_message_id: Mapped[UUID] = mapped_column(ForeignKey("inbound_messages.id"), unique=True, nullable=False)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    group_chat_id: Mapped[UUID] = mapped_column(ForeignKey("group_chats.id"), nullable=False)
+    category_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    from_level: Mapped[int] = mapped_column(Integer, nullable=False)
+    to_level: Mapped[int] = mapped_column(Integer, nullable=False)
+    price: Mapped[int] = mapped_column(Integer, nullable=False)
+    credit_used: Mapped[int] = mapped_column(Integer, nullable=False)
+    cash_paid: Mapped[int] = mapped_column(Integer, nullable=False)
+    result: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+
+
+class WorkstationAccessoryRecord(Base):
+    __tablename__ = "workstation_accessories"
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    accessory_number: Mapped[int] = mapped_column(Integer, primary_key=True)
+    equipped: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+class WorkstationAccessoryPurchaseRecord(Base):
+    __tablename__ = "workstation_accessory_purchases"
+    __table_args__ = (CheckConstraint("price >= 0", name="ck_workstation_accessory_price"),)
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    inbound_message_id: Mapped[UUID] = mapped_column(ForeignKey("inbound_messages.id"), nullable=False, unique=True)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    group_chat_id: Mapped[UUID] = mapped_column(ForeignKey("group_chats.id"), nullable=False)
+    accessory_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    price: Mapped[int] = mapped_column(Integer, nullable=False)
+    result: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
+
+
+class WorkstationActionRecord(Base):
+    """Account-scoped receipts for game actions and grouped chat actions."""
+    __tablename__ = "workstation_actions"
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    request_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    inbound_message_id: Mapped[UUID | None] = mapped_column(ForeignKey("inbound_messages.id"), unique=True)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    result: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(BeijingDateTime, nullable=False)
 
 
 class ItemRecord(Base):
@@ -4470,7 +4649,7 @@ class BirthdaySettingsRecord(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
     enabled: Mapped[bool] = mapped_column(
-        Boolean, default=False, server_default=false(), nullable=False
+        Boolean, default=True, server_default=true(), nullable=False
     )
     greet_times: Mapped[list[str]] = mapped_column(
         JSON,

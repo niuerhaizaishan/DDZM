@@ -11,6 +11,7 @@ from dzmm_bot.runtime.contracts import InboundMessage
 from .ai_mentions import ai_mention_content
 from .chinese_input import canonicalize_command_content
 from .repository import CoreRepository
+from .equipment import EQUIPMENT_COMMANDS
 from .schema import PRIMARY_GROUP_CHAT_ID
 from .random_event_submissions import (
     RandomEventSubmissionHandler,
@@ -20,6 +21,7 @@ from .random_event_submissions import (
 
 
 _DIRECT_COMMANDS = {
+    *EQUIPMENT_COMMANDS, "/装备商店", "/工位商店",
     "/我的称号", "/佩戴称号", "/装备称号", "/编辑称号", "/荣誉榜", "/荣誉历史",
     "/报数", "/发红包", "/抢红包", "/余额", "/我的物品", "/我",
     "/帮助", "/当前游戏", "/我的档案", "/我的部门人数", "/打卡",
@@ -72,6 +74,7 @@ class CommandReply:
     image_alt: str | None = None
     force_group_destination: bool = False
     group_chat_id: UUID | None = None
+    reference_inbound: bool = True
 
 
 @dataclass(frozen=True)
@@ -305,6 +308,14 @@ class CoreService:
                             destination_chatroom_id=group_context.chatroom_id,
                         )
                         return ReceiveResult(stored.id, True)
+            # Workstation rule locks precede user activity writes, matching web
+            # actions/admin/settlement lock order under PostgreSQL.
+            if group_context is not None and command_parts and command_parts[0] in {
+                "/升级", "/升级装备", "/升级工位", "/装备", "/卸下",
+                "/切换工位环境", "/切换工位", "/精修工位",
+            }:
+                with self._repository._session() as session:
+                    self._repository.lock_workstation_rules(session)
             self._repository.record_activity(
                 message.sender_platform_id, message.received_at, message.content
             )
@@ -461,6 +472,7 @@ class CoreService:
                 message.received_at,
             )
             for reply_index, reply in enumerate(replies):
+                reference_options = {} if reply.reference_inbound else {"reference_inbound": False}
                 destination_chatroom_id = reply.destination_chatroom_id
                 group_chat_id = reply.group_chat_id
                 if reply.delivery_kind == "group" and group_context is not None:
@@ -497,6 +509,7 @@ class CoreService:
                             group_chat_id=group_chat_id,
                             destination_chatroom_id=destination_chatroom_id,
                             content_type=reply.content_type,
+                            **reference_options,
                         )
                     else:
                         self._repository.enqueue_outbound(
@@ -507,6 +520,7 @@ class CoreService:
                             destination_chatroom_id=destination_chatroom_id,
                             delivery_kind=reply.delivery_kind,
                             content_type=reply.content_type,
+                            **reference_options,
                         )
                     continue
                 self._repository.enqueue_outbound(
@@ -520,6 +534,7 @@ class CoreService:
                     destination_chatroom_id=destination_chatroom_id,
                     delivery_kind=reply.delivery_kind,
                     content_type=reply.content_type,
+                    **reference_options,
                 )
             return ReceiveResult(stored.id, True)
 
@@ -702,6 +717,7 @@ class CoreService:
                 reply = item
             else:
                 reply = CommandReply(item)
+            reference_options = {} if reply.reference_inbound else {"reference_inbound": False}
             destination = reply.destination_chatroom_id
             delivery_kind = reply.delivery_kind
             group_chat_id = reply.group_chat_id
@@ -739,6 +755,7 @@ class CoreService:
                     destination_chatroom_id=destination,
                     delivery_kind=delivery_kind,
                     content_type=reply.content_type,
+                    **reference_options,
                 )
 
 

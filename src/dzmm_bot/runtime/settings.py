@@ -41,9 +41,14 @@ class Settings:
     club_game_url: str | None = None
     club_public_api_url: str | None = None
     club_chatroom_id: str | None = None
+    workstation_public_url: str | None = None
+    gamefy_game_id: str | None = None
+    workstation_game_url: str | None = None
 
     @classmethod
     def from_environment(cls) -> "Settings":
+        from dzmm_bot.core.workstation import normalize_workstation_game_url, normalize_workstation_public_url
+
         database_url = _required("DZMM_DATABASE_URL")
         core_token = _required("DZMM_CORE_TOKEN")
         admin_token = _optional("DZMM_ADMIN_TOKEN")
@@ -94,6 +99,13 @@ class Settings:
             club_game_url=_optional("DZMM_CLUB_GAME_URL", empty_as_none=True),
             club_public_api_url=_optional("DZMM_CLUB_PUBLIC_API_URL", empty_as_none=True),
             club_chatroom_id=_optional("DZMM_CLUB_CHATROOM_ID", empty_as_none=True),
+            workstation_public_url=normalize_workstation_public_url(
+                _optional("DZMM_WORKSTATION_PUBLIC_URL", empty_as_none=True)
+            ),
+            gamefy_game_id=_optional("DZMM_GAMEFY_GAME_ID", empty_as_none=True),
+            workstation_game_url=normalize_workstation_game_url(
+                _optional("DZMM_WORKSTATION_GAME_URL", empty_as_none=True)
+            ),
         )
 
 

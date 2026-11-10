@@ -1,5 +1,5 @@
 """P2：四项寿星特权。"""
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -113,7 +113,8 @@ def test_checkin_is_untouched_on_a_normal_day(harness):
 
 
 def test_checkin_is_untouched_when_the_feature_is_off(harness):
-    _, factory, _ = harness
+    repository, factory, _ = harness
+    repository.set_birthday_settings(**asdict(replace(repository.get_birthday_settings(), enabled=False)))
     give_birthday(factory, "p1", 9, 17)
 
     _check_in_reply(harness, "p1")

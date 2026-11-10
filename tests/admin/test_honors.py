@@ -1,10 +1,11 @@
 from copy import deepcopy
-from datetime import date
+from datetime import date, timedelta
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
+import httpx
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -14,7 +15,7 @@ from dzmm_bot.admin.repository import AdminRepository
 from dzmm_bot.core.app import create_app as create_core_app
 from dzmm_bot.core.honors import midnight
 from dzmm_bot.core.repository import CoreRepository
-from dzmm_bot.core.schema import Base, beijing_now
+from dzmm_bot.core.schema import AuditEventRecord, Base, DepartmentRecord, RankRecord, UserRecord, beijing_now
 
 
 @pytest.fixture
@@ -29,14 +30,22 @@ def context(tmp_path):
     repository.get_honor_config(midnight(date(2026, 9, 28)))
     repository.create_user("user-1", "糯糯", now, 0)
     core_app = create_core_app(repository, "core-secret", clock=lambda: now)
-    internal = TestClient(core_app, headers={"X-Core-Token": "core-secret"})
-    core = CoreClient("http://testserver", "core-secret", client=internal)
+    internal = TestClient(core_app)
+
+    def transport(request):
+        response = internal.request(request.method, str(request.url), headers=request.headers, content=request.content)
+        return httpx.Response(response.status_code, content=response.content, headers=response.headers)
+
+    upstream = httpx.Client(transport=httpx.MockTransport(transport), base_url="http://testserver",
+                            headers={"X-Core-Token": "core-secret"})
+    core = CoreClient("http://testserver", "core-secret", client=upstream)
     admin_repository = AdminRepository(factory)
     account = admin_repository.create_account("viewer", "password-for-tests")
     token = admin_repository.create_session(account.id, beijing_now())
     admin = TestClient(create_app("admin-secret", core, repository=admin_repository,
                                   profile_upload_dir=tmp_path / "profiles"))
     yield admin, repository, {"X-Admin-Session": token}
+    upstream.close()
     internal.close()
     engine.dispose()
 
@@ -121,3 +130,93 @@ def test_honor_page_and_script_are_available(context):
     assert script.status_code == 200
     assert "no-cache" in script.headers["cache-control"]
     assert "preview_digest" in script.text
+
+
+def test_manual_permanent_honor_grant_wear_and_revoke(context):
+    client, repository, viewer = context
+    base = "/api/game/honors"
+    super_admin = {"X-Admin-Token": "admin-secret"}
+    now = midnight(date(2026, 10, 5))
+    assert client.get(f"{base}/employees?query=糯").status_code == 401
+    employee, = client.get(f"{base}/employees?query=糯", headers=viewer).json()["items"]
+    assert client.get(f"{base}/employees", headers=viewer, params={"query": f"#{employee['employee_number']:04d}"}).json() == {"items": [employee]}
+    grant = {"employee_number": employee["employee_number"], "name": "年度热心同事", "reason": "帮同事整理资料"}
+    headers = {**viewer, "Idempotency-Key": str(uuid4())}
+    path = f"{base}/permanent/grant"
+    assert client.post(path, headers=headers, json={**grant, "actor": "spoofed"}).status_code == 422
+    response = client.post(path, headers=headers, json=grant)
+    assert response.status_code == 200, response.text
+    award = response.json()
+    assert award["source"] == "manual" and award["expires_at"] is None
+    assert award["source_details"] == {"actor": "viewer", "reason": grant["reason"]}
+    assert client.post(path, headers=headers, json=grant).json() == award
+    assert client.post(path, headers={**viewer, "Idempotency-Key": str(uuid4())}, json=grant).status_code == 409
+
+    personal = repository.my_honors("user-1", now)
+    assert personal["equipped"] is None
+    assert "source_details" not in personal["items"][0]
+    assert repository.wear_honor("user-1", 1, now) == grant["name"]
+    future = now + timedelta(days=400)
+    assert repository.get_equipped_honor("user-1", future) == grant["name"]
+
+    path = f"{base}/permanent/{award['id']}/revoke"
+    reason = {"reason": "员工申请撤回"}
+    assert client.post(path, headers=viewer, json=reason).status_code == 403
+    response = client.post(path, headers=super_admin, json=reason)
+    assert response.status_code == 200, response.text
+    assert client.post(path, headers=super_admin, json=reason).json() == response.json()
+    assert repository.my_honors("user-1", now)["items"] == []
+    assert repository.get_equipped_honor("user-1", now) is None
+    history, = client.get(f"{base}/history?source=manual", headers=viewer).json()["items"]
+    assert history["week_start"] is None and history["active"] is False
+    assert history["source_details"]["revoke_reason"] == reason["reason"]
+    with repository._session() as session:
+        events = session.scalars(select(AuditEventRecord.event_type).where(
+            AuditEventRecord.event_type.in_(["honor_permanent_grant", "honor_permanent_revoke"]),
+        )).all()
+    assert sorted(events) == ["honor_permanent_grant", "honor_permanent_revoke"]
+
+
+def test_s1_previews_current_and_historical_rosters_and_issues_once(context):
+    client, repository, viewer = context
+    base = "/api/game/honors/seasons/s1"
+    super_admin = {"X-Admin-Token": "admin-secret"}
+    now = midnight(date(2026, 10, 5))
+    repository.create_user("user-2", "未分配员工", now, 0)
+    with repository.transaction(), repository._session() as session:
+        department = DepartmentRecord(name="研发部", created_at=now)
+        rank = session.scalar(select(RankRecord).where(RankRecord.name == "部门总监"))
+        session.add(department)
+        session.flush()
+        employee = session.scalar(select(UserRecord).where(UserRecord.platform_id == "user-1"))
+        employee.department_id, employee.rank_id = department.id, rank.id
+        number, department_id = employee.employee_number, department.id
+    assert client.post(f"{base}/preview", headers=viewer, json={}).status_code == 403
+    assert client.post(f"{base}/issue", headers=viewer, json={"preview_digest": "0" * 64}).status_code == 403
+    current = client.post(f"{base}/preview", headers=super_admin, json={}).json()
+    assert current["rows"][0]["title"] == "S1赛季 · 研发部 · 部门总监"
+    assert current["skipped"][0]["reason"] == "缺少部门或职位"
+    assert repository.my_honors("user-1", now)["items"] == []
+    with repository.transaction(), repository._session() as session:
+        session.get(DepartmentRecord, department_id).name = "平台部"
+    response = client.post(f"{base}/issue", headers=super_admin, json={"preview_digest": current["preview_digest"]})
+    assert response.status_code == 409
+
+    roster = [{"employee_number": number, "department": "结季技术部", "rank": "技术总监"},
+              {"employee_number": 9876, "department": "历史部门", "rank": "职员"}]
+    assert client.post(f"{base}/preview", headers=super_admin, json={"roster": roster + roster}).status_code == 422
+    historical = client.post(f"{base}/preview", headers=super_admin, json={"roster": roster}).json()
+    assert historical["skipped"][0]["reason"] == "找不到该工号"
+    issue = {"roster": roster, "preview_digest": historical["preview_digest"]}
+    response = client.post(f"{base}/issue", headers=super_admin, json=issue)
+    assert response.status_code == 200, response.text
+    batch = response.json()
+    assert batch["code"] == "S1" and batch["count"] == 1
+    assert client.post(f"{base}/issue", headers=super_admin, json=issue).json() == batch
+    assert client.post(f"{base}/issue", headers=super_admin, json={"preview_digest": current["preview_digest"]}).status_code == 409
+    assert client.post(f"{base}/preview", headers=super_admin, json={}).json() == {"issued": batch}
+    award, = repository.my_honors("user-1", now + timedelta(days=400))["items"]
+    assert award["source"] == "season" and award["name"] == "S1赛季 · 结季技术部 · 技术总监"
+    assert repository.honor_board(now)["items"] == []
+    history, = client.get("/api/game/honors/history?source=season", headers=super_admin).json()["items"]
+    assert history["source_details"]["department"] == "结季技术部"

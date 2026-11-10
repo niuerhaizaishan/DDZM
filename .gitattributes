@@ -1,0 +1,5 @@
+# Keep Linux deployment entry points executable by a shell after Windows checkouts.
+*.sh text eol=lf
+*.service text eol=lf
+deploy/caddy/Caddyfile text eol=lf
+*.png binary

@@ -144,6 +144,11 @@ body:has(#dashboard[data-design="refined"]:not([hidden])) .danger-button {
 #honors-panel > .panel { margin-top: 30px; padding: 28px 0 0; border: 0; border-top: 1px solid var(--line); border-radius: 0; }
 #honors-panel > .panel > .command-actions { justify-content: flex-start; align-items: flex-end; flex-wrap: wrap; margin-top: 18px; }
 #honors-panel > .panel > .command-actions label { display: grid; gap: 6px; }
+#honors-panel .honor-permanent-tools > summary { cursor: pointer; font-weight: 600; }
+#honors-panel .honor-permanent-tools form, #honor-permanent-grant > button { margin-top: 14px; }
+#honor-season-preview { display: grid; gap: 12px; }
+#honor-season-preview > label { display: grid; gap: 6px; }
+#honors-panel .honor-season-table { max-height: 28rem; overflow: auto; }
 #honor-history-filters { align-items: end; margin-top: 18px; }
 #honor-history-filters button { justify-self: start; }
 #honor-preview-results details { margin-top: 10px; padding: 12px 15px; border: 1px solid var(--line); border-radius: 8px; }

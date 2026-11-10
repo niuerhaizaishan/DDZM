@@ -174,6 +174,7 @@ from .shop_cards import (
 )
 from .shop_effects import default_effect_config, effect_definition, effective_config, item_effect_snapshot
 from .shop_management import ShopManagementMixin
+from .equipment import EquipmentMixin, EQUIPMENT_COMMAND_DEFINITIONS
 from .honors import HonorsMixin
 from .red_packet import RandomSource, generate_red_packet_allocation
 from .texas_holdem import (
@@ -591,6 +592,7 @@ _BALANCE_SOURCE_LABELS = {
     "checkin_backfill": "每日打卡（补录）",
     "weekly_attendance": "周全勤奖励",
     "activity_reward": "活跃度奖励",
+    "workstation_income": "工位收益",
     "board_bonus": "董事会奖金",
     "shop": "商店购买",
     "promotion": "职位晋升",
@@ -630,6 +632,8 @@ _BALANCE_SOURCE_LABELS = {
     "dark_market_complaint_refund": "暗网投诉退款",
     "dark_market_complaint_penalty": "暗网投诉卖家罚款",
     "shop_purchase": "商店购买",
+    "equipment_purchase": "装备商城购买",
+    "workstation_upgrade": "工位部件升级",
     "shop_gift": "赠送卡到账",
     "shop_scratch": "刮刮卡奖励",
     "shop_compensation": "卡片作废补偿",
@@ -2710,6 +2714,7 @@ class GroupBanInProgressError(RuntimeError):
 
 
 _COMMAND_DEFINITIONS = (
+    *EQUIPMENT_COMMAND_DEFINITIONS,
     ("/我的称号", "/我的称号", "查看当前可佩戴称号和历史获得次数"),
     ("/佩戴称号", "/佩戴称号 序号", "选择佩戴称号（/装备称号、/编辑称号 等效），序号 0 取消佩戴"),
     ("/荣誉榜", "/荣誉榜", "查看当前周期的荣誉称号获得者"),
@@ -3085,7 +3090,7 @@ class CompanyLotteryOverview:
     employees: tuple[CompanyLotteryEmployeeTotal, ...]
 
 
-class CoreRepository(ClubRepositoryMixin, MahjongRepositoryMixin, MistrealmRepositoryMixin, DrawguessRepositoryMixin, DoudizhuRepositoryMixin, ChessRepositoryMixin, ShopManagementMixin, HonorsMixin):
+class CoreRepository(ClubRepositoryMixin, MahjongRepositoryMixin, MistrealmRepositoryMixin, DrawguessRepositoryMixin, DoudizhuRepositoryMixin, ChessRepositoryMixin, ShopManagementMixin, HonorsMixin, EquipmentMixin):
     def __init__(
         self,
         session_factory: sessionmaker[Session],
@@ -25189,7 +25194,7 @@ class CoreRepository(ClubRepositoryMixin, MahjongRepositoryMixin, MistrealmRepos
             if record is None:
                 record = BirthdaySettingsRecord(
                     id=1,
-                    enabled=False,
+                    enabled=True,
                     greet_times=list(_DEFAULT_BIRTHDAY_GREET_TIMES),
                     preview_enabled=True,
                     preview_time=_DEFAULT_BIRTHDAY_PREVIEW_TIME,
@@ -30809,6 +30814,7 @@ class CoreRepository(ClubRepositoryMixin, MahjongRepositoryMixin, MistrealmRepos
         should_settle_activity_rewards = (
             self._activity_rewards_settled_on != now.date()
         )
+        self.run_workstation_income_jobs(now)
         self.run_performance_jobs(now)
         self.run_dark_market_jobs(now)
         self.run_shop_card_jobs(now)
@@ -35160,6 +35166,7 @@ class CoreRepository(ClubRepositoryMixin, MahjongRepositoryMixin, MistrealmRepos
         delivery_kind: str = "group",
         defer_for_performance: bool = False,
         content_type: str = "text",
+        reference_inbound: bool = True,
     ) -> OutboundRecord:
         if recall_after_seconds is not None and recall_after_seconds < 1:
             raise ValueError("撤回秒数必须为正整数")
@@ -35205,7 +35212,7 @@ class CoreRepository(ClubRepositoryMixin, MahjongRepositoryMixin, MistrealmRepos
             )
             reference = (
                 {}
-                if uses_bot_group_sender
+                if uses_bot_group_sender or not reference_inbound
                 else _outbound_reference_snapshot(inbound, destination_chatroom_id)
             )
             replies = [reply] if content_type != "text" or self._keeps_group_reply_intact(
@@ -35272,6 +35279,7 @@ class CoreRepository(ClubRepositoryMixin, MahjongRepositoryMixin, MistrealmRepos
         delivery_kind: str = "group",
         performance_defer_key: str | None = None,
         bypass_performance_gate: bool = False,
+        content_type: str = "text",
     ) -> OutboundRecord:
         if recall_after_seconds is not None and recall_after_seconds < 1:
             raise ValueError("撤回秒数必须为正整数")
@@ -35291,7 +35299,7 @@ class CoreRepository(ClubRepositoryMixin, MahjongRepositoryMixin, MistrealmRepos
                     session, group_chat_id
                 )
                 if performance is not None:
-                    return self._hold_performance_outbound(
+                    held = self._hold_performance_outbound(
                         session,
                         performance,
                         text,
@@ -35299,7 +35307,9 @@ class CoreRepository(ClubRepositoryMixin, MahjongRepositoryMixin, MistrealmRepos
                         performance_defer_key,
                         recall_after_seconds,
                     )
-            texts = [text] if self._keeps_group_reply_intact(
+                    held.content_type = content_type
+                    return held
+            texts = [text] if content_type != "text" or self._keeps_group_reply_intact(
                 text,
                 recall_after_seconds=recall_after_seconds,
                 destination_chatroom_id=destination_chatroom_id,
@@ -35313,6 +35323,7 @@ class CoreRepository(ClubRepositoryMixin, MahjongRepositoryMixin, MistrealmRepos
                         group_chat_id if delivery_kind == "group" else None
                     ),
                     text=part,
+                    content_type=content_type,
                     reply_index=index,
                     recall_after_seconds=recall_after_seconds,
                     destination_chatroom_id=destination_chatroom_id,

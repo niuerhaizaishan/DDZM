@@ -105,6 +105,7 @@ const randomEventCommandOptions = [
   ["/设置生日", "/设置生日"], ["/我的生日", "/我的生日"], ["/本月生日", "/本月生日"],
 ];
 const pageContext = {
+  workstation: {crumb: "游戏运营 / 工位管理", title: "工位管理", description: "管理玩家工位、价格收益规则与结算记录。"},
   honors: {crumb: "人员与系统 / 称号与荣誉", title: "称号与荣誉", description: "每周评选、限期佩戴与历史荣誉"},
   overview: {crumb: "运营概览", title: "机器人运行状态", description: "查看服务、浏览器和人工登录状态。"},
   events: {crumb: "游戏运营 / 随机事件", title: "随机事件运营", description: "安排今日场次，管理场景、角色席位与剧情事件。"},
@@ -2757,7 +2758,7 @@ function renderBirthdayPanel(settings, members, groups) {
     <div class="panel-heading"><div><h2>生日名单</h2><p class="muted">试跑只渲染文案，不发钱、不公告；补发会真发礼金并公告。</p></div></div>
     <div class="table-scroll" role="region" aria-label="生日名单" tabindex="0"><table class="data-table"><thead><tr><th>姓名</th><th>工号</th><th>生日</th><th>可见性</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table></div>
     <pre id="birthday-preview-output" class="muted"></pre>`;
-  mountRuleEditor("birthday", "生日祝福", "总开关默认关闭；随礼窗口填 0 表示一直有效到当天 24:00。", fields, saveBirthdaySettings, "保存生日设置");
+  mountRuleEditor("birthday", "生日祝福", "新安装默认开启。升级时会开启已关闭的总开关和群开关，之后可在后台调整。随礼窗口填 0 表示一直有效到当天 24:00。", fields, saveBirthdaySettings, "保存生日设置");
   for (const button of panel.querySelectorAll("[data-birthday-dry]")) {
     button.addEventListener("click", () => previewBirthdayGreeting(button.dataset.birthdayDry, true));
   }
@@ -3249,6 +3250,7 @@ async function loadGameView(view) {
     }
     if (view === "events") return loadRandomEvents();
     if (view === "hide-and-seek") return loadHideAndSeek();
+    if (view === "workstation") return await loadWorkstationAdmin();
     if (view === "birthday") return loadBirthday();
     if (view === "discipline-fine") return loadDisciplineFine();
     if (view === "department-allowance") return loadDepartmentAllowances();
@@ -3511,7 +3513,7 @@ document.querySelector("#logout").addEventListener("click", async () => {
   accountLoginForm.reset();
 });
 document.querySelector("#refresh").addEventListener("click", async (event) => {
-  await runMutation(event.currentTarget, "刷新中…", refresh);
+  await runMutation(event.currentTarget, "刷新中…", () => document.querySelector("#workstation-view")?.hidden === false ? workstationAttempt(loadWorkstationAdmin) : refresh());
 });
 document.querySelector("#open-login-console").addEventListener("click", openConsole);
 document.querySelector("#cancel-login").addEventListener("click", async (event) => {

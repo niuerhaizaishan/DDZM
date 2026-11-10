@@ -1,4 +1,4 @@
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import datetime, timedelta
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
@@ -259,6 +259,7 @@ def test_backfill_can_be_turned_off(repository, seeded):
 
 
 def test_the_master_switch_keeps_everything_silent(repository, seeded):
+    repository.set_birthday_settings(**asdict(replace(repository.get_birthday_settings(), enabled=False)))
     give_birthday(seeded, "p1", 9, 17)
 
     repository.run_birthday_jobs(NOW)

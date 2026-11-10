@@ -241,3 +241,14 @@ select:hover { border-color: #bdb5ff; }
 @keyframes notification-in { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
 [hidden] { display: none !important; }
 @media (max-width: 760px) { .topbar { padding: 0 20px; } .connection { display: none; } main { width: min(100% - 32px, 1180px); padding: 32px 0; } .login-card { padding: 28px; } .page-heading, .workspace, .dashboard-layout { display: grid; } .dashboard-layout { grid-template-columns: 1fr; } .side-nav-shell { position: static; } .side-nav { grid-template-columns: repeat(2, 1fr); gap: 10px; } .nav-group { gap: 2px; } .nav-group-label, .sidebar-footer { display: none; } .status-grid, .settings-card, .event-input-grid, .undercover-role-row, .impression-add-row { grid-template-columns: 1fr; } .item-form { grid-template-columns: 1fr; } .data-row, .command-heading, .command-actions, .template-modal-heading, .template-modal-actions, .impression-entry { align-items: start; flex-direction: column; } .scene-seat-row, .scene-opening-row { grid-template-columns: 1fr; } .pagination { align-items: stretch; flex-wrap: wrap; } .pagination small { width: 100%; margin-right: 0; } .page-heading .secondary { justify-self: start; } .topbar-meta { gap: 4px; } #login-console-frame { min-height: 480px; } }
+
+/* Workstation uses the shared backoffice cards, tables and modal editor. */
+#workstation-admin-panel .workstation-admin-tabs { flex-direction: row; flex-wrap: wrap; gap: 8px; margin-bottom: 24px; }
+#workstation-admin-panel .table-scroll { max-width: 100%; overflow-x: auto; }
+#workstation-admin-panel details pre { max-width: 32rem; max-height: 22rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+#workstation-admin-panel #workstation-filter { flex-direction: row; flex-wrap: wrap; align-items: end; gap: 10px; margin: 16px 0; }
+#workstation-player-detail { margin-top: 28px; padding-top: 22px; border-top: 1px solid var(--line); }
+
+#workstation-admin-panel .workstation-admin-tabs { justify-content: flex-start; }
+@media (min-width: 760px) { #workstation-admin-panel .workstation-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 1100px) { #workstation-admin-panel .workstation-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); } }

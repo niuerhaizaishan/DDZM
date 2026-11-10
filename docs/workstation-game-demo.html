@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>工位养成 · 装备原型</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #263238;
+      --muted: #78858c;
+      --paper: #f6f1e8;
+      --card: rgba(255, 252, 246, .9);
+      --line: #e7ded1;
+      --accent: #d96b4d;
+      --accent-dark: #9e4838;
+      --teal: #5c8c83;
+      --yellow: #edbd5d;
+      --shadow: 0 18px 45px rgba(80, 62, 41, .1);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+      background:
+        radial-gradient(circle at 8% 0%, rgba(255,255,255,.85), transparent 28%),
+        linear-gradient(135deg, #f9f4eb 0%, #eee5d8 100%);
+    }
+
+    .shell { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding: 34px 0 48px; }
+
+    .topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 28px; }
+    .eyebrow { margin: 0 0 8px; color: var(--accent-dark); font-size: 12px; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
+    h1, h2, p { margin-top: 0; }
+    h1 { margin-bottom: 8px; font-family: Georgia, "Songti SC", serif; font-size: clamp(34px, 5vw, 58px); line-height: .98; letter-spacing: -.04em; }
+    .intro { max-width: 520px; margin-bottom: 0; color: var(--muted); line-height: 1.7; }
+    .profile-chip { display: flex; align-items: center; gap: 12px; padding: 10px 14px 10px 10px; border: 1px solid var(--line); border-radius: 999px; background: rgba(255,255,255,.56); box-shadow: 0 8px 24px rgba(80, 62, 41, .06); }
+    .avatar { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 50%; background: #243f49; color: #f9dfae; font-weight: 800; }
+    .profile-chip strong, .profile-chip small { display: block; }
+    .profile-chip small { margin-top: 2px; color: var(--muted); }
+
+    .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 22px; }
+    .stat { padding: 18px; border: 1px solid var(--line); border-radius: 18px; background: var(--card); box-shadow: 0 10px 25px rgba(80,62,41,.05); }
+    .stat-label { color: var(--muted); font-size: 13px; }
+    .stat-value { margin: 8px 0 4px; font-size: 28px; font-weight: 800; letter-spacing: -.04em; }
+    .stat-note { color: var(--teal); font-size: 12px; font-weight: 700; }
+
+    .layout { display: grid; grid-template-columns: 1.25fr .75fr; gap: 18px; }
+    .panel { border: 1px solid var(--line); border-radius: 24px; background: var(--card); box-shadow: var(--shadow); overflow: hidden; }
+    .panel-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 20px 22px 16px; border-bottom: 1px solid var(--line); }
+    .panel-head h2 { margin-bottom: 0; font-size: 18px; }
+    .panel-head span { color: var(--muted); font-size: 12px; }
+    .panel-actions { display: flex; align-items: center; gap: 10px; }
+
+    .desk { padding: 20px; background: linear-gradient(160deg, #fffaf1, #f4eadb); }
+    .desk-scene { position: relative; aspect-ratio: 3 / 2; border-radius: 20px; background: #e9d6be; overflow: hidden; box-shadow: inset 0 0 0 1px rgba(255,255,255,.25); }
+    .desk-scene:after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, transparent 52%, rgba(15, 28, 35, .55) 100%); pointer-events: none; }
+    .desk-scene img { display: block; width: 100%; height: 100%; object-fit: contain; object-position: center; }
+    .desk-layer { position: absolute; z-index: 2; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; transition: opacity .2s ease, filter .2s ease; }
+    .desk-layer.is-hidden { opacity: 0; filter: blur(3px); }
+    .layer-toggle { border: 1px solid #dfcbb5; border-radius: 999px; padding: 7px 11px; background: #fffaf1; color: var(--accent-dark); cursor: pointer; font: inherit; font-size: 12px; font-weight: 800; }
+    .layer-toggle:hover { background: #f5e6d0; }
+    .desk-caption { position: absolute; z-index: 100; left: 18px; right: 18px; bottom: 15px; display: flex; justify-content: space-between; color: #fff6e7; font-size: 12px; font-weight: 700; text-shadow: 0 1px 4px rgba(0,0,0,.45); }
+    .equipment-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-top: 16px; }
+    .equipment-card { display: grid; gap: 6px; padding: 8px; min-width: 0; border: 1px solid var(--line); border-radius: 12px; background: #fffcf7; color: var(--ink); cursor: pointer; font: inherit; font-size: 12px; text-align: left; }
+    .equipment-card[aria-pressed="true"] { border-color: var(--teal); background: #edf4ee; }
+    .equipment-card img { width: 100%; height: 58px; object-fit: contain; background: repeating-conic-gradient(#e7e2da 0% 25%, #f4f0ea 0% 50%) 50% / 14px 14px; border-radius: 6px; }
+    .equipment-card small { color: var(--teal); }
+    .equipment-card em { color: var(--accent-dark); font-size: 11px; font-style: normal; }
+    .equipment-card .buy-state { color: var(--muted); }
+    .equipment-card[aria-disabled="true"] { opacity: .62; cursor: not-allowed; }
+    .layer-note { margin: 12px 0 0; font-size: 12px; color: var(--muted); line-height: 1.7; }
+    .scene-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .panel-actions { flex-wrap: wrap; justify-content: flex-end; }
+    .layer-toggle:focus-visible, .equipment-card:focus-visible { outline: 3px solid var(--teal); outline-offset: 2px; }
+
+    .feed { padding-bottom: 8px; }
+    .feed-item { display: grid; grid-template-columns: 42px 1fr auto; gap: 12px; align-items: center; padding: 16px 22px; border-bottom: 1px solid var(--line); }
+    .feed-icon { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 12px; background: #f3e2ca; font-size: 20px; }
+    .feed-item strong, .feed-item small { display: block; }
+    .feed-item small { margin-top: 4px; color: var(--muted); line-height: 1.45; }
+    .feed-item time { align-self: start; color: var(--muted); font-size: 11px; white-space: nowrap; }
+
+    .side { display: grid; gap: 18px; align-content: start; }
+    .progress-wrap { padding: 20px 22px 24px; }
+    .progress-row { display: flex; justify-content: space-between; margin-bottom: 10px; font-size: 13px; }
+    .progress-row span:last-child { color: var(--accent-dark); font-weight: 800; }
+    .progress { height: 10px; border-radius: 99px; background: #eee3d4; overflow: hidden; }
+    .progress i { display: block; width: 68%; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--accent), #efad65); }
+    .milestones { display: grid; gap: 13px; padding: 18px 22px 22px; }
+    .milestone { display: flex; align-items: center; gap: 12px; }
+    .milestone b { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; background: #e2efe6; color: var(--teal); font-size: 14px; }
+    .milestone span { color: var(--muted); font-size: 13px; }
+    .milestone strong { display: block; margin-bottom: 2px; font-size: 14px; }
+    .notice { padding: 20px 22px; background: #243f49; color: #fff9ef; }
+    .notice h2 { margin-bottom: 8px; font-size: 17px; }
+    .notice p { margin-bottom: 0; color: #c8d9d5; font-size: 13px; line-height: 1.7; }
+
+    @media (max-width: 820px) {
+      .shell { width: min(100% - 24px, 620px); padding-top: 22px; }
+      .topbar { align-items: flex-start; flex-direction: column; }
+      .profile-chip { align-self: stretch; }
+      .stats { grid-template-columns: repeat(2, 1fr); }
+      .layout { grid-template-columns: 1fr; }
+      .desk { padding: 14px; }
+      .equipment-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">WORKSTATION / 01</p>
+        <h1>工位养成</h1>
+        <p class="intro">从一张简陋的桌面开始，用摸鱼币购买装备，拼出自己的工位。装备只提供工位收入。</p>
+      </div>
+      <div class="profile-chip">
+        <div class="avatar">糯</div>
+        <div><strong>糯糯</strong><small>普通员工 · 工号 DZ001</small></div>
+      </div>
+    </header>
+
+    <section class="stats" aria-label="角色状态">
+      <article class="stat"><span class="stat-label">摸鱼币</span><div class="stat-value" data-balance>128</div><span class="stat-note">可用于购买装备</span></article>
+      <article class="stat"><span class="stat-label">工位收入</span><div class="stat-value" data-income>0</div><span class="stat-note">币 / 日</span></article>
+      <article class="stat"><span class="stat-label">已装备</span><div class="stat-value" data-equipped-count>0 / 10</div><span class="stat-note">简陋工位起步</span></article>
+      <article class="stat"><span class="stat-label">已购装备</span><div class="stat-value" data-purchased-count>0</div><span class="stat-note">购买后永久拥有</span></article>
+    </section>
+
+    <section class="layout">
+      <div class="panel">
+            <div class="panel-head"><h2>我的工位</h2><div class="panel-actions"><span data-scene-status>简陋工位</span><button class="layer-toggle" type="button" data-export disabled>保存合成图</button></div></div>
+        <div class="desk">
+          <div class="desk-scene" data-scene>
+            <img data-base src="./assets/workstation/core-base.png" alt="已移除核心设备的工位底图">
+            <div class="desk-caption"><span>核心设备分层预览</span><span data-scene-mode>装备组合</span></div>
+          </div>
+          <div class="scene-actions">
+            <button class="layer-toggle" type="button" data-equip-all disabled>全部装备</button>
+            <button class="layer-toggle" type="button" data-remove-all disabled>全部卸下</button>
+            <button class="layer-toggle" type="button" data-reference aria-pressed="false" disabled>查看原图</button>
+          </div>
+          <div class="equipment-grid" data-equipment-list aria-label="可拆卸装备"></div>
+          <p class="layer-note" data-layer-status role="status">桌面上的杯子、笔记本、摆件和收纳物品保留原样。购买装备后可自由装备或卸下，收入仅按已装备装备计算。</p>
+        </div>
+      </div>
+
+      <div class="side">
+        <section class="panel">
+          <div class="panel-head"><h2>工位收益</h2><span>每日结算</span></div>
+          <div class="progress-wrap">
+            <div class="progress-row"><span>当前日收入</span><span data-income-summary>0 摸鱼币</span></div>
+            <div class="progress"><i data-income-progress></i></div>
+            <p class="layer-note">收入来自已装备物品；后续接入正式账户后，再由后台统一结算。</p>
+          </div>
+          <div class="milestones">
+            <div class="milestone"><b>₿</b><div><strong>购买装备</strong><span>消耗摸鱼币，获得永久装备</span></div></div>
+            <div class="milestone"><b>＋</b><div><strong>装备组合</strong><span>只计算当前已装备物品的工位收入</span></div></div>
+            <div class="milestone"><b>↻</b><div><strong>每日结算</strong><span>正式版本按后台规则入账</span></div></div>
+          </div>
+        </section>
+        <section class="panel notice">
+          <h2>今日提醒</h2>
+          <p>这是工位装备原型。当前购买记录保存在本机浏览器，正式版本再接入员工账户和后台配置。</p>
+        </section>
+      </div>
+    </section>
+
+    <section class="panel feed" style="margin-top:18px">
+      <div class="panel-head"><h2>工位动态</h2><span>最近发生</span></div>
+      <div class="feed-item"><div class="feed-icon">⌂</div><div><strong>简陋工位已准备好</strong><small>先购买一件装备，再开始组合工位。</small></div><time>现在</time></div>
+      <div class="feed-item"><div class="feed-icon">₿</div><div><strong data-feed-purchase>等待第一次购买</strong><small>装备只提供摸鱼币增益或收入，不参与小游戏成长。</small></div><time>—</time></div>
+      <div class="feed-item"><div class="feed-icon">▣</div><div><strong>当前为本地展示原型</strong><small>购买、装备和合成状态仅保存在当前浏览器。</small></div><time>—</time></div>
+    </section>
+  </main>
+  <script>
+    async function initializeLayers() {
+      const response = await fetch('./assets/workstation/manifest.json');
+      if (!response.ok) throw new Error('装备配置加载失败');
+      const manifest = await response.json();
+      const scene = document.querySelector('[data-scene]');
+      const base = document.querySelector('[data-base]');
+      const list = document.querySelector('[data-equipment-list]');
+      const counter = document.querySelector('[data-equipped-count]');
+      const balanceView = document.querySelector('[data-balance]');
+      const incomeView = document.querySelector('[data-income]');
+      const purchasedView = document.querySelector('[data-purchased-count]');
+      const incomeSummary = document.querySelector('[data-income-summary]');
+      const incomeProgress = document.querySelector('[data-income-progress]');
+      const sceneStatus = document.querySelector('[data-scene-status]');
+      const purchaseFeed = document.querySelector('[data-feed-purchase]');
+      const mode = document.querySelector('[data-scene-mode]');
+      const referenceToggle = document.querySelector('[data-reference]');
+      const exportButton = document.querySelector('[data-export]');
+      const layers = manifest.layers.toSorted((left, right) => left.zIndex - right.zIndex);
+      const storageKey = 'workstation-demo-state-v2';
+      let saved = {};
+      try {
+        saved = JSON.parse(localStorage.getItem(storageKey) || '{}');
+      } catch {
+        localStorage.removeItem(storageKey);
+      }
+      let balance = Number.isFinite(saved.balance) ? saved.balance : 128;
+      const validIds = new Set(layers.map(item => item.id));
+      const purchased = new Set((Array.isArray(saved.purchased) ? saved.purchased : []).filter(id => validIds.has(id)));
+      const equipped = new Set((Array.isArray(saved.equipped) ? saved.equipped : []).filter(id => validIds.has(id)));
+      const views = new Map();
+      let showingReference = false;
+
+      function render() {
+        base.src = showingReference ? manifest.reference : manifest.base;
+        base.alt = showingReference ? '原始完整工位图' : '已移除核心设备的工位底图';
+        const income = layers.filter(item => equipped.has(item.id)).reduce((total, item) => total + (Number(item.dailyIncome) || 0), 0);
+        counter.textContent = `已装备 ${equipped.size} / ${layers.length} 件`;
+        balanceView.textContent = balance;
+        incomeView.textContent = income;
+        purchasedView.textContent = purchased.size;
+        incomeSummary.textContent = `${income} 摸鱼币`;
+        incomeProgress.style.width = `${Math.min(100, income / 15 * 100)}%`;
+        sceneStatus.textContent = equipped.size ? `收入 +${income} 币 / 日` : '简陋工位';
+        purchaseFeed.textContent = purchased.size ? `已购买 ${purchased.size} 件装备，可继续调整组合。` : '等待第一次购买';
+        mode.textContent = showingReference ? '原图对照' : '装备组合';
+        referenceToggle.textContent = showingReference ? '返回组合' : '查看原图';
+        referenceToggle.setAttribute('aria-pressed', String(showingReference));
+        for (const item of layers) {
+          const view = views.get(item.id);
+          const selected = equipped.has(item.id);
+          view.image.hidden = showingReference || !selected;
+          view.image.style.display = view.image.hidden ? 'none' : 'block';
+          view.button.setAttribute('aria-pressed', String(selected));
+          view.button.removeAttribute('aria-disabled');
+          view.state.textContent = purchased.has(item.id) ? (selected ? '已装备 · 点击卸下' : '已购买 · 点击装备') : `购买 ${item.price} 币`;
+          view.effect.textContent = item.effect;
+        }
+      }
+
+      for (const item of layers) {
+        const image = document.createElement('img');
+        image.className = 'desk-layer';
+        image.src = item.asset;
+        image.alt = item.name;
+        image.style.zIndex = item.zIndex;
+        image.dataset.equipmentId = item.id;
+        scene.append(image);
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'equipment-card';
+        button.setAttribute('aria-label', item.name);
+        const thumbnail = document.createElement('img');
+        thumbnail.src = item.thumbnail;
+        thumbnail.alt = '';
+        const name = document.createElement('strong');
+        name.textContent = item.name;
+        const state = document.createElement('small');
+        const effect = document.createElement('em');
+        button.append(thumbnail, name, effect, state);
+        button.addEventListener('click', () => {
+          if (!purchased.has(item.id)) {
+            if (balance < item.price) {
+              document.querySelector('[data-layer-status]').textContent = `摸鱼币不足：${item.name}需要 ${item.price} 币，当前余额 ${balance} 币。`;
+              return;
+            }
+            balance -= item.price;
+            purchased.add(item.id);
+            equipped.add(item.id);
+            document.querySelector('[data-layer-status]').textContent = `已购买并装备${item.name}，消耗 ${item.price} 摸鱼币。`;
+          } else if (equipped.has(item.id)) equipped.delete(item.id);
+          else equipped.add(item.id);
+          localStorage.setItem(storageKey, JSON.stringify({ balance, purchased: [...purchased], equipped: [...equipped] }));
+          showingReference = false;
+          render();
+        });
+        list.append(button);
+        views.set(item.id, { image, button, state, effect });
+      }
+
+      document.querySelector('[data-equip-all]').addEventListener('click', () => {
+        for (const item of layers) if (purchased.has(item.id)) equipped.add(item.id);
+        showingReference = false;
+        localStorage.setItem(storageKey, JSON.stringify({ balance, purchased: [...purchased], equipped: [...equipped] }));
+        render();
+      });
+      document.querySelector('[data-remove-all]').addEventListener('click', () => {
+        equipped.clear();
+        localStorage.setItem(storageKey, JSON.stringify({ balance, purchased: [...purchased], equipped: [] }));
+        showingReference = false;
+        render();
+      });
+      referenceToggle.addEventListener('click', () => {
+        showingReference = !showingReference;
+        render();
+      });
+      exportButton.addEventListener('click', async () => {
+        exportButton.disabled = true;
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = manifest.canvas.width;
+          canvas.height = manifest.canvas.height;
+          const context = canvas.getContext('2d');
+          const background = new Image();
+          background.src = manifest.base;
+          await background.decode();
+          context.drawImage(background, 0, 0, canvas.width, canvas.height);
+          for (const item of layers.filter(entry => equipped.has(entry.id))) {
+            const image = views.get(item.id).image;
+            await image.decode();
+            context.drawImage(image, 0, 0, canvas.width, canvas.height);
+          }
+          const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+          if (!blob) throw new Error('合成图片失败');
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = '我的工位.png';
+          document.body.append(link);
+          link.click();
+          link.remove();
+          document.querySelector('[data-layer-status]').textContent = `合成图已保存，包含 ${equipped.size} 件已装备物品。`;
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        } catch (error) {
+          document.querySelector('[data-layer-status]').textContent = `保存失败：${error.message}，请刷新后重试。`;
+        } finally {
+          exportButton.disabled = false;
+        }
+      });
+      render();
+      await Promise.all([base.decode(), ...Array.from(views.values(), view => view.image.decode())]);
+      for (const button of document.querySelectorAll('.scene-actions button, [data-export]')) button.disabled = false;
+    }
+    initializeLayers().catch(error => {
+      document.querySelector('[data-layer-status]').textContent = `装备图片加载失败：${error.message}，请刷新页面重试。`;
+    });
+  </script>
+</body>
+</html>

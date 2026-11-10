@@ -7,19 +7,19 @@ from secrets import choice
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from .game_statistics import sync_game_participations
 from .schema import (
     ActivityLevelRuleRecord, AIRequestRecord, AuditEventRecord, BEIJING,
-    DailyCheckinRecord, DarkMarketListingRecord, EstrusChopRecord, GroupChatRecord,
-    HonorAwardRecord, HonorConfigRecord, HonorPeriodRecord, HonorStateRecord,
+    DailyCheckinRecord, DarkMarketListingRecord, DepartmentRecord, EstrusChopRecord, GroupChatRecord,
+    HonorAwardRecord, HonorConfigRecord, HonorPeriodRecord, HonorSeasonRecord, HonorStateRecord,
     HonorWearRecord, InboundRecord, PerformanceParticipantRecord,
     PerformanceReservationRecord, PerformanceTipRecord, PRIMARY_GROUP_CHAT_ID,
     RandomEventParticipantRecord, RandomEventRecord,
-    RandomEventSubmissionRecord, RandomEventTipRecord, UserRecord,
+    RandomEventSubmissionRecord, RandomEventTipRecord, RankRecord, UserRecord,
     GameParticipationRecord, KingGameRecord, KingGameRoundRecord,
     NumberBombGameRecord, NumberBombRoundRecord, NumberBombRoundPlayerRecord,
     TexasHoldemGameRecord, TexasHoldemPlayerRecord,
@@ -208,6 +208,68 @@ class HonorCorrectionRequest(HonorCorrectionInput):
     actor: str = Field(min_length=1, max_length=128)
 
 
+class HonorGrantInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    employee_number: int = Field(strict=True, ge=1, le=2147483647)
+    name: str = Field(min_length=1, max_length=64)
+    reason: str = Field(min_length=1, max_length=300)
+
+
+class HonorGrantRequest(HonorGrantInput):
+    actor: str = Field(min_length=1, max_length=128)
+
+
+class HonorRevokeInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(min_length=1, max_length=300)
+
+
+class HonorRevokeRequest(HonorRevokeInput):
+    actor: str = Field(min_length=1, max_length=128)
+
+
+class HonorSeasonMember(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    employee_number: int = Field(strict=True, ge=1, le=2147483647)
+    department: str = Field(max_length=64)
+    rank: str = Field(max_length=64)
+
+
+class HonorSeasonPreviewInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    roster: list[HonorSeasonMember] | None = Field(default=None, min_length=1, max_length=5000)
+
+
+class HonorSeasonIssueInput(HonorSeasonPreviewInput):
+    preview_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class HonorSeasonIssueRequest(HonorSeasonIssueInput):
+    actor: str = Field(min_length=1, max_length=128)
+
+
+def _active_honor(now):
+    return and_(
+        HonorAwardRecord.valid_from <= now,
+        HonorAwardRecord.revoked_at.is_(None),
+        or_(HonorAwardRecord.expires_at.is_(None), HonorAwardRecord.expires_at > now),
+    )
+
+
+def _honor_is_active(award, now):
+    return award.revoked_at is None and award.valid_from <= now and (
+        award.expires_at is None or now < award.expires_at
+    )
+
+
+def _valid_honor_name(name):
+    return bool(name) and len(name) <= 64 and all(ord(char) >= 32 and char not in "【】" for char in name)
+
+
 class HonorsMixin:
     def _honor_lock(self, session, now):
         self._lock_gameplay_gate(session)
@@ -314,6 +376,160 @@ class HonorsMixin:
     @staticmethod
     def _honor_audit(session, kind, actor, payload, now):
         session.add(AuditEventRecord(event_type=kind, actor=actor, payload=payload, created_at=now))
+
+    def find_honor_employees(self, query):
+        query = query.strip()
+        if not query:
+            return {"items": []}
+        number = query.removeprefix("#")
+        with self._session() as session:
+            if number.isascii() and number.isdecimal() and len(number) <= 10:
+                employee_number = int(number)
+                if employee_number > 2_147_483_647:
+                    return {"items": []}
+                condition = UserRecord.employee_number == employee_number
+            else:
+                condition = UserRecord.display_name.icontains(query, autoescape=True)
+            employees = session.execute(select(UserRecord.employee_number, UserRecord.display_name).where(
+                condition,
+            ).order_by(UserRecord.employee_number).limit(20))
+            return {"items": [{"employee_number": number, "name": name} for number, name in employees]}
+
+    def grant_permanent_honor(self, request, actor, now):
+        name, reason = request.name.strip(), request.reason.strip()
+        if not _valid_honor_name(name):
+            raise ValueError("称号名称需为 1–64 个字符，且不能包含换行或【】")
+        if not reason:
+            raise ValueError("请填写授予原因")
+        with self.transaction(), self._session() as session:
+            self._honor_lock(session, now)
+            user = session.scalar(select(UserRecord).where(UserRecord.employee_number == request.employee_number))
+            if user is None:
+                raise LookupError("员工不存在")
+            if session.scalar(select(HonorAwardRecord.id).where(
+                HonorAwardRecord.user_id == user.id, HonorAwardRecord.title_name == name,
+                HonorAwardRecord.expires_at.is_(None), HonorAwardRecord.revoked_at.is_(None),
+            ).limit(1)):
+                raise HonorConflict("该员工已拥有同名永久称号")
+            key = "manual:" + sha256(name.encode()).hexdigest()[:48]
+            award = HonorAwardRecord(
+                title_key=key, title_name=name, user_id=user.id, winner_name=user.display_name,
+                valid_from=now, sort_order=1000, public_score=False, source="manual",
+                source_details={"actor": actor, "reason": reason},
+            )
+            session.add(award)
+            session.flush()
+            self._honor_audit(session, "honor_permanent_grant", actor, {
+                "award_id": str(award.id), "user_id": str(user.id), "title": name, "reason": reason,
+            }, now)
+            return self._honor_award_view(award, True)
+
+    def revoke_permanent_honor(self, award_id, reason, actor, now):
+        reason = reason.strip()
+        if not reason:
+            raise ValueError("请填写撤回原因")
+        with self.transaction(), self._session() as session:
+            self._honor_lock(session, now)
+            award = session.get(HonorAwardRecord, award_id)
+            if award is None:
+                raise LookupError("称号授予记录不存在")
+            if award.source == "weekly":
+                raise ValueError("周榜称号请使用结算纠错")
+            if award.revoked_at is None:
+                award.revoked_at = now
+                award.source_details = {**(award.source_details or {}), "revoked_by": actor, "revoke_reason": reason}
+                wear = session.get(HonorWearRecord, award.user_id)
+                if wear is not None and wear.award_id == award.id:
+                    session.delete(wear)
+                self._honor_audit(session, "honor_permanent_revoke", actor, {
+                    "award_id": str(award.id), "user_id": str(award.user_id), "title": award.title_name, "reason": reason,
+                }, now)
+            return self._honor_award_view(award, True)
+
+    @staticmethod
+    def _honor_season_view(season):
+        return {"code": season.code, "count": season.issued_count,
+                "issued_at": season.issued_at.isoformat(), "actor": season.issued_by}
+
+    def _s1_roster(self, session, roster, now):
+        employees = select(UserRecord).where(UserRecord.joined_at <= now)
+        if roster is None:
+            organization = session.execute(employees.add_columns(DepartmentRecord, RankRecord).outerjoin(
+                DepartmentRecord, DepartmentRecord.id == UserRecord.department_id,
+            ).outerjoin(RankRecord, RankRecord.id == UserRecord.rank_id).order_by(UserRecord.employee_number))
+            candidates = [(user, user.employee_number,
+                           department.name if department is not None and not department.is_default else "",
+                           rank.name if rank is not None else "") for user, department, rank in organization]
+        else:
+            numbers = [member.employee_number for member in roster]
+            if len(numbers) != len(set(numbers)):
+                raise ValueError("历史名单中的工号不能重复")
+            users = {user.employee_number: user for user in session.scalars(
+                employees.where(UserRecord.employee_number.in_(numbers))
+            )}
+            candidates = [(users.get(member.employee_number), member.employee_number, member.department, member.rank)
+                          for member in sorted(roster, key=lambda member: member.employee_number)]
+
+        existing = set(session.execute(select(HonorAwardRecord.user_id, HonorAwardRecord.title_name).where(
+            HonorAwardRecord.expires_at.is_(None), HonorAwardRecord.revoked_at.is_(None),
+        )))
+        rows, skipped = [], []
+        for user, number, department, rank in candidates:
+            department, rank = department.strip(), rank.strip()
+            row = {"employee_number": number, "name": user.display_name if user else None,
+                   "department": department, "rank": rank}
+            title = f"S1赛季 · {department} · {rank}"
+            if user is None:
+                skipped.append({**row, "reason": "找不到该工号"})
+            elif not department or not rank:
+                skipped.append({**row, "reason": "缺少部门或职位"})
+            elif not _valid_honor_name(title):
+                skipped.append({**row, "reason": "生成的称号超过 64 字符或包含无效字符"})
+            elif (user.id, title) in existing:
+                skipped.append({**row, "reason": "已拥有同名永久称号"})
+            else:
+                rows.append({**row, "user_id": str(user.id), "title": title})
+        report = {"mode": "current" if roster is None else "historical", "rows": rows, "skipped": skipped}
+        digest = sha256(json.dumps(report, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+        return {**report, "preview_digest": digest}
+
+    def preview_s1_honors(self, roster, now):
+        with self._session() as session:
+            season = session.get(HonorSeasonRecord, "S1")
+            if season is not None:
+                return {"issued": self._honor_season_view(season)}
+            return {**self._s1_roster(session, roster, now), "issued": None}
+
+    def issue_s1_honors(self, roster, preview_digest, actor, now):
+        with self.transaction(), self._session() as session:
+            self._honor_lock(session, now)
+            season = session.get(HonorSeasonRecord, "S1")
+            if season is not None:
+                if season.preview_digest != preview_digest:
+                    raise HonorConflict("S1 赛季称号已经发放，请查看历史")
+                return self._honor_season_view(season)
+            report = self._s1_roster(session, roster, now)
+            if report["preview_digest"] != preview_digest:
+                raise HonorConflict("名单已变化，请重新预览")
+            if not report["rows"]:
+                raise ValueError("预览名单中没有可授予的员工")
+            season = HonorSeasonRecord(code="S1", issued_at=now, issued_by=actor,
+                                       preview_digest=preview_digest, issued_count=len(report["rows"]))
+            session.add(season)
+            session.flush()
+            for row in report["rows"]:
+                session.add(HonorAwardRecord(
+                    title_key="season:S1", title_name=row["title"], user_id=UUID(row["user_id"]),
+                    winner_name=row["name"], valid_from=now, sort_order=1000, public_score=False,
+                    source="season", season_code=season.code,
+                    source_details={"actor": actor, "department": row["department"],
+                                    "rank": row["rank"], "roster_mode": report["mode"]},
+                ))
+            self._honor_audit(session, "honor_season_issue", actor, {
+                "season": season.code, "preview_digest": preview_digest,
+                "count": season.issued_count, "mode": report["mode"], "skipped": report["skipped"],
+            }, now)
+            return self._honor_season_view(season)
 
     def _honor_metrics(self, session, config, week):
         start, end = midnight(week), midnight(week + timedelta(days=7))
@@ -599,10 +815,16 @@ class HonorsMixin:
 
     @staticmethod
     def _honor_award_view(award, administrative=False):
-        return {"id": str(award.id), "key": award.title_key, "name": award.title_name,
+        result = {"id": str(award.id), "key": award.title_key, "name": award.title_name,
                 "user_id": str(award.user_id) if award.user_id else None, "winner_name": award.winner_name,
                 "score": award.score if administrative or award.public_score else None,
-                "valid_from": award.valid_from.isoformat(), "expires_at": award.expires_at.isoformat()}
+                "valid_from": award.valid_from.isoformat(),
+                "expires_at": award.expires_at.isoformat() if award.expires_at else None,
+                "source": award.source, "season_code": award.season_code,
+                "revoked_at": award.revoked_at.isoformat() if award.revoked_at else None}
+        if administrative and award.source_details:
+            result["source_details"] = deepcopy(award.source_details)
+        return result
 
     def _honor_period_view(self, session, period):
         awards = session.scalars(select(HonorAwardRecord).where(HonorAwardRecord.period_id == period.id).order_by(
@@ -663,7 +885,7 @@ class HonorsMixin:
         for wear, award, user in session.execute(select(HonorWearRecord, HonorAwardRecord, UserRecord).join(
             HonorAwardRecord, HonorAwardRecord.id == HonorWearRecord.award_id,
         ).join(UserRecord, UserRecord.id == HonorWearRecord.user_id)):
-            if award.user_id == wear.user_id and award.valid_from <= now < award.expires_at:
+            if award.user_id == wear.user_id and _honor_is_active(award, now):
                 continue
             if notify:
                 room = self.direct_chat_destination(user.platform_id)
@@ -679,7 +901,7 @@ class HonorsMixin:
                 HonorWearRecord, HonorWearRecord.award_id == HonorAwardRecord.id,
             ).join(UserRecord, UserRecord.id == HonorWearRecord.user_id).where(
                 UserRecord.platform_id == platform_id, HonorAwardRecord.user_id == UserRecord.id,
-                HonorAwardRecord.valid_from <= now, HonorAwardRecord.expires_at > now,
+                _active_honor(now),
             ))
 
     def my_honors(self, platform_id, now):
@@ -688,8 +910,7 @@ class HonorsMixin:
             if user is None:
                 return None
             available = session.scalars(select(HonorAwardRecord).where(
-                HonorAwardRecord.user_id == user.id, HonorAwardRecord.valid_from <= now,
-                HonorAwardRecord.expires_at > now,
+                HonorAwardRecord.user_id == user.id, _active_honor(now),
             ).order_by(HonorAwardRecord.sort_order, HonorAwardRecord.title_key,
                        HonorAwardRecord.valid_from.desc(), HonorAwardRecord.id)).all()
             latest = {}
@@ -742,7 +963,7 @@ class HonorsMixin:
                     HonorAwardRecord.sort_order, HonorAwardRecord.title_key,
                 )) if award.title_key in supported]}
 
-    def honor_history(self, now, user_id=None, title_key=None, week=None, page=1, page_size=20):
+    def honor_history(self, now, user_id=None, title_key=None, week=None, page=1, page_size=20, source=None):
         if not 1 <= page or not 1 <= page_size <= 100:
             raise ValueError("分页参数无效")
         with self._session() as session:
@@ -753,12 +974,16 @@ class HonorsMixin:
                 filters.append(HonorAwardRecord.title_key == title_key)
             if week:
                 filters.append(HonorPeriodRecord.week_start == week)
-            query = select(HonorAwardRecord, HonorPeriodRecord.week_start).join(HonorPeriodRecord).where(*filters)
+            if source:
+                filters.append(HonorAwardRecord.source == source)
+            query = select(HonorAwardRecord, HonorPeriodRecord.week_start).outerjoin(HonorPeriodRecord).where(*filters)
             total = session.scalar(select(func.count()).select_from(query.subquery()))
-            items = [{**self._honor_award_view(award, True), "week_start": period_week.isoformat(),
-                      "active": award.valid_from <= now < award.expires_at}
+            items = [{**self._honor_award_view(award, True),
+                      "week_start": period_week.isoformat() if period_week else None,
+                      "active": _honor_is_active(award, now)}
                      for award, period_week in session.execute(query.order_by(
-                         HonorPeriodRecord.week_start.desc(), HonorAwardRecord.sort_order, HonorAwardRecord.title_key,
+                         HonorAwardRecord.valid_from.desc(), HonorAwardRecord.sort_order,
+                         HonorAwardRecord.title_key, HonorAwardRecord.id,
                      ).offset((page - 1) * page_size).limit(page_size))]
             return {"items": items, "total": total, "page": page, "page_size": page_size,
                     "pages": (total + page_size - 1) // page_size}
@@ -783,6 +1008,8 @@ class HonorsMixin:
             award = session.get(HonorAwardRecord, award_id)
             if award is None:
                 raise LookupError("获奖记录不存在")
+            if award.source != "weekly":
+                raise ValueError("永久称号请使用撤回功能")
             period = session.get(HonorPeriodRecord, award.period_id)
             if period.revision != expected_revision:
                 raise HonorConflict("结算结果已被修改，请刷新后重试")

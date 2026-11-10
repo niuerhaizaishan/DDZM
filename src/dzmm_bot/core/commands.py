@@ -38,6 +38,9 @@ from .memory_guild_match import (
 from .performance import parse_postponement
 from .reply_templates import render_template, template_definition
 from .shop_cards import CATEGORY_DISPLAY_ORDER, CATEGORY_OTHER
+from .equipment import EQUIPMENT_COMMANDS
+from .equipment_commands import handle_equipment_command
+from .workstation_labels import RETIRED_COMMANDS
 from .schema import PRIMARY_GROUP_CHAT_ID
 from .repository import (
     BlameGameResult,
@@ -75,6 +78,7 @@ _COMMANDS.add("/象棋")
 _COMMANDS.add("/斗地主")
 _COMMANDS.add("/你画我猜")
 _COMMANDS.update({"/club", "/摸鱼Club", "/麻将"})
+_COMMANDS.update(EQUIPMENT_COMMANDS)
 _COMMANDS.add("/q")
 _COMMANDS.update({"/黑历史", "/删除黑历史", "/下一页"})
 _COMMANDS.update({"/ban", "/是"})
@@ -130,8 +134,10 @@ class GroupCommandHandler:
         drawguess_public_api_url: str | None = None, drawguess_chatroom_id: str | None = None,
         club_game_id: str | None = None, club_game_url: str | None = None,
         club_public_api_url: str | None = None, club_chatroom_id: str | None = None,
+        workstation_links=None,
     ) -> None:
         self._repository = repository
+        self._workstation_links = workstation_links
         self._chess_game_id = chess_game_id
         self._chess_game_url = chess_game_url
         self._chess_public_api_url = chess_public_api_url
@@ -155,6 +161,16 @@ class GroupCommandHandler:
             return None
         message = replace(message, content=content)
         command = content.split(maxsplit=1)[0]
+        if command in RETIRED_COMMANDS:
+            return None
+        if command == '/升级':
+            command = '/升级工位' if content.split()[1:] == ['环境'] else '/升级装备'
+        if command == '/切换工位环境':
+            command = '/切换工位'
+        if command == '/装备' and content.split()[1:2] == ['环境'] and len(content.split()) == 3:
+            if not self._repository.is_command_enabled('/装备'):
+                return None
+            command = '/切换工位'
         command = _DARK_MARKET_QUERY_ALIASES.get(command, command)
         if re.fullmatch(r"/第[1-9]\d*场", command):
             command = "/公会赛场次"
@@ -254,6 +270,19 @@ class GroupCommandHandler:
                 "expired": "待确认请求已过期，请重新发送 /ban 原因。",
                 "no_pending": "当前没有待确认的移除请求。",
             }[result.status]
+        if command in EQUIPMENT_COMMANDS:
+            result = handle_equipment_command(
+                self._repository, message, command, group_chat_id,
+                workstation_links=self._workstation_links,
+            )
+            if command == "/我的工位" and isinstance(result, list):
+                if self._workstation_links.game_card_id:
+                    return [result[0], CommandReply(
+                        self._workstation_links.game_card_id,
+                        content_type="character", reference_inbound=False,
+                    )]
+                return [result[0], CommandReply(result[1], reference_inbound=False)]
+            return result
         if command == "/q":
             if message.source_type != "group" or group_chat_id is None:
                 return "请在群内回复一条消息后发送 /q。"
@@ -2791,13 +2820,18 @@ class GroupCommandHandler:
             user = self._repository.get_user_profile(platform_id).user
             history = self._repository.honor_history(now, user_id=user.id)
             lines = ["【荣誉历史】（最近 20 项）"]
-            lines.extend(f"{item['week_start']}｜{item['name']}" for item in history["items"])
+            for item in history["items"]:
+                if item["expires_at"] is None:
+                    status = "已撤回" if item["revoked_at"] else "永久"
+                    lines.append(f"{item['valid_from'][:10]}｜{item['name']}｜{status}")
+                else:
+                    lines.append(f"{item['week_start']}｜{item['name']}")
             return "\n".join(lines) if history["items"] else "你还没有获得过荣誉称号。"
         lines = ["【我的称号】", f"当前佩戴：{personal['equipped'] or '未佩戴'}"]
         for item in personal["items"]:
-            expires_at = item["expires_at"][:16].replace("T", " ")
+            validity = "永久" if item["expires_at"] is None else f"有效至 {item['expires_at'][:16].replace('T', ' ')}"
             lines.append(
-                f"{item['number']}. {item['name']}｜历史获得 {item['total_wins']} 次｜有效至 {expires_at}"
+                f"{item['number']}. {item['name']}｜历史获得 {item['total_wins']} 次｜{validity}"
             )
         if not personal["items"]:
             lines.append("当前没有可佩戴称号。")
@@ -5412,9 +5446,24 @@ class GroupCommandHandler:
             "卧底": "谁是卧底",
             "公演预约": "公演",
             "演出": "公演",
+            "工位": "装备商城",
         }.get(topic, topic)
 
         guides = {
+            "装备商城": (
+                "【工位与设备】",
+                (
+                    ("/我的工位", "/我的工位：查看当前工位并进入小游戏"),
+                    ("/工位背包", "/工位背包：查看已拥有的环境和设备"),
+                    ("/工位收益表", "/工位收益表：查看各等级收益和升级费用"),
+                    ("/升级装备", "/升级 电脑：将指定设备升级一档"),
+                    ("/升级工位", "/升级 环境：四件设备升齐当前环境升级款后，升级下一环境；升级受职级限制"),
+                    ("/装备", "/装备 鼠标 2-1：装备已拥有的指定档位设备"),
+                    ("/切换工位", "/装备 环境 2：免费切换已拥有环境"),
+                    ("/装备", "可用名称：环境、电脑、显示器、键盘、鼠标；设备每环境两档。"),
+                    ("/装备", "设备整数等级1至10依次对应1-1、1-2至5-2。"),
+                ),
+            ),
             "基础": (
                 "【基础与资产】",
                 (
@@ -5732,6 +5781,7 @@ class GroupCommandHandler:
             categories = (
                 ("基础", "/帮助 基础：入职与资产"),
                 ("商店", "/帮助 商店：购买、使用、赠送与授权"),
+                ("装备商城", "/帮助 装备商城：工位商店、装卸和收益预览"),
                 (
                     "游戏",
                     "/帮助 游戏：玩法总览；/帮助 摸鱼躲藏、/帮助 记忆考核、/帮助 谁是卧底、/帮助 甩锅游戏、/帮助 蹦蹦数字炸弹、/帮助 德州扑克、/帮助 我有你没有、/帮助 真心换真心、/帮助 暗网交易所、/帮助 公演预约",
