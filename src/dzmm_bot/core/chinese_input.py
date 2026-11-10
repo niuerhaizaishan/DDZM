@@ -12,7 +12,7 @@ _COMMAND_CONTENT = re.compile(r"(?P<prefix>\s*)(?P<command>/\S+)(?P<suffix>.*)",
 
 
 def traditional_to_simplified(value: str) -> str:
-    return _T2S.convert(unicodedata.normalize("NFKC", value))
+    return _T2S.convert(unicodedata.normalize("NFKC", value)).replace("揹", "背")
 
 
 def canonicalize_command_name(value: str) -> str:
