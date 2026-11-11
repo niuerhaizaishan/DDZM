@@ -74,7 +74,7 @@ def install_workstation_routes(app, core):
             messages = {
                 401: "玩家身份无效或已过期，请刷新游戏重新登录。",
                 404: "未找到员工档案或工位，请返回大厅刷新；尚未入职请在群里发送 /入职 名字。",
-                403: "请先在目标群发送 /我的工位，再刷新本页；发图入口有效期为24小时。",
+                403: "请先在目标群发送 /工位游戏，再刷新本页；发图入口有效期为24小时。",
                 409: "这次发送已选择其他群，请刷新后重试。",
                 429: "发送过于频繁，请在一分钟后再试。",
             }
@@ -154,12 +154,12 @@ def install_workstation_routes(app, core):
 
     def read_workstation(token):
         if not re.fullmatch(r"[0-9a-f]{32}\.[0-9a-f]{64}", token):
-            raise HTTPException(404, "工位链接无效或已失效，请在群里重新发送 /我的工位。")
+            raise HTTPException(404, "工位链接无效或已失效，请在群里重新发送 /工位游戏。")
         try:
             return core.get_workstation(token)
         except httpx.HTTPStatusError as error:
             if error.response.status_code == 404:
-                raise HTTPException(404, "工位链接无效或已失效，请在群里重新发送 /我的工位。") from error
+                raise HTTPException(404, "工位链接无效或已失效，请在群里重新发送 /工位游戏。") from error
             raise HTTPException(503, "工位暂时无法加载，请稍后重试。") from error
         except httpx.RequestError as error:
             raise HTTPException(503, "工位暂时无法加载，请稍后重试。") from error

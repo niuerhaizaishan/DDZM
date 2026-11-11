@@ -65,17 +65,16 @@ function renderWorkstationOverview(content, overview, settings) {
     <p class="muted">最近结算日期：${workstationEscape(state.last_settled_on)}。结算时点、登录及对外入口沿用部署配置。</p>
     ${workstationSuper() ? '<button id="edit-workstation-settlement-settings" class="secondary" type="button">执行今日结算</button>' : '<p class="muted">结算开关和手动结算仅超级管理员可操作。</p>'}`;
   if (!workstationSuper()) return;
-  const modal = mountRuleEditor("workstation-income", "工位结算", "首次启用从今天开始；暂停和重启均保留结算游标。", `<div class="event-input-grid">${birthdayFlagField("workstation-income-enabled", "启用每日自动结算", state.enabled)}<label>修改原因<input id="workstation-income-reason" maxlength="500" required></label></div>`, () => workstationAttempt(async () => {
+  const modal = mountRuleEditor("workstation-income", "工位结算", "首次启用从今天开始；暂停和重启均保留结算游标。", `<div class="event-input-grid">${birthdayFlagField("workstation-income-enabled", "启用每日自动结算", state.enabled)}</div>`, () => workstationAttempt(async () => {
     await runMutation(document.querySelector("#workstation-income-save"), "保存中…", async () => {
-      await workstationWrite("income", {kind: "income", enabled: document.querySelector("#workstation-income-enabled").checked, revision: settings.settlement_revision, reason: document.querySelector("#workstation-income-reason").value});
+      await workstationWrite("income", {kind: "income", enabled: document.querySelector("#workstation-income-enabled").checked, revision: settings.settlement_revision});
       modal.remove(); await loadWorkstationAdmin(); setResult("结算设置已保存", "success");
     });
   }));
-  const settlementModal = mountRuleEditor("workstation-settlement", "今日结算", "只执行今天未结算的玩家，已结算的不重复发放；不会补算历史日期。", `<p>日期：${workstationEscape(overview.today)} · 今日已结算${overview.settled_accounts}人，共${overview.settled_amount}摸鱼币。</p><p>全体当前日收益合计${overview.daily_income}摸鱼币，实际发放以未结算玩家为准。</p><label>执行原因<input id="workstation-settlement-reason" maxlength="500" required></label>`, () => workstationAttempt(async () => {
+  const settlementModal = mountRuleEditor("workstation-settlement", "今日结算", "只执行今天未结算的玩家，已结算的不重复发放；不会补算历史日期。", `<p>日期：${workstationEscape(overview.today)} · 今日已结算${overview.settled_accounts}人，共${overview.settled_amount}摸鱼币。</p><p>全体当前日收益合计${overview.daily_income}摸鱼币，实际发放以未结算玩家为准。</p>`, () => workstationAttempt(async () => {
     if (!state.enabled) throw new Error("请先启用结算");
-    const reason = settlementModal.querySelector("#workstation-settlement-reason").value;
     await runMutation(settlementModal.querySelector("#workstation-settlement-save"), "结算中…", async () => {
-      const result = await workstationWrite("income", {kind: "settle", revision: settings.settlement_revision, reason});
+      const result = await workstationWrite("income", {kind: "settle", revision: settings.settlement_revision});
       settlementModal.remove();
       await loadWorkstationAdmin(); setResult(`本次结算 ${result.result.accounts} 人，共 ${result.result.amount} 摸鱼币`, "success");
     });
@@ -84,31 +83,32 @@ function renderWorkstationOverview(content, overview, settings) {
 
 function renderWorkstationRules(content, settings) {
   const rules = settings.rules;
-  content.innerHTML = ruleOverview("workstation-rules", "工位", "设备共10档、环境共5级；环境费用按五项基础布置的设备升级价合计。保存前会计算全体日收益变化。", [
+  content.innerHTML = ruleOverview("workstation-rules", "工位", "设备共10档、环境共5级。环境升级总价独立设置，含五项布置和下一环境四件基础设备，不再另收迁入费用。保存后群聊说明、小游戏报价与实际扣费同步生效。", [
     ruleStatusCard("规则版本", settings.revision, "群聊、小游戏、结算共用"),
     ruleStatusCard("预计每日发放", `${settings.projection.daily_income} 摸鱼币`, "历史订单和结算金额保持原值"),
     ruleStatusCard("职级门槛", "沿用职位配置", "不超过职级上限，四件设备购买进度达标才可升级环境"),
-  ].join("")) + `<h3>环境名称与日收益</h3>${workstationTable(["等级", "环境名称", "日收益"], rules.environment_names.map((name, i) => `<tr><td>${i + 1}级</td><td>${workstationEscape(name)}</td><td>${rules.environment_income[i]}摸鱼币</td></tr>`).join(""))}<h3>设备名称、日收益与升级费用</h3><p class="muted">四类设备按相同档位共用下表收益和升级费用；名称可分别修改。</p>${workstationTable(["档位", "电脑", "显示器", "键盘", "鼠标", "每件日收益", "升至下一档费用"], rules.tool_income.map((income, i) => `<tr><td>${workstationLevel(i + 1)}</td>${["computer", "monitor", "keyboard", "mouse"].map((key) => `<td>${workstationEscape(rules.device_names[key][i])}</td>`).join("")}<td>${income}摸鱼币</td><td>${rules.upgrade_costs[i] ?? "已满"}</td></tr>`).join(""))}`;
+  ].join("")) + `<h3>环境名称、日收益与升级总价</h3>${workstationTable(["等级", "环境名称", "日收益", "升至下一环境总价"], rules.environment_names.map((name, i) => `<tr><td>${i + 1}级</td><td>${workstationEscape(name)}</td><td>${rules.environment_income[i]}摸鱼币</td><td>${i < 4 ? `${rules.environment_upgrade_costs[i]}摸鱼币` : "已满级"}</td></tr>`).join(""))}<h3>设备名称、日收益与升级费用</h3><p class="muted">四类设备按相同档位共用收益与环境内升级费用；名称可分别修改。跨环境基础款随环境升级获得，已含在环境总价。旧版已购进度按比例抵扣，以操作报价为准。</p>${workstationTable(["档位", "电脑", "显示器", "键盘", "鼠标", "每件日收益", "升至下一档费用"], rules.tool_income.map((income, i) => `<tr><td>${workstationLevel(i + 1)}</td>${["computer", "monitor", "keyboard", "mouse"].map((key) => `<td>${workstationEscape(rules.device_names[key][i])}</td>`).join("")}<td>${income}摸鱼币</td><td>${i === 9 ? "已满级" : i % 2 ? "已含在环境总价" : rules.upgrade_costs[i]}</td></tr>`).join(""))}`;
   content.querySelector("#edit-workstation-rules-settings").textContent = "编辑名称、收益和价格";
-  let fields = `<h3>环境名称与日收益</h3><div class="event-input-grid">${rules.environment_names.map((name, i) => `<label>${i + 1}级名称<input data-wk-env-name="${i}" value="${workstationEscape(name)}" maxlength="80" required></label>${birthdayNumberField(`wk-env-income-${i}`, `${i + 1}级日收益`, rules.environment_income[i], 0, 1000000)}`).join("")}</div>
-    <h3>设备日收益与升级费用（四类共用）</h3><div class="event-input-grid">${rules.tool_income.map((income, i) => birthdayNumberField(`wk-income-${i}`, `${workstationLevel(i + 1)}日收益`, income, 0, 1000000) + (i < 9 ? birthdayNumberField(`wk-cost-${i}`, `${workstationLevel(i + 1)}→${workstationLevel(i + 2)}费用`, rules.upgrade_costs[i], 1, 1000000) : "")).join("")}</div>`;
+  let fields = `<h3>环境名称、日收益与升级总价</h3><div class="event-input-grid">${rules.environment_names.map((name, i) => `<label>${i + 1}级名称<input data-wk-env-name="${i}" value="${workstationEscape(name)}" maxlength="80" required></label>${birthdayNumberField(`wk-env-income-${i}`, `${i + 1}级日收益`, rules.environment_income[i], 0, 1000000)}${i < 4 ? birthdayNumberField(`wk-env-cost-${i}`, `环境${i + 1}→${i + 2}升级总价（含四件基础设备）`, rules.environment_upgrade_costs[i], 0, 20000000) : ""}`).join("")}</div>
+    <h3>设备日收益与环境内升级费用（四类共用）</h3><div class="event-input-grid">${rules.tool_income.map((income, i) => birthdayNumberField(`wk-income-${i}`, `${workstationLevel(i + 1)}日收益`, income, 0, 1000000) + (i % 2 === 0 ? birthdayNumberField(`wk-cost-${i}`, `${workstationLevel(i + 1)}→${workstationLevel(i + 2)}费用`, rules.upgrade_costs[i], 1, 1000000) : "")).join("")}</div>`;
   for (const [key, names] of Object.entries(rules.device_names)) {
     const label = {computer: "电脑", monitor: "显示器", keyboard: "键盘", mouse: "鼠标"}[key];
     fields += `<details open><summary>${label}各档名称</summary><div class="event-input-grid">${names.map((name, i) => `<label>${workstationLevel(i + 1)}<input data-wk-device="${key}" data-level="${i}" value="${workstationEscape(name)}" maxlength="80" required></label>`).join("")}</div></details>`;
   }
-  fields += '<label>修改原因<input id="workstation-rules-reason" maxlength="500" required></label>';
   const modal = mountRuleEditor("workstation-rules", "工位", "修改影响后续报价与结算；不会重写历史订单和结算快照。", fields, () => workstationAttempt(async () => {
     const number = (id) => Number(modal.querySelector(`#${id}`).value);
     const data = {environment_names: [...modal.querySelectorAll("[data-wk-env-name]")].map((el) => el.value),
       environment_income: Array.from({length: 5}, (_, i) => number(`wk-env-income-${i}`)),
+      environment_upgrade_costs: Array.from({length: 4}, (_, i) => number(`wk-env-cost-${i}`)),
       tool_income: Array.from({length: 10}, (_, i) => number(`wk-income-${i}`)),
-      upgrade_costs: Array.from({length: 9}, (_, i) => number(`wk-cost-${i}`)), device_names: {}};
+      upgrade_costs: rules.upgrade_costs.map((price, i) => i % 2 ? price : number(`wk-cost-${i}`)), device_names: {}};
     for (const key of Object.keys(rules.device_names)) data.device_names[key] = [...modal.querySelectorAll(`[data-wk-device="${key}"]`)].map((el) => el.value);
-    const body = {kind: "rules", revision: settings.revision, data, reason: modal.querySelector("#workstation-rules-reason").value};
+    const body = {kind: "rules", revision: settings.revision, data};
     await runMutation(modal.querySelector("#workstation-rules-save"), "校验中…", async () => {
       const preview = await workstationWrite("settings/preview", data);
       if (preview.revision !== settings.revision) throw new Error("规则已变化，请关闭并刷新页面");
-      if (!window.confirm(`全体预计日收益：${preview.before.daily_income} → ${preview.after.daily_income} 摸鱼币。确认保存？`)) return;
+      const priceChanges = data.environment_upgrade_costs.map((price, i) => `环境${i + 1}→${i + 2}：${rules.environment_upgrade_costs[i]} → ${price} 摸鱼币`).join("\n");
+      if (!window.confirm(`全体预计日收益：${preview.before.daily_income} → ${preview.after.daily_income} 摸鱼币。\n环境升级总价（含四件基础设备）：\n${priceChanges}\n确认保存？`)) return;
       configurationVersion = (await workstationWrite("settings", body, settings.version)).version;
       modal.remove(); await loadWorkstationAdmin(); setResult("工位规则已保存", "success");
     });
@@ -118,7 +118,7 @@ function renderWorkstationRules(content, settings) {
 function renderWorkstationList(content, data) {
   const players = workstationAdmin.tab === "players";
   const settlements = workstationAdmin.tab === "settlements";
-  content.innerHTML = `<div class="panel-heading"><div><h2>${players ? "玩家工位" : settlements ? "每日结算记录" : "管理员操作记录"}</h2><p class="muted">${players ? "修正工位需填写原因，并在提交前核对变化。" : settlements ? "金额与设备快照为实际结算时的记录。" : "记录操作者、原因和修改前后状态。"}</p></div></div><form id="workstation-filter" class="command-actions"><label>搜索<input id="workstation-query" maxlength="64" placeholder="${players || settlements ? "姓名或工号" : "操作者或原因"}" value="${workstationEscape(workstationAdmin.query)}"></label><button class="secondary" type="submit">查询</button></form>
+  content.innerHTML = `<div class="panel-heading"><div><h2>${players ? "玩家工位" : settlements ? "每日结算记录" : "管理员操作记录"}</h2><p class="muted">${players ? "修正工位前请核对变化，提交后自动记录操作。" : settlements ? "金额与设备快照为实际结算时的记录。" : "记录操作者、原因和修改前后状态。"}</p></div></div><form id="workstation-filter" class="command-actions"><label>搜索<input id="workstation-query" maxlength="64" placeholder="${players || settlements ? "姓名或工号" : "操作者或原因"}" value="${workstationEscape(workstationAdmin.query)}"></label><button class="secondary" type="submit">查询</button></form>
     ${players ? workstationTable(["工号", "姓名", "已拥有环境", "当前环境", "日收益", "操作"], data.items.map((item) => `<tr><td>${workstationEscape(item.employee_number)}</td><td>${workstationEscape(item.display_name)}</td><td>${item.highest_environment}级</td><td>${item.active_environment}级</td><td>${item.daily_income}</td><td><button class="secondary" type="button" data-workstation-player="${item.number}">查看与修正</button></td></tr>`).join("")) : workstationTable(settlements ? ["日期", "工号", "姓名", "实发收益", "快照"] : ["时间", "操作者", "操作", "原因", "变化"], data.items.map((item) => settlements ? `<tr><td>${workstationEscape(item.date)}</td><td>${item.employee_number}</td><td>${workstationEscape(item.display_name)}</td><td>${item.amount}</td><td><details><summary>查看结算设备</summary>${workstationComponents(item.components, true)}</details></td></tr>` : `<tr><td>${workstationEscape(item.created_at)}</td><td>${workstationEscape(item.actor)}</td><td>${workstationEscape({grant: "补授工位", equip: "修正装备", backfill: "补齐自动配件", rules: "规则修改", income: "结算开关", settle: "今日结算"}[item.kind] || item.kind)}</td><td>${workstationEscape(item.reason)}</td><td><details><summary>查看前后状态</summary><p>修改前</p><pre>${workstationEscape(JSON.stringify(item.before, null, 2))}</pre><p>修改后</p><pre>${workstationEscape(JSON.stringify(item.after, null, 2))}</pre></details></td></tr>`).join(""))}
     <div id="workstation-pagination" class="pagination"></div>`;
   renderPagination(content.querySelector("#workstation-pagination"), {...data, pages: Math.ceil(data.total / data.page_size)}, players ? "位玩家" : "条记录", (page) => {workstationAdmin.page = page; void workstationAttempt(loadWorkstationAdmin);});
@@ -141,17 +141,16 @@ async function openWorkstationPlayer(number) {
   element.innerHTML = `<div class="panel-heading"><div><h2>${workstationEscape(ws.display_name)}的工位</h2><p class="muted">已拥有环境${growth.highest_environment}级 · 当前环境${growth.active_environment ? growth.active_environment + "级" : "混合"} · 日收益${ws.daily_income}摸鱼币</p></div><button id="edit-workstation-player-settings" class="secondary" type="button">修正工位</button></div>${workstationComponents(ws.progression.components)}`;
   content.append(element); element.scrollIntoView({block: "nearest"});
   const options = (value) => Array.from({length: 10}, (_, i) => `<option value="${i + 1}"${i + 1 === value ? " selected" : ""}>${workstationLevel(i + 1)}</option>`).join("");
-  const fields = `<div class="event-input-grid"><label>操作<select id="wk-player-kind"><option value="equip">调整已拥有的装备</option><option value="backfill">补齐已拥有环境的自动配件</option>${workstationSuper() ? '<option value="grant">补授环境与设备（不扣币）</option>' : ""}</select></label><label>环境<select id="wk-player-environment">${Array.from({length: 5}, (_, i) => `<option value="${i + 1}"${i + 1 === growth.active_environment ? " selected" : ""}>${i + 1}级</option>`).join("")}</select></label>${ws.progression.components.filter((c) => c.number >= 6).map((c) => `<label>${workstationDeviceNames[c.number]}<select data-wk-level="${c.number}">${options(c.active_level)}</select></label>${birthdayFlagField(`wk-equipped-${c.number}`, `装备${workstationDeviceNames[c.number]}`, c.equipped)}`).join("")}</div><label>修正原因<input id="wk-player-reason" maxlength="500" required></label>`;
+  const fields = `<div class="event-input-grid"><label>操作<select id="wk-player-kind"><option value="equip">调整已拥有的装备</option><option value="backfill">补齐已拥有环境的自动配件</option>${workstationSuper() ? '<option value="grant">补授环境与设备（不扣币）</option>' : ""}</select></label><label>环境<select id="wk-player-environment">${Array.from({length: 5}, (_, i) => `<option value="${i + 1}"${i + 1 === growth.active_environment ? " selected" : ""}>${i + 1}级</option>`).join("")}</select></label>${ws.progression.components.filter((c) => c.number >= 6).map((c) => `<label>${workstationDeviceNames[c.number]}<select data-wk-level="${c.number}">${options(c.active_level)}</select></label>${birthdayFlagField(`wk-equipped-${c.number}`, `装备${workstationDeviceNames[c.number]}`, c.equipped)}`).join("")}</div>`;
   const modal = mountRuleEditor("workstation-player", "玩家工位", "补授保留更高的购买进度，不调整余额；四件设备须属于选定环境。", fields, () => workstationAttempt(async () => {
     const body = {kind: modal.querySelector("#wk-player-kind").value, environment: Number(modal.querySelector("#wk-player-environment").value), devices: {}};
     modal.querySelectorAll("[data-wk-level]").forEach((el) => {body.devices[el.dataset.wkLevel] = {level: Number(el.value), equipped: modal.querySelector(`#wk-equipped-${el.dataset.wkLevel}`).checked};});
-    const reason = modal.querySelector("#wk-player-reason").value;
     await runMutation(modal.querySelector("#workstation-player-save"), "核对中…", async () => {
       const preview = await workstationWrite(`players/${number}/preview`, body);
       if (preview.revision !== detail.revision) throw new Error("工位已变化，请关闭后重新打开");
       const lines = preview.after.progression.components.filter((c) => c.number >= 6).map((c) => `${c.category}：${workstationLevel(c.active_level)}${c.equipped ? " 已装备" : " 未装备"}（最高${workstationLevel(c.highest_level)}）`);
-      if (!window.confirm(`修正后：已拥有环境${preview.after.progression.growth.highest_environment}级\n${lines.join("\n")}\n日收益：${preview.before.daily_income} → ${preview.after.daily_income}\n原因：${reason}\n确认提交？`)) return;
-      await workstationWrite(`players/${number}/actions`, {...body, reason, revision: preview.revision});
+      if (!window.confirm(`修正后：已拥有环境${preview.after.progression.growth.highest_environment}级\n${lines.join("\n")}\n日收益：${preview.before.daily_income} → ${preview.after.daily_income}\n确认提交？`)) return;
+      await workstationWrite(`players/${number}/actions`, {...body, revision: preview.revision});
       modal.remove(); await loadWorkstationAdmin(); await openWorkstationPlayer(number); setResult("工位已修正，操作已记录", "success");
     });
   }), "核对并提交");

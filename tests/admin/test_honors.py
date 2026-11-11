@@ -177,6 +177,25 @@ def test_manual_permanent_honor_grant_wear_and_revoke(context):
     assert sorted(events) == ["honor_permanent_grant", "honor_permanent_revoke"]
 
 
+def test_season_threshold_permissions_validation_and_conflicts(context):
+    client, repository, viewer = context
+    path = '/api/game/honors/seasons/s1/settings'
+    super_admin = {"X-Admin-Token": "admin-secret"}
+    assert client.get(path).status_code == 401
+    settings = client.get(path, headers=viewer).json()
+    assert settings['minimum_rank_order'] == 8 and settings['ranks']
+    body = {'minimum_rank_order': 9, 'expected_version': settings['version']}
+    assert client.patch(path, headers=viewer, json=body).status_code == 403
+    saved = client.patch(path, headers=super_admin, json=body)
+    assert saved.status_code == 200, saved.text
+    assert saved.json()['minimum_rank_order'] == 9
+    assert client.patch(path, headers=super_admin, json=body).status_code == 409
+    for value in [True, 0, 999, '8']:
+        invalid = client.patch(path, headers=super_admin,
+            json={'minimum_rank_order': value, 'expected_version': saved.json()['version']})
+        assert invalid.status_code == 422, invalid.text
+
+
 def test_s1_previews_current_and_historical_rosters_and_issues_once(context):
     client, repository, viewer = context
     base = "/api/game/honors/seasons/s1"
@@ -193,13 +212,16 @@ def test_s1_previews_current_and_historical_rosters_and_issues_once(context):
         number, department_id = employee.employee_number, department.id
     assert client.post(f"{base}/preview", headers=viewer, json={}).status_code == 403
     assert client.post(f"{base}/issue", headers=viewer, json={"preview_digest": "0" * 64}).status_code == 403
-    current = client.post(f"{base}/preview", headers=super_admin, json={}).json()
-    assert current["rows"][0]["title"] == "S1赛季 · 研发部 · 部门总监"
-    assert current["skipped"][0]["reason"] == "缺少部门或职位"
+    assert client.post(f"{base}/preview", headers=super_admin, json={}).status_code == 422
+    assert client.post(f"{base}/preview", headers=super_admin, json={"roster": []}).status_code == 422
+    assert client.post(f"{base}/issue", headers=super_admin, json={"preview_digest": "0" * 64}).status_code == 422
+    draft = [{"employee_number": number, "department": "研发部", "rank": "部门总监"}]
+    current = client.post(f"{base}/preview", headers=super_admin, json={"roster": draft}).json()
+    assert current["rows"][0]["title"] == "S1赛季 · 部门总监"
     assert repository.my_honors("user-1", now)["items"] == []
     with repository.transaction(), repository._session() as session:
         session.get(DepartmentRecord, department_id).name = "平台部"
-    response = client.post(f"{base}/issue", headers=super_admin, json={"preview_digest": current["preview_digest"]})
+    response = client.post(f"{base}/issue", headers=super_admin, json={"roster": [{**draft[0], "rank": "部门副总监"}], "preview_digest": current["preview_digest"]})
     assert response.status_code == 409
 
     roster = [{"employee_number": number, "department": "结季技术部", "rank": "技术总监"},
@@ -216,7 +238,10 @@ def test_s1_previews_current_and_historical_rosters_and_issues_once(context):
     assert client.post(f"{base}/issue", headers=super_admin, json={"preview_digest": current["preview_digest"]}).status_code == 409
     assert client.post(f"{base}/preview", headers=super_admin, json={}).json() == {"issued": batch}
     award, = repository.my_honors("user-1", now + timedelta(days=400))["items"]
-    assert award["source"] == "season" and award["name"] == "S1赛季 · 结季技术部 · 技术总监"
+    assert award["source"] == "season" and award["name"] == "S1赛季 · 技术总监"
     assert repository.honor_board(now)["items"] == []
     history, = client.get("/api/game/honors/history?source=season", headers=super_admin).json()["items"]
     assert history["source_details"]["department"] == "结季技术部"
+    assert history["season_info"]["closing_rank"] == "技术总监"
+    assert history["season_info"]["eligible"] and history["season_info"]["status"] == "available"
+    assert not history["season_info"]["customized"]

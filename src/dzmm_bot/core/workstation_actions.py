@@ -44,8 +44,8 @@ class WorkstationActionsMixin:
             raise WorkstationActionError("管理员暂未开放装备升级。", 403)
         if action['kind'] == 'view' and not self.is_command_enabled('/装备'):
             raise WorkstationActionError("管理员暂未开放装备切换。", 403)
-        if web and (not self.is_command_enabled('/我的工位') or not available_share_groups(self, platform_id, now)):
-            raise WorkstationActionError("请先在已启用的群里发送 /我的工位，再刷新游戏；操作入口24小时内有效。", 403)
+        if web and (not self.is_command_enabled('/工位游戏') or not available_share_groups(self, platform_id, now)):
+            raise WorkstationActionError("请先在已启用的群里发送 /工位游戏，再刷新游戏；操作入口24小时内有效。", 403)
 
     def workstation_management(self, platform_id, now):
         self.ensure_command_definitions()
@@ -59,7 +59,7 @@ class WorkstationActionsMixin:
                 allowed[kind] = False
         allowed['advance'] = allowed['advance'] and shop['growth_offers']['advance']['status'] == 'available'
         return {**shop, 'revision': digest(shop), 'actions': allowed,
-                'management_note': '网页和群聊共用账号余额与装备。请先在群里发送 /我的工位 开通24小时操作入口。'}
+                'management_note': '网页和群聊共用账号余额与装备。请先在群里发送 /工位游戏 开通24小时操作入口。'}
 
     def _action_plan(self, session, user, action):
         rules = self.workstation_rules(session)
@@ -126,6 +126,8 @@ class WorkstationActionsMixin:
             if target > shop['level_cap']:
                 raise WorkstationActionError(f"职级不足，当前升级上限 {level_label(shop['level_cap'])}。")
             cost += upgrade_cost(components[n]['highest_level'], target, rules=rules)
+        if kind == 'advance':
+            cost = batch['price']
         if cost > user.balance:
             raise WorkstationActionError(f"余额不足，还差 {cost - user.balance} {shop['currency_name']}。")
         return {'title': title, 'price': cost, 'targets': targets, 'revision': digest(shop),
@@ -237,18 +239,21 @@ class WorkstationActionsMixin:
             plan = self._action_plan(session, user, action)
             if revision is not None and revision != plan['revision']:
                 raise WorkstationActionError('余额或装备已变化，请刷新并重新确认；本次未扣币。')
+            if action['kind'] == 'advance':
+                # Charge the quoted bundle once. Internal component steps only
+                # update ownership; they must not add hidden device surcharges.
+                self._apply_balance_change(user, -plan['price'], 'workstation_upgrade', now,
+                    memo=f"工位环境{plan['environment'] - 1}→{plan['environment']}（含四件设备基础款）")
             for number, target in plan['targets'].items():
                 while True:
                     item = next(i for i in self.get_workstation_shop(platform_id)['items'] if i['number'] == number)
                     if item['highest_level'] >= target:
                         break
-                    # The environment package owns these steps; individual
-                    # shop restrictions must not zero its existing prices.
                     level = item['highest_level']
                     category = CATEGORIES[number - 1]
-
-                    item = {**item, 'price': upgrade_cost(level, rules=rules),
-                            'cash_required': upgrade_cost(level, rules=rules), 'credit_used': 0,
+                    price = 0 if action['kind'] == 'advance' else upgrade_cost(level, rules=rules)
+                    item = {**item, 'price': price,
+                            'cash_required': price, 'credit_used': 0,
                             'next_name': component_name(category, level + 1, rules=rules), 'next_daily_income': component_daily_income(number, level + 1, rules=rules)}
                     self._upgrade_component(session, user, item, now)
             kind, number = action['kind'], action.get('number')

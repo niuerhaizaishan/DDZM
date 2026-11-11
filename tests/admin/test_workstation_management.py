@@ -79,12 +79,13 @@ def test_normal_admin_can_edit_names_and_income_without_settlement_permission(ma
     rules = settings['rules']
     rules['environment_names'][0] = '新人办公区'
     rules['environment_income'][0] = 3
+    rules['environment_upgrade_costs'] = [123, 456, 789, 1000]
     rules['device_names']['computer'][0] = '入门办公电脑'
     rules['tool_income'][0] = 4
     preview = client.post('/api/game/workstation/settings/preview', headers=operator, json=rules)
     assert preview.status_code == 200, preview.text
     assert preview.json()['after']['daily_income'] == 19
-    body = {'kind': 'rules', 'revision': settings['revision'], 'data': rules, 'reason': '管理员修改名称与收益'}
+    body = {'kind': 'rules', 'revision': settings['revision'], 'data': rules}
     headers = {**operator, 'Idempotency-Key': str(uuid4()), 'If-Match': str(settings['version'])}
     saved = client.post('/api/game/workstation/settings', headers=headers, json=body)
     assert saved.status_code == 200, saved.text
@@ -99,7 +100,12 @@ def test_normal_admin_can_edit_names_and_income_without_settlement_permission(ma
     assert client.post('/api/game/workstation/income', headers=headers, json={}).status_code == 403
     script = client.get('/static/workstation-admin.js').text
     assert '编辑名称、收益和价格' in script
+    assert 'wk-env-cost-${i}' in script
+    assert 'environment_upgrade_costs: Array.from({length: 4}' in script
     assert '<details open><summary>${label}各档名称' in script
+    assert 'reason"' not in script and '填写原因' not in script
+    records = client.get('/api/game/workstation/records/operations', headers=operator).json()
+    assert records['items'][0]['reason'] == '修改工位规则'
     assert 'if (!workstationSuper()) { content.querySelector("#edit-workstation-rules-settings").remove()' not in script
 
 
@@ -186,7 +192,6 @@ def test_management_preview_apply_conflicts_and_normal_admin_equip(management):
     assert preview.status_code == 200, preview.text
     body = {
         **player_body(),
-        "reason": "补授测试",
         "revision": preview.json()["revision"],
     }
     saved = client.post(path + "/actions", headers=headers, json=body)
@@ -214,7 +219,6 @@ def test_management_preview_apply_conflicts_and_normal_admin_equip(management):
         headers={**operator, "Idempotency-Key": str(uuid4())},
         json={
             **equip,
-            "reason": "切换旧环境",
             "revision": next_preview.json()["revision"],
         },
     )
@@ -303,7 +307,6 @@ def test_management_rules_version_and_income_switch(management):
         json={
             "kind": "income",
             "enabled": True,
-            "reason": "启用",
             "revision": state["settlement_revision"],
         },
     )
@@ -313,7 +316,6 @@ def test_management_rules_version_and_income_switch(management):
         headers=super_headers(),
         json={
             "kind": "settle",
-            "reason": "补跑今日",
             "revision": enabled.json()["revision"],
         },
     )

@@ -38,10 +38,13 @@ def environment_daily_income(environment, *, rules=None):
 
 
 def environment_upgrade_cost(environment, *, rules=None):
-    """Price for moving the five bundled environment items to the next level."""
+    """Whole move price, including four devices at the next base tier."""
     if not 1 <= environment < 5:
         raise ValueError(f"invalid environment upgrade: {environment}")
-    return 5 * upgrade_cost(environment * 2 - 1, environment * 2 + 1, rules=rules)
+    if rules and 'environment_upgrade_costs' in rules:
+        return rules['environment_upgrade_costs'][environment - 1]
+    return (5 * upgrade_cost(environment * 2 - 1, environment * 2 + 1, rules=rules)
+            + 4 * upgrade_cost(environment * 2, rules=rules))
 
 
 ART_NOTICE = "画面按当前装备等级展示，升级或装卸后刷新查看。"

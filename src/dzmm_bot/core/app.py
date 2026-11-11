@@ -243,6 +243,7 @@ from .honors import (
     HonorRevokeRequest,
     HonorSeasonIssueRequest,
     HonorSeasonPreviewInput,
+    SeasonHonorSettingsRequest,
     HonorSettleRequest,
 )
 from .commands import GroupCommandHandler, is_reserved_command_name
@@ -486,7 +487,7 @@ def create_app(
         user_id = workstation_links.user_id_for(token)
         workstation = None if user_id is None else repository.get_workstation(user_id)
         if workstation is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "工位链接无效或已失效，请在群里重新发送 /我的工位。")
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "工位链接无效或已失效，请在群里重新发送 /工位游戏。")
         return JSONResponse(
             {**workstation, "currency_name": repository.get_game_settings().currency_name},
             headers={"Cache-Control": "no-store"},
@@ -1813,6 +1814,14 @@ def create_app(
     @app.post("/internal/game/honors/seasons/s1/preview")
     def honor_season_preview(request: HonorSeasonPreviewInput, _: Annotated[None, Depends(authorize)]) -> dict:
         return honor_call(lambda: repository.preview_s1_honors(request.roster, clock()))
+
+    @app.get("/internal/game/honors/seasons/s1/settings")
+    def season_honor_settings(_: Annotated[None, Depends(authorize)]) -> dict:
+        return repository.season_honor_settings(clock())
+
+    @app.patch("/internal/game/honors/seasons/s1/settings")
+    def update_season_honor_settings(request: SeasonHonorSettingsRequest, _: Annotated[None, Depends(authorize)]) -> dict:
+        return honor_call(lambda: repository.update_season_honor_settings(request, request.actor, clock()))
 
     @app.post("/internal/game/honors/seasons/s1/issue")
     def honor_season_issue(request: HonorSeasonIssueRequest, _: Annotated[None, Depends(authorize)]) -> dict:

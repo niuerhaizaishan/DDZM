@@ -26,6 +26,7 @@ from .workstation_catalog import (
     UPGRADE_COSTS,
     TOOL_INCOME,
     component_daily_income,
+    environment_upgrade_cost,
 )
 from .workstation_labels import ENVIRONMENT_NAMES
 from .workstation_actions import WorkstationActionError, digest
@@ -37,6 +38,7 @@ from .workstation_growth import growth_state
 def default_rules():
     return {
         "upgrade_costs": list(UPGRADE_COSTS),
+        "environment_upgrade_costs": [environment_upgrade_cost(n) for n in range(1, 5)],
         "environment_income": [0, 2, 5, 10, 20],
         "tool_income": list(TOOL_INCOME),
         "environment_names": list(ENVIRONMENT_NAMES),
@@ -49,16 +51,17 @@ def default_rules():
 def validate_rules(data):
     if not isinstance(data, dict) or set(data) != set(default_rules()):
         raise ValueError("规则字段不完整或包含未知字段")
-    for key, length, minimum in [
-        ("upgrade_costs", 9, 1),
-        ("environment_income", 5, 0),
-        ("tool_income", 10, 0),
+    for key, length, minimum, maximum in [
+        ("upgrade_costs", 9, 1, 1000000),
+        ("environment_upgrade_costs", 4, 0, 20000000),
+        ("environment_income", 5, 0, 1000000),
+        ("tool_income", 10, 0, 1000000),
     ]:
         values = data[key]
         if (
             not isinstance(values, list)
             or len(values) != length
-            or any(type(v) is not int or not minimum <= v <= 1000000 for v in values)
+            or any(type(v) is not int or not minimum <= v <= maximum for v in values)
         ):
             raise ValueError(f"{key}需要{length}个有效整数")
 
@@ -104,8 +107,15 @@ class WorkstationAdminMixin:
             with self._session() as s:
                 return self.workstation_rules(s)
         row = session.get(WorkstationRulesRecord, 1)
+        data = copy.deepcopy(row.data if row else default_rules())
+        # Old instances may have custom component prices. Derive their current
+        # bundle totals until the administrator explicitly saves the new field.
+        if "environment_upgrade_costs" not in data:
+            data["environment_upgrade_costs"] = [
+                environment_upgrade_cost(n, rules=data) for n in range(1, 5)
+            ]
         return {
-            **copy.deepcopy(row.data if row else default_rules()),
+            **data,
             "revision": row.version if row else 0,
         }
 
@@ -346,7 +356,10 @@ class WorkstationAdminMixin:
                     fingerprint=fingerprint,
                     kind=payload["kind"],
                     user_id=user.id if user else None,
-                    reason=payload["reason"].strip(),
+                    reason=(payload.get("reason") or "").strip() or {
+                        "rules": "修改工位规则", "income": "调整结算设置", "settle": "执行今日结算",
+                        "grant": "补授环境与设备", "equip": "调整已拥有的装备", "backfill": "补齐自动配件",
+                    }[payload["kind"]],
                     before=before,
                     after=after,
                     result=result,
@@ -550,14 +563,14 @@ class PlayerChange(StrictBody):
 class AdminPlayerChange(PlayerChange):
     actor: str = Field(min_length=1, max_length=200)
     request_id: str
-    reason: str = Field(min_length=1, max_length=500)
+    reason: str = Field(default="", max_length=500)
     revision: str = Field(pattern="^[0-9a-f]{64}$")
 
 
 class AdminChange(StrictBody):
     actor: str = Field(min_length=1, max_length=200)
     request_id: str
-    reason: str = Field(min_length=1, max_length=500)
+    reason: str = Field(default="", max_length=500)
     kind: str = Field(pattern="^(rules|income|settle)$")
     revision: int | str
     data: dict | None = None
@@ -610,8 +623,8 @@ def install_workstation_admin_routes(app, repository, authorize, clock=beijing_n
 
     @app.post(prefix + "/players/{number}/actions", dependencies=[Depends(authorize)])
     def player_apply(number: int, payload: AdminPlayerChange):
-        if not payload.reason.strip() or set(payload.devices) != {"6", "7", "8", "9"}:
-            raise HTTPException(422, "需要原因和四件设备状态")
+        if set(payload.devices) != {"6", "7", "8", "9"}:
+            raise HTTPException(422, "需要四件设备状态")
         return response(
             lambda: repository.workstation_admin_player_apply(
                 number, payload.model_dump(), clock()
@@ -627,7 +640,6 @@ def install_workstation_admin_routes(app, repository, authorize, clock=beijing_n
         if (
             payload.kind != "rules"
             or type(payload.revision) is not int
-            or not payload.reason.strip()
         ):
             raise HTTPException(422, "规则保存参数无效")
         return response(
@@ -641,7 +653,6 @@ def install_workstation_admin_routes(app, repository, authorize, clock=beijing_n
         if (
             payload.kind not in ("income", "settle")
             or (payload.kind == "income" and payload.enabled is None)
-            or not payload.reason.strip()
         ):
             raise HTTPException(422, "结算参数无效")
         return response(

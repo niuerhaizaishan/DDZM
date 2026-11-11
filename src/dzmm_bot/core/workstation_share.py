@@ -20,7 +20,8 @@ def available_share_groups(repository, platform_id, now):
             .where(
                 InboundRecord.sender_platform_id == platform_id,
                 InboundRecord.source_type == "group",
-                func.trim(InboundRecord.content) == "/我的工位",
+                # Keep existing 24-hour sessions valid during the command split.
+                func.trim(InboundRecord.content).in_(("/工位游戏", "/我的工位")),
                 InboundRecord.received_at >= now - timedelta(hours=24),
                 InboundRecord.received_at <= now,
                 GroupChatRecord.deleted_at.is_(None),
@@ -50,7 +51,7 @@ def enqueue_workstation_share(repository, user_id, group_id, request_id, now):
                 raise HTTPException(404, "尚未找到你的员工档案。")
             groups = available_share_groups(repository, user.platform_id, now)
             if str(group_id) not in {group["id"] for group in groups}:
-                raise HTTPException(403, "请先在目标群发送 /我的工位，再刷新本页；发图入口有效期为24小时。")
+                raise HTTPException(403, "请先在目标群发送 /工位游戏，再刷新本页；发图入口有效期为24小时。")
             identifier = share_record_id(user.id, request_id)
             existing = session.get(OutboundRecord, identifier)
             if existing is not None:

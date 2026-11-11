@@ -270,7 +270,7 @@ def test_lobby_pagination_is_stable_and_bounded(gamefy_context, signing_key):
 def test_employee_view_is_read_only_and_does_not_grant_others_share_access(gamefy_context, signing_key):
     context = gamefy_context
     headers = {"Authorization": f"Bearer {signed_token(signing_key)}"}
-    context.send("entry", "/我的工位")
+    context.send("entry", "/工位游戏")
     own = context.public.get("/api/gamefy/workstation/employees/1", headers=headers).json()
     other = context.public.get("/api/gamefy/workstation/employees/2", headers=headers).json()
     assert own["is_owner"] is True and len(own["share_groups"]) == 1
@@ -447,7 +447,7 @@ def test_share_requires_own_identity_recent_group_entry_and_is_idempotent(gamefy
     payload = {"group_id": str(uuid4()), "request_id": str(uuid4())}
     assert context.public.post(path + "/share", headers=headers, json=payload).status_code == 403
     assert context.public.post(path + "/share", json=payload).status_code == 401
-    context.send("entry", "/我的工位")
+    context.send("entry", "/工位游戏")
     groups = context.public.get(path, headers=headers).json()["share_groups"]
     assert len(groups) == 1
     payload["group_id"] = groups[0]["id"]
@@ -493,7 +493,7 @@ def test_share_rejects_expired_disabled_and_forged_targets(gamefy_context, signi
     context = gamefy_context
     headers = {"Authorization": f"Bearer {signed_token(signing_key)}"}
     path = "/api/gamefy/workstation"
-    context.send("entry", "/我的工位")
+    context.send("entry", "/工位游戏")
     group_id = context.public.get(path, headers=headers).json()["share_groups"][0]["id"]
     payload = {"group_id": group_id, "request_id": str(uuid4())}
     for extra in [{"user_id": VISITOR}, {"image_url": "https://untrusted.test/photo.png"}, {"equipped": [1]}]:
@@ -503,7 +503,7 @@ def test_share_rejects_expired_disabled_and_forged_targets(gamefy_context, signi
         entry = session.scalar(select(InboundRecord).where(InboundRecord.platform_message_id == "entry"))
         entry.received_at -= timedelta(hours=25)
     assert context.public.post(path + "/share", headers=headers, json=payload).status_code == 403
-    context.send("new-entry", "/我的工位")
+    context.send("new-entry", "/工位游戏")
     with context.repository._session() as session:
         group = session.scalar(select(GroupChatRecord).where(GroupChatRecord.chatroom_id == "gamefy-test"))
         group.listening_enabled = False
@@ -555,7 +555,7 @@ def test_shop_authentication_personal_filtering_and_no_financial_leak(gamefy_con
 
 
 def prepare_actions(context, signing_key):
-    context.send('open-game', '/我的工位')
+    context.send('open-game', '/工位游戏')
     with context.repository._session() as session:
         user = session.scalar(select(UserRecord).where(UserRecord.platform_id == OWNER))
         user.rank_id = session.scalar(select(RankRecord.id).where(RankRecord.sort_order == 10))
@@ -651,9 +651,12 @@ def test_action_gates_rank_balance_disabled_group_command_and_strict_payload(gam
     headers = {'Authorization': f'Bearer {signed_token(signing_key)}'}
     path = '/api/gamefy/workstation/quote'
     assert context.public.post(path, headers=headers, json={'kind': 'upgrade', 'number': 6}).status_code == 403
-    context.send('open-game', '/我的工位')
+    context.send('open-game', '/工位游戏')
     assert context.public.post(path, headers=headers, json={'kind': 'upgrade', 'number': 6}).status_code == 409
     headers = prepare_actions(context, signing_key)
+    context.repository.set_command_enabled('/工位游戏', False)
+    assert context.public.post(path, headers=headers, json={'kind': 'view', 'level': 1}).status_code == 403
+    context.repository.set_command_enabled('/工位游戏', True)
     context.repository.set_command_enabled('/升级装备', False)
     for kind in ['upgrade', 'advance']:
         action = {'kind': kind, **({'number': 6} if kind == 'upgrade' else {})}

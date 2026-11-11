@@ -111,6 +111,9 @@ def handle_equipment_command(repository, message, command, group_chat_id, *, wor
     employee = repository.find_user(message.sender_platform_id)
     if employee is None:
         return "请先使用 /入职 名字 加入摸鱼公司。"
+    if command == '/工位游戏':
+        url = None if workstation_links is None else workstation_links.game_url or workstation_links.url_for(employee.id)
+        return [url] if url else "工位网页暂未开放，请管理员配置公开访问地址。"
     shop = repository.get_workstation_shop(message.sender_platform_id)
     currency = shop["currency_name"]
     settlement_note = "每日北京时间00:00自动结算，按结算时已装备的环境和设备发放。" if shop["income_settlement_enabled"] else "收益仅预览，自动结算尚未启用。"
@@ -205,8 +208,6 @@ def handle_equipment_command(repository, message, command, group_chat_id, *, wor
                 lines.append(f"{r['category']}：已拥有1-1至{level_label(r['highest_level'])}｜当前{current}")
         lines += ['', '/装备 鼠标 2-1', '/装备 环境 1']
         return '\n'.join(lines)
-    game_url = None if workstation_links is None else workstation_links.game_url
-    url = None if workstation_links is None else game_url or workstation_links.url_for(employee.id)
     environment = progression['growth']['active_environment']
     environment_income = sum(r['daily_income'] for r in equipped if r['number'] <= 5)
     devices = [f"{r['category']}：{(r['active_level'] + 1) // 2}-{2 if r['active_level'] % 2 == 0 else 1}"
@@ -215,7 +216,5 @@ def handle_equipment_command(repository, message, command, group_chat_id, *, wor
     overview = "\n".join((f"【{employee.display_name}的工位】",
         f"环境：{str(environment) + '级 ' + environment_name(environment, rules=repository.workstation_rules()) if environment else '混合搭配'}【日收益：{environment_income}】",
         "【设备】", *(devices or ["暂无"]),
-        f"预计工位日收入：{progression['daily_income']} {currency}。",
-        "工位游戏卡将在下一条消息发送。" if url and workstation_links.game_card_id else
-        "工位链接将在下一条消息发送。" if url else "工位网页暂未开放，请管理员配置公开访问地址。"))
-    return [overview, url] if url else overview
+        f"预计工位日收入：{progression['daily_income']} {currency}。"))
+    return overview

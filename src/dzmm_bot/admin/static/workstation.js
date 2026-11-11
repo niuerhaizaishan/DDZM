@@ -98,7 +98,7 @@ function renderManagement() {
     : offer?.status === 'rank_locked' ? `需升级上限 ${levelLabel(offer.required_level)}；本次环境合计 ${offer.price} ${currentGrowth.currency_name}`
     : offer?.status === 'insufficient_balance' ? `环境升级合计 ${offer.price} ${currentGrowth.currency_name}；余额不足，还差 ${offer.shortage} ${currentGrowth.currency_name}`
     : stage === 5 ? '已到最高环境5。'
-    : `环境升级合计 ${offer?.price ?? 0} ${currentGrowth.currency_name}；四件升级款已齐备，可以升级到下一环境。`;
+    : `环境升级合计 ${offer?.price ?? 0} ${currentGrowth.currency_name}（含下一环境四件基础设备）；四件升级款已齐备，可以升级到下一环境。`;
   for (let n = 1; n <= 5; n++) {
     actions.append(actionButton(`环境 ${n}`, {kind: 'view', level: n}, n <= (currentGrowth.growth?.switchable_environment ?? stage)));
   }
@@ -501,7 +501,7 @@ function showWorkstation(workstation) {
     shareButton.disabled = sharing || !options.length;
     if (!sharing) shareStatus.textContent = options.length
       ? "按当前装备合成工位图片，每分钟可发送一次。"
-      : "请先在目标群发送 /我的工位，再刷新本页（24小时内有效）。";
+      : "请先在目标群发送 /工位游戏，再刷新本页（24小时内有效）。";
   }
   document.title = `${workstation.display_name}的工位 · 摸鱼公司`;
   const components = workstation.progression?.components;
@@ -596,7 +596,7 @@ async function loadWorkstation() {
     });
     if (response && !response.ok) {
       throw new Error(response.status === 404
-        ? "工位链接无效或已失效，请在群里重新发送 /我的工位。"
+        ? "工位链接无效或已失效，请在群里重新发送 /工位游戏。"
         : "工位暂时无法加载，请稍后刷新重试。");
     }
     const workstation = source ? await source.load(selectedNumber) : await response.json();

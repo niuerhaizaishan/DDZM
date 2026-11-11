@@ -22,7 +22,7 @@ from .random_event_submissions import (
 
 _DIRECT_COMMANDS = {
     *EQUIPMENT_COMMANDS, "/装备商店", "/工位商店",
-    "/我的称号", "/佩戴称号", "/装备称号", "/编辑称号", "/荣誉榜", "/荣誉历史",
+    "/我的称号", "/佩戴称号", "/装备称号", "/编辑称号", "/荣誉榜", "/荣誉历史", "/赛季称号", "/修改赛季称号",
     "/报数", "/发红包", "/抢红包", "/余额", "/我的物品", "/我",
     "/帮助", "/当前游戏", "/我的档案", "/我的部门人数", "/打卡",
     "/编辑档案", "/编辑档案形象", "/商店", "/购买",
@@ -43,7 +43,7 @@ _DIRECT_COMMANDS = {
 _RANDOM_EVENT_INDEPENDENT_COMMANDS = {
     "/象棋",
     "/斗地主",
-    "/我的称号", "/佩戴称号", "/装备称号", "/编辑称号", "/荣誉榜", "/荣誉历史",
+    "/我的称号", "/佩戴称号", "/装备称号", "/编辑称号", "/荣誉榜", "/荣誉历史", "/赛季称号", "/修改赛季称号",
     "/发红包", "/抢红包", "/打赏", "/余额", "/当前游戏", "/随礼",
     "/随机事件时间表", "/使用", "/选择", "/下一页", "/确认优选投稿",
     "/确认广告位", "/取消使用",
@@ -252,7 +252,7 @@ class CoreService:
                         performance_state == "performing" and command == "/end"
                     ) or (
                         performance_state == "tipping" and command == "/打赏"
-                    ) or command in {"/我的称号", "/佩戴称号", "/装备称号", "/编辑称号", "/荣誉榜", "/荣誉历史"}
+                    ) or command in {"/我的称号", "/佩戴称号", "/装备称号", "/编辑称号", "/荣誉榜", "/荣誉历史", "/赛季称号", "/修改赛季称号"}
                     if allowed_command:
                         performance_reply = self._command_handler.handle(message)
                         self._enqueue_replies(

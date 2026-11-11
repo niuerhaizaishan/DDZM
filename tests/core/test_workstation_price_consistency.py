@@ -92,4 +92,4 @@ def test_one_or_two_device_upgrades_scale_cost_and_income_together():
 
 def test_environment_table_has_five_bundled_levels():
     assert [environment_daily_income(level) for level in range(1, 6)] == [0, 2, 5, 10, 20]
-    assert [environment_upgrade_cost(level) for level in range(1, 5)] == [300, 950, 2500, 5000]
+    assert [environment_upgrade_cost(level) for level in range(1, 5)] == [460, 1430, 3700, 7400]

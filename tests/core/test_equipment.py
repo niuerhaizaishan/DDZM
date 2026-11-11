@@ -80,13 +80,14 @@ def test_workstation_income_table_uses_workbook_levels_and_prices(context):
     text = receive(context, "income-table", "/工位收益表")
     lines = text.splitlines()
     assert lines[:2] == ["【工位收益表】", "环境类"]
-    assert "Lv1 收益0｜升级费用 300" in lines
-    assert "Lv2 收益2｜升级费用 950" in lines
+    assert "Lv1 收益0｜升级费用 460" in lines
+    assert "Lv2 收益2｜升级费用 1430" in lines
     assert "Lv5 收益20｜已满级" in lines
     assert lines[7] == "设备类"
     assert "Lv1-1 收益0｜升级费用 20" in lines
     assert "Lv2-1 收益5｜升级费用 70" in lines
     assert "Lv5-2 收益40｜已满级" in lines
+    assert "Lv1-2 收益2｜升级费用 40" in lines
     assert len(lines) == 18
 
 def test_upgrade_replay_stale_rank_cap_and_cross_group_appearance(context):

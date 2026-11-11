@@ -1,5 +1,5 @@
 """Growth status and batch prices shared by account views and paid actions."""
-from .workstation_catalog import upgrade_cost
+from .workstation_catalog import upgrade_cost, environment_upgrade_cost
 
 
 def current_environment(components):
@@ -35,6 +35,13 @@ def batch_growth_plan(components, kind, *, rules=None):
                if (kind == 'advance' or c['number'] <= 5) and c['highest_level'] < target}
     cost = sum(upgrade_cost(c['highest_level'], targets[c['number']], rules=rules)
                for c in components if c['number'] in targets)
+    if kind == 'advance':
+        # Legacy mixed holdings have already paid for some of the move. Retain
+        # that progress as a proportional discount; regular holdings pay exactly
+        # the configured bundle price. Integer arithmetic avoids rounding drift.
+        full = (5 * upgrade_cost(stage * 2 - 1, target, rules=rules)
+                + 4 * upgrade_cost(stage * 2, target, rules=rules))
+        cost = environment_upgrade_cost(stage, rules=rules) * min(cost, full) // full
     return {'status': 'available' if targets else 'complete',
             'environment': stage + 1 if kind == 'advance' else stage,
             'targets': targets, 'price': cost}

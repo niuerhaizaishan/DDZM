@@ -77,33 +77,39 @@ def workstation_context():
 def test_group_command_sends_personal_link_and_nonmembers_cannot_get_one(workstation_context):
     repository, factory, links, send, _, _ = workstation_context
     owner = repository.find_user("owner")
-    reply = send("my-workstation", "/我的工位")
+    overview = send("my-workstation", "/我的工位")
+    assert "糯糯的工位" in overview
+    assert overview.endswith("预计工位日收入：0 摸鱼币。")
+    assert "下一条消息" not in overview and "http" not in overview
+    with factory() as session:
+        assert session.scalar(select(func.count()).select_from(OutboundRecord).where(
+            OutboundRecord.reference_message_id == "my-workstation")) == 1
+    reply = send("workstation-game", "/工位游戏")
     assert f"{PUBLIC_URL}/workstation/{links.token_for(owner.id)}" in reply
-    assert "工位链接将在下一条消息发送" in reply
+    assert reply == links.url_for(owner.id)
     with factory() as session:
         records = session.scalars(select(OutboundRecord).where(OutboundRecord.text == links.url_for(owner.id))).all()
         assert len(records) == 1
-        assert records[0].reply_index == 1
+        assert records[0].reply_index == 0
         assert records[0].reference_message_id is None
         assert records[0].reference_sender_platform_id is None
         assert records[0].reference_content_type is None
         assert records[0].reference_text is None
         assert records[0].destination_chatroom_id == "workstation-group"
         assert records[0].group_chat_id == repository.resolve_enabled_group_chat("workstation-group").id
-        overview = session.scalar(select(OutboundRecord).where(
+        entry = list(session.scalars(select(OutboundRecord).where(
             OutboundRecord.inbound_message_id == records[0].inbound_message_id,
-            OutboundRecord.reply_index == 0,
-        ))
-        assert overview.reference_message_id == "my-workstation"
-    send("my-workstation", "/我的工位")
+        )))
+        assert len(entry) == 1
+    send("workstation-game", "/工位游戏")
     with factory() as session:
         assert session.scalar(select(func.count()).select_from(OutboundRecord).where(
             OutboundRecord.text == links.url_for(owner.id)
         )) == 1
-    assert "糯糯的工位" in reply
     assert "owner" not in reply
     assert SECRET not in reply
     assert "请先使用 /入职" in send("unregistered", "/我的工位", "stranger")
+    assert "请先使用 /入职" in send("unregistered-game", "/工位游戏", "stranger")
     assert links.token_for(repository.find_user("visitor").id) not in reply
 
 
@@ -111,17 +117,35 @@ def test_unconfigured_url_reports_unavailable_instead_of_localhost(workstation_c
     repository, _, _, _, _, _ = workstation_context
     handler = GroupCommandHandler(repository)
     reply = handler.handle(InboundMessage(
-        "unconfigured", "owner", "/我的工位", NOW, source_type="group", chatroom_id="workstation-group",
+        "unconfigured", "owner", "/工位游戏", NOW, source_type="group", chatroom_id="workstation-group",
     ))
     assert "请管理员配置公开访问地址" in reply
     assert "http" not in reply
+
+
+def test_workstation_entry_commands_have_separate_switches_and_validate_usage(workstation_context):
+    repository, factory, _, send, _, _ = workstation_context
+    assert "用法：/工位游戏" in send("bad-game-args", "/工位游戏 2")
+    handler = GroupCommandHandler(repository)
+    direct = handler.handle(InboundMessage("direct-game", "owner", "/工位游戏", NOW, source_type="direct"))
+    assert "群聊" in direct
+    help_text = send("workstation-help", "/帮助 工位")
+    assert "/我的工位：查看当前环境、设备与预计日收益" in help_text
+    assert "/工位游戏：直接打开工位小游戏" in help_text
+    repository.set_command_enabled("/我的工位", False)
+    assert "http" in send("entry-with-overview-off", "/工位游戏")
+    repository.set_command_enabled("/工位游戏", False)
+    assert send("entry-disabled", "/工位游戏") == ""
+    repository.set_command_enabled("/我的工位", True)
+    overview = send("overview-with-game-off", "/我的工位")
+    assert "糯糯的工位" in overview and "http" not in overview
 
 
 def test_core_inbound_factory_uses_configured_link(workstation_context):
     repository, factory, links, _, internal, _ = workstation_context
     response = internal.post("/internal/inbound", headers={"X-Core-Token": SECRET}, json={
         "platform_message_id": "factory-command", "sender_platform_id": "owner",
-        "content": "/我的工位", "received_at": NOW.isoformat(),
+        "content": "/工位游戏", "received_at": NOW.isoformat(),
         "source_type": "group", "chatroom_id": "workstation-group",
     })
     assert response.status_code == 200
@@ -141,16 +165,22 @@ def test_game_entry_uses_platform_identity_without_changing_existing_personal_li
             message_id = f"platform-entry-{sender}"
             response = internal.post("/internal/inbound", headers={"X-Core-Token": SECRET}, json={
                 "platform_message_id": message_id, "sender_platform_id": sender,
-                "content": "/我的工位", "received_at": NOW.isoformat(),
+                "content": "/工位游戏", "received_at": NOW.isoformat(),
                 "source_type": "group", "chatroom_id": "workstation-group",
             })
             assert response.status_code == 200
             repeated = internal.post("/internal/inbound", headers={"X-Core-Token": SECRET}, json={
                 "platform_message_id": message_id, "sender_platform_id": sender,
-                "content": "/我的工位", "received_at": NOW.isoformat(),
+                "content": "/工位游戏", "received_at": NOW.isoformat(),
                 "source_type": "group", "chatroom_id": "workstation-group",
             })
             assert repeated.status_code == 200
+            overview = internal.post("/internal/inbound", headers={"X-Core-Token": SECRET}, json={
+                "platform_message_id": f"overview-{sender}", "sender_platform_id": sender,
+                "content": "/我的工位", "received_at": NOW.isoformat(),
+                "source_type": "group", "chatroom_id": "workstation-group",
+            })
+            assert overview.status_code == 200
         with factory() as session:
             replies = list(session.scalars(select(OutboundRecord.text)))
         for sender in ["owner", "visitor"]:
@@ -158,7 +188,8 @@ def test_game_entry_uses_platform_identity_without_changing_existing_personal_li
             reply = next(text for text in replies if f"【{employee.display_name}的工位】" in text)
             assert GAME_URL not in reply
             assert reply.startswith(f"【{employee.display_name}的工位】\n环境：1级 临时办公角落【日收益：0】\n【设备】\n")
-            assert reply.endswith("\n工位游戏卡将在下一条消息发送。")
+            assert reply.endswith("\n预计工位日收入：0 摸鱼币。")
+            assert "下一条消息" not in reply
             assert "电脑：1-1 入门台式电脑【日收益：0】\n显示器：1-1 老旧显示器【日收益：0】\n键盘：1-1 老旧键盘【日收益：0】\n鼠标：1-1 老旧鼠标【日收益：0】\n" in reply
             assert "配件：" not in reply
             assert "当前 DZMM 登录账号" not in reply and "24小时" not in reply and "余额：" not in reply
@@ -168,7 +199,10 @@ def test_game_entry_uses_platform_identity_without_changing_existing_personal_li
         with factory() as session:
             link_records = session.scalars(select(OutboundRecord).where(OutboundRecord.content_type == "character")).all()
             assert len(link_records) == 2
-            assert all(link.text == "3772306" and link.reply_index == 1 for link in link_records)
+            assert all(link.text == "3772306" and link.reply_index == 0 for link in link_records)
+            for link in link_records:
+                assert session.scalar(select(func.count()).select_from(OutboundRecord).where(
+                    OutboundRecord.inbound_message_id == link.inbound_message_id)) == 1
             assert all(link.reference_message_id is None and link.reference_text is None for link in link_records)
             assert all(link.delivery_kind == "group" and link.destination_chatroom_id == "workstation-group" for link in link_records)
         claimed_cards = []
@@ -214,13 +248,12 @@ def test_custom_game_entry_still_sends_standalone_text_link(workstation_context)
     url = "https://games.example.test/workstation"
     handler = GroupCommandHandler(repository, workstation_links=WorkstationLinks(SECRET, game_url=url))
     reply = handler.handle(InboundMessage(
-        "custom-game-entry", "owner", "/我的工位", NOW,
+        "custom-game-entry", "owner", "/工位游戏", NOW,
         source_type="group", chatroom_id="workstation-group",
     ))
-    assert "工位链接将在下一条消息发送" in reply[0]
-    assert reply[1].text == url
-    assert reply[1].content_type == "text"
-    assert reply[1].reference_inbound is False
+    assert reply.text == url
+    assert reply.content_type == "text"
+    assert reply.reference_inbound is False
 
 
 def test_public_view_reads_actual_equipment_and_refreshes_without_charging(workstation_context):
@@ -278,7 +311,7 @@ def test_invalid_or_unknown_workstation_returns_friendly_404(workstation_context
     for prefix in ("/workstation/", "/api/workstations/"):
         response = public.get(prefix + invalid)
         assert response.status_code == 404
-        assert "重新发送 /我的工位" in response.text
+        assert "重新发送 /工位游戏" in response.text
 
 
 def test_assets_are_packaged_and_public_page_does_not_use_demo_state(workstation_context):

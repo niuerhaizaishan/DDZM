@@ -4,6 +4,8 @@ let honorPeriodData = null;
 let honorHistoryPage = 1;
 let honorPeriodsPage = 1;
 let employeeHonorRequestId = 0;
+let seasonHonorRequestId = 0;
+let seasonHonorSettings = null;
 
 function honorMonday(offset = 0) {
   const parts = new Intl.DateTimeFormat("sv-SE", {timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit"}).format(new Date());
@@ -22,7 +24,7 @@ async function loadHonors() {
   honorPeriodsPage = 1;
   honorHistoryPage = 1;
   renderHonorConfiguration(config, groups.items);
-  await Promise.all([loadHonorPeriods(), loadHonorHistory()]);
+  await Promise.all([loadHonorPeriods(), loadHonorHistory(), ...(identity?.role === "super_admin" ? [loadSeasonHonors()] : [])]);
 }
 
 function renderHonorConfiguration(config, groups) {
@@ -90,15 +92,12 @@ function renderPermanentHonorTools(canManageSeason) {
       <label>授予原因<textarea name="reason" maxlength="300" required></textarea></label>
     </div><button class="primary" type="submit">确认授予</button></form>
   </details>${canManageSeason ? `<details class="panel honor-permanent-tools"><summary>S1 赛季永久称号</summary>
-    <p class="muted">以结季时的部门和职位生成称号。请核对预览，整个赛季只发放一次。</p>
-    <form id="honor-season-preview">
-      <label>名单来源<select name="mode"><option value="historical">历史结季名单</option><option value="current">当前组织名单</option></select></label>
-      <label id="honor-season-roster-label">粘贴历史名单，每行填工号、部门、职位，以制表符分隔，不含表头。
-        <textarea name="roster" rows="6" placeholder="0001&#9;核心技术部&#9;部门总监"></textarea>
-      </label>
-      <div class="command-actions"><button class="secondary" type="submit">预览名单</button>
-        <button id="honor-season-issue" class="primary" type="button" disabled>确认批量发放</button></div>
-    </form><div id="honor-season-results" aria-live="polite"></div>
+    <p class="muted">按S1结季职级与下方门槛判断，默认副总监及以上，默认为“S1赛季 · 职级”。员工可用 /修改赛季称号 自定义一次，不使用当前职级。</p>
+    <form id="honor-season-settings" class="command-actions"><label>最低结季职级<select id="honor-season-minimum" required disabled><option value="">读取中…</option></select></label><button id="honor-season-save" class="primary" type="submit" disabled>保存门槛</button></form>
+    <p class="muted">保存立即生效：已有结季记录按新门槛判断；不满足时不可佩戴或修改，恢复资格不重置修改次数。没有结季记录的员工不会按当前职级自动补发。</p>
+    <div class="panel-heading"><h3>已发放名单与修改状态</h3><button id="honor-season-refresh" class="secondary" type="button">刷新名单</button></div>
+    <div id="honor-season-list" aria-live="polite"></div><nav id="honor-season-pagination" class="pagination"></nav>
+    <p class="muted">管理员授予的其他永久称号独立管理；撤回不返还员工的赛季称号修改机会。</p>
   </details>` : ""}`;
 }
 
@@ -151,88 +150,60 @@ function bindPermanentHonorGrant() {
   });
 }
 
-function readSeasonRoster(form) {
-  if (form.elements.mode.value === "current") return null;
-  const lines = form.elements.roster.value.split(/\r?\n/);
-  const roster = [];
-  for (const [index, line] of lines.entries()) {
-    if (!line.trim()) continue;
-    const fields = line.split("\t").map((field) => field.trim());
-    if (fields.length !== 3 || !/^#?\d{1,10}$/.test(fields[0])) {
-      throw new Error(`历史名单第 ${index + 1} 行格式有误，请填写工号、部门和职位三列`);
-    }
-    const [number, department, rank] = fields;
-    roster.push({employee_number: Number(number.replace(/^#/, "")), department, rank});
-  }
-  if (!roster.length) throw new Error("请先粘贴历史名单");
-  return roster;
+async function loadSeasonHonors(page = 1) {
+  const container = document.querySelector("#honor-season-list");
+  const requestId = ++seasonHonorRequestId;
+  const [data, settings] = await Promise.all([
+    requestGame(`/api/game/honors/history?${new URLSearchParams({source: "season", page, page_size: 20})}`),
+    requestGame("/api/game/honors/seasons/s1/settings"),
+  ]);
+  if (!container?.isConnected || requestId !== seasonHonorRequestId) return;
+  seasonHonorSettings = settings;
+  const select = document.querySelector("#honor-season-minimum");
+  select.innerHTML = settings.ranks.map(rank => `<option value="${rank.order}"${rank.order === settings.minimum_rank_order ? " selected" : ""}>Lv${rank.order} · ${escapeHtml(rank.name)}</option>`).join("");
+  select.disabled = false;
+  document.querySelector("#honor-season-save").disabled = false;
+  container.innerHTML = renderSeasonHonorList(data.items);
+  renderPagination(document.querySelector("#honor-season-pagination"), data, "条赛季称号", (target) => {
+    loadSeasonHonors(target).catch(error => setResult(error.message, "error"));
+  });
 }
 
-function renderSeasonHonorPreview(report) {
-  if (report.issued) {
-    const batch = report.issued;
-    return `<p>S1 已发放 ${batch.count} 人 · ${escapeHtml(formatHeartbeat(batch.issued_at))} · ${escapeHtml(batch.actor)}</p>`;
-  }
-  const rows = [...report.rows, ...report.skipped].map((row) => `<tr><td>${formatEmployeeNumber(row.employee_number)}</td>
-    <td>${escapeHtml(row.name || "—")}</td><td>${escapeHtml(row.department || "—")}</td><td>${escapeHtml(row.rank || "—")}</td>
-    <td>${escapeHtml(row.title || row.reason)}</td></tr>`).join("");
-  return `<p>可发放 ${report.rows.length} 人 · 跳过 ${report.skipped.length} 人</p>
-    ${rows ? `<div class="table-scroll honor-season-table" role="region" aria-label="S1 名单预览" tabindex="0"><table class="data-table"><thead><tr><th>工号</th><th>员工</th><th>部门</th><th>职位</th><th>称号或跳过原因</th></tr></thead><tbody>${rows}</tbody></table></div>` : ""}`;
+function renderSeasonHonorList(items) {
+  if (!items.length) return '<p class="muted">暂无已发放的赛季称号。</p>';
+  const rows = items.map(item => {
+    const info = item.season_info || {};
+    const change = info.customized ? `已修改 · ${formatHeartbeat(info.customized_at)}` : "未修改";
+    const chance = info.customized ? "机会已用完" : info.status === "available" ? "可修改一次" : "当前不可修改";
+    const status = {available: "可佩戴", not_qualified: "不可佩戴", revoked: "已撤回", pending: "尚未生效"}[info.status] || "待核对";
+    return `<tr><td>${escapeHtml(item.winner_name || "—")}<small>员工 ID：${escapeHtml(item.user_id || "—")}</small></td>
+      <td>${escapeHtml(info.closing_department || "—")} · ${escapeHtml(info.closing_rank || "未知")}</td>
+      <td>${escapeHtml(info.qualification_note || "待核对")} · ${status}</td><td>${escapeHtml(item.name)}</td>
+      <td>${escapeHtml(change)} · ${chance}${info.customized ? `<small>修改前：${escapeHtml(info.original_name)}</small>` : ""}</td></tr>`;
+  }).join("");
+  return `<div class="table-scroll" role="region" aria-label="赛季称号管理名单" tabindex="0"><table class="data-table"><thead><tr><th>员工</th><th>结季部门与职级</th><th>资格与状态</th><th>当前称号</th><th>自定义状态</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 function bindSeasonHonors() {
-  const form = document.querySelector("#honor-season-preview");
-  const results = document.querySelector("#honor-season-results");
-  const issue = document.querySelector("#honor-season-issue");
-  const rosterLabel = document.querySelector("#honor-season-roster-label");
-  let confirmation = null;
-  let requestId = 0;
-  const invalidate = () => {
-    requestId++;
-    confirmation = null;
-    issue.disabled = true;
-    results.replaceChildren();
-    const historical = form.elements.mode.value === "historical";
-    rosterLabel.hidden = !historical;
-    form.elements.roster.disabled = !historical;
-  };
-  form.addEventListener("input", invalidate);
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    invalidate();
-    const currentRequest = requestId;
-    try {
-      const roster = readSeasonRoster(form);
-      const report = await runMutation(event.submitter, "预览中…", () => requestGame("/api/game/honors/seasons/s1/preview", {
-        method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({roster}),
-      }));
-      if (!report || !form.isConnected || currentRequest !== requestId) return;
-      results.innerHTML = renderSeasonHonorPreview(report);
-      if (report.rows?.length) {
-        confirmation = {roster, preview_digest: report.preview_digest, count: report.rows.length, skipped: report.skipped.length};
-        issue.disabled = issue.dataset.busy === "true";
-      }
-    } catch (error) {
-      setResult(error.message, "error");
-    }
+  document.querySelector("#honor-season-refresh").addEventListener("click", () => {
+    loadSeasonHonors().catch(error => setResult(error.message, "error"));
   });
-  issue.addEventListener("click", async () => {
-    if (!confirmation) return;
-    const {roster, preview_digest, count, skipped} = confirmation;
-    if (!window.confirm(`确认向 ${count} 名员工发放 S1 赛季永久称号，跳过 ${skipped} 人？S1 发放完成后将关闭该批次。`)) return;
+  document.querySelector("#honor-season-settings").addEventListener("submit", async event => {
+    event.preventDefault();
+    if (!seasonHonorSettings) return;
+    const minimum = Number(document.querySelector("#honor-season-minimum").value);
+    const rank = seasonHonorSettings.ranks.find(item => item.order === minimum);
+    if (!rank || !window.confirm(`最低结季职级改为 ${rank.name}（Lv${minimum}）及以上？保存后立即更新资格，修改次数保留。`)) return;
     try {
-      const issued = await runMutation(issue, "发放中…", () => requestGame("/api/game/honors/seasons/s1/issue", {
-        method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({roster, preview_digest}),
-      }));
-      if (!issued) return;
-      invalidate();
-      results.innerHTML = renderSeasonHonorPreview({issued});
-      setResult("S1 赛季永久称号已发放");
-      if (form.isConnected) await loadHonorHistory(1);
-    } catch (error) {
-      invalidate();
-      setResult(error.message, "error");
-    }
+      await runMutation(document.querySelector("#honor-season-save"), "保存中…", async () => {
+        await requestGame("/api/game/honors/seasons/s1/settings", {
+          method: "PATCH", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({minimum_rank_order: minimum, expected_version: seasonHonorSettings.version}),
+        });
+        await loadHonors();
+        setResult("赛季称号门槛已保存并生效", "success");
+      });
+    } catch (error) { setResult(error.message, "error"); }
   });
 }
 
@@ -383,6 +354,13 @@ function honorHistoryContext(item) {
   const context = [source, item.revoked_at ? "已撤回" : "永久", `授予于 ${formatHeartbeat(item.valid_from)}`];
   if (details.actor) context.push(`授予人 ${details.actor}`);
   if (details.reason) context.push(`授予原因 ${details.reason}`);
+  if (item.source === "season") {
+    const info = item.season_info || {};
+    context.push(`结季职级 ${info.closing_rank || details.rank || "未知"}`);
+    context.push(info.qualification_note || "资格待核对");
+    context.push({available: "可佩戴", not_qualified: "不可佩戴", revoked: "已撤回", pending: "尚未生效"}[info.status] || "状态待核对");
+    context.push(info.customized ? `已修改 · ${formatHeartbeat(info.customized_at)} · 修改前 ${info.original_name}` : "未修改");
+  }
   if (item.revoked_at) context.push(`撤回于 ${formatHeartbeat(item.revoked_at)}`, `撤回人 ${details.revoked_by}`, `撤回原因 ${details.revoke_reason}`);
   return context.join(" · ");
 }
@@ -399,7 +377,7 @@ async function revokePermanentHonor(event) {
         method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({reason}),
       });
       setResult("永久称号已撤回");
-      if (form.isConnected) await loadHonorHistory();
+      if (form.isConnected) await Promise.all([loadHonorHistory(), ...(identity?.role === "super_admin" ? [loadSeasonHonors()] : [])]);
     });
   } catch (error) {
     setResult(error.message, "error");
